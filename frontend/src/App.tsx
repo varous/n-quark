@@ -10,6 +10,7 @@ type ServiceHealth = {
 
 type PlatformStatus = {
   status: string;
+  network_mode?: string;
   timestamp: string;
   services: Record<string, ServiceHealth>;
 };
@@ -77,19 +78,26 @@ function App() {
 
         {platform && (
           <>
-            <div
-              className={`mb-8 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium ${
-                platform.status === "ok"
-                  ? "bg-emerald-950 text-emerald-300 ring-1 ring-emerald-800"
-                  : "bg-amber-950 text-amber-300 ring-1 ring-amber-800"
-              }`}
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  platform.status === "ok" ? "bg-emerald-400" : "bg-amber-400"
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <div
+                className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium ${
+                  platform.status === "ok"
+                    ? "bg-emerald-950 text-emerald-300 ring-1 ring-emerald-800"
+                    : "bg-amber-950 text-amber-300 ring-1 ring-amber-800"
                 }`}
-              />
-              {platform.status === "ok" ? "All systems operational" : "Degraded"}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    platform.status === "ok" ? "bg-emerald-400" : "bg-amber-400"
+                  }`}
+                />
+                {platform.status === "ok" ? "All systems operational" : "Degraded"}
+              </div>
+              {platform.network_mode && (
+                <span className="text-sm text-slate-500">
+                  Discovery: <code className="text-slate-400">{platform.network_mode}</code>
+                </span>
+              )}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
