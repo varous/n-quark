@@ -107,6 +107,48 @@ def test_ingest_youtube_channel_persists_observations(
     assert sent[0].entity.startswith("artist:youtube:")
 
 
+def test_ingest_with_trace_returns_pipeline_trace(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(5)]
+    with patch(
+        "signal_service.routes.youtube.ObservationServiceClient.append_observations",
+        new_callable=AsyncMock,
+        return_value=stored,
+    ):
+        response = client.post(
+            f"/v1/signals/youtube/channels/{DEFAULT_MOCK_CHANNEL_ID}/ingest?trace=true"
+        )
+
+    assert response.status_code == 200
+    trace = response.json()["trace"]
+    assert [record["stage"] for record in trace] == ["ingestion", "observation"]
+    # ingestion stage carries the normalized observation payloads it produced
+    assert len(trace[0]["output"]) == 5
+    assert "provenance" in trace[0]["output"][0]["metadata"]
+    # observation stage carries what the store added
+    assert "uuid" in trace[1]["added"]
+
+
+def test_ingest_without_trace_omits_trace(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    with patch(
+        "signal_service.routes.youtube.ObservationServiceClient.append_observations",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        response = client.post(
+            f"/v1/signals/youtube/channels/{DEFAULT_MOCK_CHANNEL_ID}/ingest"
+        )
+    assert "trace" not in response.json()
+
+
 def test_health_reports_youtube_mock_mode(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
