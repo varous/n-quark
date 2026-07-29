@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
-from signal_service.adapters.youtube import YouTubeClient
+from signal_service.adapters.youtube import YouTubeClient, mock_channel_payload
+from signal_service.classification import classification_observation, classify_youtube_channel
+from signal_service.clients.entity_client import EntityServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
 from signal_service.schemas import YouTubeChannelSignals
@@ -46,19 +48,48 @@ async def ingest_youtube_channel(
             detail=f"YouTube fetch failed: {exc}",
         ) from exc
 
+    # Entity classification runs ahead of resolution: infer what KIND of thing this channel
+    # is (artist / label / ...) so a label is never resolved as an artist.
+    raw = mock_channel_payload(channel_id) if settings.use_youtube_mock else None
+    classification = classify_youtube_channel(channel_id, signals.name, raw)
+    classification_obs = classification_observation(signals.entity, classification)
+
+    outbound = [*signals.observations, classification_obs]
     try:
-        persisted = await observation_client.append_observations(signals.observations)
+        persisted = await observation_client.append_observations(outbound)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Observation service write failed: {exc}",
         ) from exc
 
+    # Resolve to a canonical entity of the *classified* type (best-effort — a resolution
+    # outage must not fail signal ingestion, which is the append-only source of truth).
+    resolution: dict[str, object] | None = None
+    try:
+        resolution = await EntityServiceClient().resolve(
+            alias=signals.entity,
+            entity_type=classification.entity_type,
+            display_name=signals.name,
+            source="youtube",
+            metadata={"youtube_channel_id": channel_id},
+        )
+    except Exception:  # noqa: BLE001 — resolution is best-effort
+        resolution = None
+
     result: dict[str, object] = {
         "channel_id": signals.channel_id,
-        "entity": signals.entity,
+        "source_entity": signals.entity,
         "name": signals.name,
         "mock": signals.mock,
+        "classification": {
+            "entity_type": classification.entity_type,
+            "confidence": classification.confidence,
+            "method": classification.method,
+            "needs_review": classification.needs_review,
+            "reasons": classification.reasons,
+        },
+        "canonical_id": resolution.get("canonical_id") if resolution else None,
         "observation_service": settings.observation_service_url,
         "observations_created": len(persisted),
         "observations": persisted,
@@ -72,7 +103,7 @@ async def ingest_youtube_channel(
                 "input": {"channel_id": channel_id},
                 "output": [obs.to_payload() for obs in signals.observations],
                 "added": [
-                    "entity id",
+                    "type-neutral source handle (youtube:channel:*)",
                     "attribute mapping",
                     "source",
                     "confidence",
@@ -81,11 +112,37 @@ async def ingest_youtube_channel(
                 ],
             },
             {
+                "stage": "classification",
+                "service": "signal-service / entity-classifier",
+                "input": {"channel_id": channel_id, "name": signals.name},
+                "output": classification_obs.to_payload(),
+                "added": [
+                    f"inferred entity_type = {classification.entity_type}",
+                    f"confidence = {classification.confidence}",
+                    f"method = {classification.method}",
+                    "reasons + needs_review flag",
+                ],
+            },
+            {
                 "stage": "observation",
                 "service": "observation-service",
-                "input": {"observations_in": len(signals.observations)},
+                "input": {"observations_in": len(outbound)},
                 "output": persisted,
                 "added": ["uuid", "created_at (server ingest time)", "append-only guarantee"],
+            },
+            {
+                "stage": "entity",
+                "service": "entity-service",
+                "input": {
+                    "alias": signals.entity,
+                    "entity_type": classification.entity_type,
+                    "display_name": signals.name,
+                },
+                "output": resolution or {"skipped": "entity-service unreachable"},
+                "added": [
+                    "canonical_id of the classified type",
+                    "alias link (source handle -> canonical entity)",
+                ],
             },
         ]
 

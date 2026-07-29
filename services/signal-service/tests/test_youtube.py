@@ -9,6 +9,7 @@ from signal_service.adapters.youtube import (
     mock_channel_payload,
     normalize_channel_response,
 )
+from signal_service.classification import classify_youtube_channel
 from signal_service.config import settings
 from signal_service.main import app
 from signal_service.schemas import NormalizedObservation
@@ -19,8 +20,33 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_entity_id_for_youtube_channel() -> None:
-    assert entity_id_for_youtube_channel("abc123") == "artist:youtube:abc123"
+def test_entity_id_is_type_neutral() -> None:
+    # The adapter must not assert a type — classification decides it later.
+    assert entity_id_for_youtube_channel("abc123") == "youtube:channel:abc123"
+
+
+def test_classify_tseries_as_label_not_artist() -> None:
+    c = classify_youtube_channel(
+        DEFAULT_MOCK_CHANNEL_ID, "T-Series", mock_channel_payload(DEFAULT_MOCK_CHANNEL_ID)
+    )
+    assert c.entity_type == "label"
+    assert c.method == "registry"
+    assert c.confidence >= 0.9
+
+
+def test_classify_label_by_name_heuristic() -> None:
+    c = classify_youtube_channel(
+        "UCsomethingelse", "Believe Records", {"statistics": {"videoCount": "5000"}}
+    )
+    assert c.entity_type == "label"
+    assert c.method == "heuristic"
+
+
+def test_classify_unknown_defaults_to_low_confidence_artist() -> None:
+    c = classify_youtube_channel("UCzzz", "Some Person", {"statistics": {"videoCount": "40"}})
+    assert c.entity_type == "artist"
+    assert c.method == "default"
+    assert c.needs_review is True
 
 
 def test_normalize_channel_response_maps_core_signals() -> None:
@@ -29,7 +55,7 @@ def test_normalize_channel_response_maps_core_signals() -> None:
         DEFAULT_MOCK_CHANNEL_ID, channel, mock=True, trending_rank=2
     )
 
-    assert signals.entity == f"artist:youtube:{DEFAULT_MOCK_CHANNEL_ID}"
+    assert signals.entity == f"youtube:channel:{DEFAULT_MOCK_CHANNEL_ID}"
     assert signals.name == "T-Series"
     attributes = {obs.attribute for obs in signals.observations}
     assert attributes == {
@@ -65,6 +91,18 @@ def test_numeric_stats_are_coerced_to_int() -> None:
     assert isinstance(subs.value, int)
 
 
+@pytest.fixture()
+def _stub_resolve(monkeypatch: pytest.MonkeyPatch):
+    """Stub entity-service resolution so ingest tests don't hit the network."""
+    async def fake_resolve(self, **kwargs):
+        etype = kwargs["entity_type"]
+        return {"canonical_id": f"{etype}:t-series", "created": True, "alias_linked": True}
+
+    monkeypatch.setattr(
+        "signal_service.routes.youtube.EntityServiceClient.resolve", fake_resolve
+    )
+
+
 def test_preview_youtube_channel_mock_mode(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -79,16 +117,14 @@ def test_preview_youtube_channel_mock_mode(
     assert len(body["observations"]) >= 4
 
 
-def test_ingest_youtube_channel_persists_observations(
+def test_ingest_classifies_tseries_as_label(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    _stub_resolve: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
 
-    fake_persisted = [
-        {"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(5)
-    ]
-
+    fake_persisted = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(6)]
     with patch(
         "signal_service.routes.youtube.ObservationServiceClient.append_observations",
         new_callable=AsyncMock,
@@ -100,20 +136,26 @@ def test_ingest_youtube_channel_persists_observations(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["observations_created"] == 5
-    assert body["entity"] == entity_id_for_youtube_channel(DEFAULT_MOCK_CHANNEL_ID)
+    # Source handle is type-neutral; classification decides the type; resolves to a LABEL.
+    assert body["source_entity"] == entity_id_for_youtube_channel(DEFAULT_MOCK_CHANNEL_ID)
+    assert body["classification"]["entity_type"] == "label"
+    assert body["canonical_id"] == "label:t-series"
+
     append_mock.assert_awaited_once()
     sent: list[NormalizedObservation] = append_mock.await_args.args[0]
-    assert sent[0].entity.startswith("artist:youtube:")
+    assert sent[0].entity.startswith("youtube:channel:")
+    # a candidate_entity_type observation is appended alongside the signals
+    assert any(o.attribute == "candidate_entity_type" for o in sent)
 
 
-def test_ingest_with_trace_returns_pipeline_trace(
+def test_ingest_with_trace_returns_four_stage_pipeline(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    _stub_resolve: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
 
-    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(5)]
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(6)]
     with patch(
         "signal_service.routes.youtube.ObservationServiceClient.append_observations",
         new_callable=AsyncMock,
@@ -125,17 +167,24 @@ def test_ingest_with_trace_returns_pipeline_trace(
 
     assert response.status_code == 200
     trace = response.json()["trace"]
-    assert [record["stage"] for record in trace] == ["ingestion", "observation"]
-    # ingestion stage carries the normalized observation payloads it produced
-    assert len(trace[0]["output"]) == 5
+    assert [r["stage"] for r in trace] == [
+        "ingestion",
+        "classification",
+        "observation",
+        "entity",
+    ]
     assert "provenance" in trace[0]["output"][0]["metadata"]
-    # observation stage carries what the store added
-    assert "uuid" in trace[1]["added"]
+    # classification stage names the inferred type
+    assert trace[1]["output"]["attribute"] == "candidate_entity_type"
+    assert trace[1]["output"]["value"] == "label"
+    # entity stage resolves to the classified (label) type
+    assert trace[3]["output"]["canonical_id"] == "label:t-series"
 
 
 def test_ingest_without_trace_omits_trace(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    _stub_resolve: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
     with patch(

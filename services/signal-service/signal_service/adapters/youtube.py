@@ -21,7 +21,10 @@ MOCK_TRENDING_RANK_IN: dict[str, int] = {DEFAULT_MOCK_CHANNEL_ID: 2}
 
 
 def entity_id_for_youtube_channel(channel_id: str) -> str:
-    return f"artist:youtube:{channel_id}"
+    """Type-neutral source handle. The adapter does NOT assert an entity type — a channel
+    may be an artist, a label, a promoter, or a media network. Classification decides the
+    type before canonical resolution."""
+    return f"youtube:channel:{channel_id}"
 
 
 def _provenance(collected_at: datetime, *, source_url: str) -> dict[str, Any]:

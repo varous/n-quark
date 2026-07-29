@@ -88,6 +88,7 @@ services:
     environment:
       NQUARK_NETWORK_MODE: docker
       NQUARK_OBSERVATION_SERVICE_URL: http://observation-service:8004
+      NQUARK_ENTITY_SERVICE_URL: http://entity-service:8005
       NQUARK_SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       NQUARK_SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
       NQUARK_SPOTIFY_MOCK_MODE: ${SPOTIFY_MOCK_MODE:-true}
@@ -100,6 +101,8 @@ services:
       redis:
         condition: service_healthy
       observation-service:
+        condition: service_started
+      entity-service:
         condition: service_started
 
   observation-service:
