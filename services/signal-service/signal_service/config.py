@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     musicbrainz_api_base: str = "https://musicbrainz.org/ws/2"
     musicbrainz_user_agent: str = "n-quark/0.1 (https://github.com/varous/n-quark)"
     musicbrainz_mock_mode: bool = False
+    # Google Trends has no reliable free API, so the provider is pluggable.
+    # "dataforseo" is the production reference; "serpapi" is a dev option; else "mock".
+    google_trends_provider: str = "mock"
+    google_trends_region: str = "IN"
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
+    dataforseo_api_base: str = "https://api.dataforseo.com/v3"
+    serpapi_key: str = ""
+    serpapi_api_base: str = "https://serpapi.com/search.json"
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -73,6 +82,16 @@ class Settings(BaseSettings):
     def use_musicbrainz_mock(self) -> bool:
         # MusicBrainz needs no API key — it is open — so mock only when explicitly set.
         return self.musicbrainz_mock_mode
+
+    @property
+    def resolved_trends_provider(self) -> str:
+        """The Trends provider to actually use — falls back to mock if creds are missing."""
+        provider = self.google_trends_provider.lower()
+        if provider == "dataforseo" and self.dataforseo_login and self.dataforseo_password:
+            return "dataforseo"
+        if provider == "serpapi" and self.serpapi_key:
+            return "serpapi"
+        return "mock"
 
 
 settings = Settings()

@@ -39,3 +39,13 @@ class YouTubeChannelSignals(BaseModel):
     observations: list[NormalizedObservation]
     fetched_at: datetime
     mock: bool = False
+
+
+class GoogleTrendsSignals(BaseModel):
+    query: str
+    entity: str
+    region: str
+    provider: str
+    observations: list[NormalizedObservation]
+    fetched_at: datetime
+    mock: bool = False
