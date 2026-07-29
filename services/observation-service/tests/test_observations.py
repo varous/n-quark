@@ -90,3 +90,23 @@ def test_default_timestamp_is_set(client: TestClient) -> None:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
     assert before <= ts <= after
+
+
+def test_list_recent_observations(client: TestClient) -> None:
+    for idx in range(3):
+        client.post(
+            "/v1/observations",
+            json={
+                "entity": f"artist:recent-{idx}",
+                "attribute": "test",
+                "value": idx,
+                "source": "test",
+                "confidence": 0.5,
+            },
+        )
+
+    response = client.get("/v1/observations/recent?limit=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 3
+    assert len(body["observations"]) == 2

@@ -45,6 +45,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Open **http://localhost:5173** for the intelligence dashboard (recent observations, entity lookup, demo ingest pipeline).
+
 Services will be available at:
 
 | Service | URL |

@@ -1,47 +1,105 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  DEMO_SPOTIFY_ALIAS,
+  DEMO_SPOTIFY_ID,
+  fetchEntityByAlias,
+  fetchPlatformStatus,
+  fetchRecentObservations,
+  ingestSpotifyArtist,
+  resolveSpotifyArtist,
+  type Entity,
+  type EntityResolveResponse,
+  type Observation,
+  type PlatformStatus,
+} from "./api/client";
+import { EntityLookupPanel } from "./components/EntityLookupPanel";
+import { IngestDemoPanel } from "./components/IngestDemoPanel";
+import { PlatformStatusPanel } from "./components/PlatformStatusPanel";
+import { RecentObservationsPanel } from "./components/RecentObservationsPanel";
 import "./index.css";
-
-type ServiceHealth = {
-  status: string;
-  service?: string;
-  timestamp?: string;
-  detail?: string;
-};
-
-type PlatformStatus = {
-  status: string;
-  network_mode?: string;
-  timestamp: string;
-  services: Record<string, ServiceHealth>;
-};
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
 function App() {
   const [platform, setPlatform] = useState<PlatformStatus | null>(null);
+  const [observations, setObservations] = useState<Observation[]>([]);
+  const [observationTotal, setObservationTotal] = useState(0);
+  const [aliasInput, setAliasInput] = useState(DEMO_SPOTIFY_ALIAS);
+  const [entity, setEntity] = useState<Entity | null>(null);
+  const [resolveResult, setResolveResult] = useState<EntityResolveResponse | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [entityLoading, setEntityLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [entityError, setEntityError] = useState<string | null>(null);
+  const [demoMessage, setDemoMessage] = useState<string | null>(null);
 
-  const fetchStatus = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/v1/platform/status`);
-      if (!response.ok) {
-        throw new Error(`API responded with ${response.status}`);
-      }
-      setPlatform(await response.json());
+      const [status, recent] = await Promise.all([
+        fetchPlatformStatus(),
+        fetchRecentObservations(50),
+      ]);
+      setPlatform(status);
+      setObservations(recent.observations);
+      setObservationTotal(recent.count);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch platform status");
-      setPlatform(null);
+      setError(err instanceof Error ? err.message : "Failed to load dashboard");
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const lookupEntity = useCallback(async (alias: string) => {
+    setEntityLoading(true);
+    setEntityError(null);
+    try {
+      const result = await fetchEntityByAlias(alias);
+      setEntity(result);
+      setResolveResult(null);
+    } catch (err) {
+      setEntity(null);
+      setResolveResult(null);
+      setEntityError(err instanceof Error ? err.message : "Entity not found");
+    } finally {
+      setEntityLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    void fetchStatus();
-  }, [fetchStatus]);
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    if (selectedEntity?.startsWith("artist:spotify:")) {
+      setAliasInput(selectedEntity);
+      void lookupEntity(selectedEntity);
+    }
+  }, [selectedEntity, lookupEntity]);
+
+  const runDemo = async () => {
+    setDemoLoading(true);
+    setDemoMessage(null);
+    setError(null);
+    try {
+      const ingest = await ingestSpotifyArtist(DEMO_SPOTIFY_ID);
+      const resolved = await resolveSpotifyArtist(DEMO_SPOTIFY_ID, ingest.name);
+      setEntity(resolved.entity);
+      setResolveResult(resolved);
+      setAliasInput(DEMO_SPOTIFY_ALIAS);
+      setSelectedEntity(ingest.entity);
+      setDemoMessage(
+        `Ingested ${ingest.observations_created} observations → resolved to ${resolved.canonical_id}`,
+      );
+      await loadDashboard();
+    } catch (err) {
+      setDemoMessage(null);
+      setError(err instanceof Error ? err.message : "Demo pipeline failed");
+    } finally {
+      setDemoLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -51,82 +109,40 @@ function App() {
         </p>
         <h1 className="mt-2 text-4xl font-semibold tracking-tight">n-quark</h1>
         <p className="mt-3 max-w-2xl text-slate-400">
-          Canonical intelligence layer for live entertainment — observe, understand,
-          predict, and recommend.
+          Observe signals, store immutable evidence, and resolve canonical entities.
         </p>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-medium">Platform Status</h2>
-          <button
-            type="button"
-            onClick={() => void fetchStatus()}
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500"
-          >
-            Refresh
-          </button>
-        </div>
-
-        {loading && <p className="text-slate-400">Loading platform status…</p>}
-
+      <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
         {error && (
           <div className="rounded-lg border border-red-800 bg-red-950/50 p-4 text-red-200">
             {error}
           </div>
         )}
 
-        {platform && (
-          <>
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <div
-                className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium ${
-                  platform.status === "ok"
-                    ? "bg-emerald-950 text-emerald-300 ring-1 ring-emerald-800"
-                    : "bg-amber-950 text-amber-300 ring-1 ring-amber-800"
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    platform.status === "ok" ? "bg-emerald-400" : "bg-amber-400"
-                  }`}
-                />
-                {platform.status === "ok" ? "All systems operational" : "Degraded"}
-              </div>
-              {platform.network_mode && (
-                <span className="text-sm text-slate-500">
-                  Discovery: <code className="text-slate-400">{platform.network_mode}</code>
-                </span>
-              )}
-            </div>
+        <IngestDemoPanel onRunDemo={() => void runDemo()} loading={demoLoading} message={demoMessage} />
 
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {Object.entries(platform.services).map(([name, health]) => (
-                <article
-                  key={name}
-                  className="rounded-xl border border-slate-800 bg-slate-900 p-5"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-medium capitalize">{name}</h3>
-                    <span
-                      className={`text-xs font-semibold uppercase ${
-                        health.status === "ok" ? "text-emerald-400" : "text-red-400"
-                      }`}
-                    >
-                      {health.status}
-                    </span>
-                  </div>
-                  {health.service && (
-                    <p className="mt-2 text-sm text-slate-500">{health.service}</p>
-                  )}
-                  {health.detail && (
-                    <p className="mt-2 text-sm text-red-300">{health.detail}</p>
-                  )}
-                </article>
-              ))}
-            </div>
-          </>
-        )}
+        {platform && <PlatformStatusPanel platform={platform} />}
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <RecentObservationsPanel
+            observations={observations}
+            total={observationTotal}
+            onRefresh={() => void loadDashboard()}
+            loading={loading}
+            selectedEntity={selectedEntity}
+            onSelectEntity={setSelectedEntity}
+          />
+          <EntityLookupPanel
+            aliasInput={aliasInput}
+            onAliasInputChange={setAliasInput}
+            onLookup={() => void lookupEntity(aliasInput.trim())}
+            entity={entity}
+            resolveResult={resolveResult}
+            loading={entityLoading}
+            error={entityError}
+          />
+        </div>
       </main>
     </div>
   );

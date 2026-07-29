@@ -29,6 +29,27 @@ def create_observation(db: Session, payload: ObservationCreate) -> ObservationRe
     return _to_read(record)
 
 
+def list_recent_observations(
+    db: Session,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[ObservationRead]:
+    stmt = (
+        select(ObservationRecord)
+        .order_by(ObservationRecord.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = db.scalars(stmt).all()
+    return [_to_read(row) for row in rows]
+
+
+def count_observations(db: Session) -> int:
+    stmt = select(func.count()).select_from(ObservationRecord)
+    return db.scalar(stmt) or 0
+
+
 def list_observations_for_entity(
     db: Session,
     entity_id: str,

@@ -49,6 +49,10 @@ Most services only expose `/health` and `/` in the scaffold; full stack health a
 | intelligence-service | 8009 |
 | frontend | 5173 |
 
+### Frontend
+
+Dashboard at http://localhost:5173 shows recent observations, entity lookup, and a demo ingest+resolve pipeline. All data API calls go through api-gateway (`/api` → port 8000), which proxies `/v1/observations`, `/v1/entities`, and `/v1/signals`.
+
 ### signal-service (Spotify adapter)
 
 Normalizes Spotify artist signals into observations via `observation-service`. Uses **mock mode** when `NQUARK_SPOTIFY_CLIENT_ID` / `NQUARK_SPOTIFY_CLIENT_SECRET` are unset.

@@ -52,5 +52,10 @@ class ObservationCreatedResponse(BaseModel):
     observation: ObservationRead
 
 
+class RecentObservationsResponse(BaseModel):
+    count: int
+    observations: list[ObservationRead]
+
+
 def new_observation_id() -> UUID:
     return uuid4()

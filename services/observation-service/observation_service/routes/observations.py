@@ -4,16 +4,19 @@ from uuid import UUID
 
 from observation_service.db import get_db
 from observation_service.repository import (
+    count_observations,
     count_observations_for_entity,
     create_observation,
     get_observation,
     list_observations_for_entity,
+    list_recent_observations,
 )
 from observation_service.schemas import (
     ObservationCreate,
     ObservationCreatedResponse,
     ObservationListResponse,
     ObservationRead,
+    RecentObservationsResponse,
 )
 
 router = APIRouter(prefix="/v1/observations", tags=["observations"])
@@ -31,6 +34,21 @@ def append_observation(
 ) -> ObservationCreatedResponse:
     observation = create_observation(db, payload)
     return ObservationCreatedResponse(observation=observation)
+
+
+@router.get(
+    "/recent",
+    response_model=RecentObservationsResponse,
+    summary="List recent observations across all entities",
+)
+def list_recent(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> RecentObservationsResponse:
+    observations = list_recent_observations(db, limit=limit, offset=offset)
+    total = count_observations(db)
+    return RecentObservationsResponse(count=total, observations=observations)
 
 
 @router.get(

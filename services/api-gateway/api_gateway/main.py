@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api_gateway.config import settings
+from api_gateway.routes.proxy import router as proxy_router
 
 app = FastAPI(
     title="n-quark / api-gateway",
@@ -19,6 +20,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(proxy_router)
 
 
 @app.get("/health")
