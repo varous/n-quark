@@ -1,0 +1,187 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nquark}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nquark}
+      POSTGRES_DB: ${POSTGRES_DB:-nquark}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nquark}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/nquark}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nquark}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nquark}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  crawl-service:
+    build: ./services/crawl-service
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  media-service:
+    build: ./services/media-service
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  signal-service:
+    build: ./services/signal-service
+    ports:
+      - "8003:8003"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+      NQUARK_OBSERVATION_SERVICE_URL: http://observation-service:8004
+      NQUARK_SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      NQUARK_SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      NQUARK_SPOTIFY_MOCK_MODE: ${SPOTIFY_MOCK_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      observation-service:
+        condition: service_started
+
+  observation-service:
+    build: ./services/observation-service
+    ports:
+      - "8004:8004"
+    environment:
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  entity-service:
+    build: ./services/entity-service
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  graph-service:
+    build: ./services/graph-service
+    ports:
+      - "8006:8006"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  analytics-service:
+    build: ./services/analytics-service
+    ports:
+      - "8007:8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  feature-service:
+    build: ./services/feature-service
+    ports:
+      - "8008:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+  intelligence-service:
+    build: ./services/intelligence-service
+    ports:
+      - "8009:8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+    depends_on:
+      - crawl-service
+      - media-service
+      - signal-service
+      - observation-service
+      - entity-service
+      - graph-service
+      - analytics-service
+      - feature-service
+      - intelligence-service
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api-gateway
+    environment:
+      VITE_API_URL: http://localhost:8000
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
