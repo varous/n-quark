@@ -73,6 +73,15 @@ curl -X POST http://localhost:8003/v1/signals/spotify/artists/4tZwfgrHOc3mvqYFCO
 
 Mock mode is enabled by default when Spotify credentials are not configured.
 
+### entity-service
+
+Canonical artist registry with alias resolution (`artist:spotify:*` → `artist:daft-punk`).
+
+```bash
+curl -X POST http://localhost:8005/v1/entities/artists/resolve-spotify/4tZwfgrHOc3mvqYFCOCYO6 \
+  -H "Content-Type: application/json" -d '{"display_name": "Daft Punk"}'
+```
+
 ### observation-service
 
 Append-only observation store backed by PostgreSQL. See [AGENTS.md](AGENTS.md) for migrate/run instructions.

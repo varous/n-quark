@@ -113,6 +113,8 @@ services:
     build: ./services/entity-service
     ports:
       - "8005:8005"
+    environment:
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
     depends_on:
       postgres:
         condition: service_healthy

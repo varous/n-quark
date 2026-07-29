@@ -64,6 +64,31 @@ curl http://localhost:8004/v1/observations/artist:spotify:4tZwfgrHOc3mvqYFCOCYO6
 
 Set `NQUARK_OBSERVATION_SERVICE_URL=http://localhost:8004` for local dev.
 
+### entity-service (Artist canonicalization)
+
+Maps external aliases (e.g. `artist:spotify:{id}`) to canonical artist IDs (e.g. `artist:daft-punk`).
+
+```bash
+docker compose up postgres entity-service -d
+make entity-migrate
+
+# Resolve Spotify artist → canonical entity
+curl -X POST http://localhost:8005/v1/entities/artists/resolve-spotify/4tZwfgrHOc3mvqYFCOCYO6 \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "Daft Punk"}'
+
+# Lookup by alias
+curl http://localhost:8005/v1/entities/by-alias/artist:spotify:4tZwfgrHOc3mvqYFCOCYO6
+```
+
+Full ingest + resolve flow:
+
+```bash
+curl -X POST http://localhost:8003/v1/signals/spotify/artists/4tZwfgrHOc3mvqYFCOCYO6/ingest
+curl -X POST http://localhost:8005/v1/entities/artists/resolve-spotify/4tZwfgrHOc3mvqYFCOCYO6 \
+  -H "Content-Type: application/json" -d '{"display_name": "Daft Punk"}'
+```
+
 ### observation-service (append-only store)
 
 Requires PostgreSQL. Migrations run automatically in Docker; locally:

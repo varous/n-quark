@@ -1,4 +1,4 @@
-.PHONY: help up down build logs test lint frontend api-gateway dev-local observation-migrate
+.PHONY: help up down build logs test lint frontend api-gateway dev-local observation-migrate entity-migrate
 
 help:
 	@echo "n-quark development commands"
@@ -13,6 +13,7 @@ help:
 	@echo "  make api-gateway Start api-gateway locally"
 	@echo "  make dev-local   Start all backend services on localhost (no Docker)"
 	@echo "  make observation-migrate  Run observation-service Alembic migrations"
+	@echo "  make entity-migrate       Run entity-service Alembic migrations"
 
 up:
 	docker compose up -d
@@ -49,3 +50,6 @@ dev-local:
 
 observation-migrate:
 	cd services/observation-service && alembic upgrade head
+
+entity-migrate:
+	cd services/entity-service && alembic upgrade head

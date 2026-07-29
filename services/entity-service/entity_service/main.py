@@ -3,12 +3,15 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 
 from entity_service.config import settings
+from entity_service.routes.entities import router as entities_router
 
 app = FastAPI(
     title="n-quark / entity-service",
-    description="Canonicalizes entities",
+    description="Canonicalizes and deduplicates entities",
     version="0.1.0",
 )
+
+app.include_router(entities_router)
 
 
 @app.get("/health")
