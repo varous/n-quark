@@ -9,8 +9,16 @@ from signal_service.adapters.youtube import (
     mock_channel_payload,
     normalize_channel_response,
 )
-from signal_service.adapters.musicbrainz import MusicBrainzClient
-from signal_service.classification import classify_by_heuristics, classify_channel
+from signal_service.adapters.musicbrainz import (
+    MusicBrainzClient,
+    MusicBrainzLookup,
+    MusicBrainzMatch,
+)
+from signal_service.classification import (
+    classify_by_heuristics,
+    classify_channel,
+    decide_from_musicbrainz,
+)
 from signal_service.config import settings
 from signal_service.main import app
 from signal_service.schemas import NormalizedObservation
@@ -26,18 +34,65 @@ def test_entity_id_is_type_neutral() -> None:
     assert entity_id_for_youtube_channel("abc123") == "youtube:channel:abc123"
 
 
-async def test_classify_tseries_as_label_via_musicbrainz(
+async def test_classify_tseries_resolves_label_via_tiebreak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # T-Series matches a label AND a coincidental same-named artist at score 100; the
+    # tie-break (exact name + aggregator channel) must pick label and flag for review.
     monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
     MusicBrainzClient._cache.clear()
     c = await classify_channel(
         "T-Series", mock_channel_payload(DEFAULT_MOCK_CHANNEL_ID), MusicBrainzClient()
     )
     assert c.entity_type == "label"
-    assert c.method == "musicbrainz"
-    assert c.confidence >= 0.9
-    assert c.mbid is not None
+    assert c.method == "musicbrainz+tiebreak"
+    assert c.needs_review is True
+    assert c.mbid == "c9f5b9c5-0000-4000-8000-t-series0001"
+
+
+async def test_classify_arijit_is_clean_artist_no_tiebreak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
+    MusicBrainzClient._cache.clear()
+    c = await classify_channel("Arijit Singh", None, MusicBrainzClient())
+    assert c.entity_type == "artist"
+    assert c.method == "musicbrainz"  # only one type matched — no tie
+    assert c.needs_review is False
+
+
+def test_tiebreak_without_corroboration_flags_review() -> None:
+    # Genuine tie with no exact-name and no aggregator signal -> flagged, not guessed.
+    lookup = MusicBrainzLookup(
+        label=MusicBrainzMatch("label", "L1", 100, "Different Name", "Imprint"),
+        artist=MusicBrainzMatch("artist", "A1", 100, "Also Different", "Group"),
+    )
+    d = decide_from_musicbrainz(lookup, "Ambiguous Co", raw=None)
+    assert d.method == "musicbrainz+tiebreak"
+    assert d.needs_review is True
+
+
+def test_tiebreak_folds_unicode_dash_in_exact_name() -> None:
+    # Real MusicBrainz stores "T‐Series" with a Unicode hyphen (U+2010); exact-name match
+    # must still fire against an ASCII "T-Series" query, with no aggregator signal.
+    lookup = MusicBrainzLookup(
+        label=MusicBrainzMatch("label", "L1", 100, "T‐Series", "Distributor"),
+        artist=MusicBrainzMatch("artist", "A1", 100, "T Series", "Group"),
+    )
+    d = decide_from_musicbrainz(lookup, "T-Series", raw=None)
+    assert d.entity_type == "label"
+    assert d.needs_review is True
+    assert any("exact name match favors label" in r for r in d.reasons)
+
+
+def test_clear_score_winner_is_trusted() -> None:
+    lookup = MusicBrainzLookup(
+        label=MusicBrainzMatch("label", "L1", 100, "Big Label", "Distributor"),
+        artist=MusicBrainzMatch("artist", "A1", 70, "Big Label", "Group"),
+    )
+    d = decide_from_musicbrainz(lookup, "Big Label", raw=None)
+    assert d.entity_type == "label"
+    assert d.method == "musicbrainz"
 
 
 async def test_classify_falls_back_to_heuristics_when_no_mb_match(

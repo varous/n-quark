@@ -61,7 +61,7 @@ async def ingest_youtube_channel(
     classification_obs = classification_observation(signals.entity, classification)
 
     outbound = [*signals.observations, classification_obs]
-    if classification.method == "musicbrainz" and classification.mbid:
+    if classification.method.startswith("musicbrainz") and classification.mbid:
         # Backbone enrichment: attach the canonical MusicBrainz id to the entity.
         outbound.append(
             musicbrainz_observation(

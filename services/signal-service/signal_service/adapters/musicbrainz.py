@@ -2,8 +2,9 @@
 
 Two jobs:
   1. Disambiguate what KIND of entity a name is (artist vs label). MusicBrainz models
-     these as separate entity types, so a name like "T-Series" resolves as a *label*,
-     not an artist — the deterministic ground truth the classifier needs.
+     these as separate entity types. A name can match BOTH — e.g. "T-Series" matches the
+     Indian label (Super Cassettes) *and* an unrelated German group of the same name, both
+     at score 100 — so the caller must reconcile them, not just take the top score.
   2. Provide the canonical MusicBrainz id (MBID) as an entity-backbone enrichment.
 
 MusicBrainz is open (no API key) but rate-limited to ~1 request/second and requires a
@@ -23,9 +24,6 @@ from signal_service.schemas import NormalizedObservation
 SIGNAL_SOURCE = "musicbrainz"
 ADAPTER_VERSION = "musicbrainz-v1"
 
-# Below this MusicBrainz search score we don't trust the match and defer to heuristics.
-MIN_TRUST_SCORE = 85
-
 
 @dataclass
 class MusicBrainzMatch:
@@ -33,20 +31,15 @@ class MusicBrainzMatch:
     mbid: str
     score: int
     name: str
+    mb_type: str = ""  # MusicBrainz sub-type, e.g. "Distributor" / "Group"
 
 
-# Deterministic offline catalog, keyed by lowercased name.
-_MOCK_CATALOG: dict[str, MusicBrainzMatch] = {
-    "t-series": MusicBrainzMatch(
-        "label", "c9f5b9c5-0000-4000-8000-t-series0001", 100, "T-Series"
-    ),
-    "arijit singh": MusicBrainzMatch(
-        "artist", "b7a9f0e2-0000-4000-8000-arijit00001", 100, "Arijit Singh"
-    ),
-    "sony music entertainment": MusicBrainzMatch(
-        "label", "a1b2c3d4-0000-4000-8000-sony000001", 100, "Sony Music Entertainment"
-    ),
-}
+@dataclass
+class MusicBrainzLookup:
+    """Best label and best artist match for a name — either may be None."""
+
+    label: MusicBrainzMatch | None = None
+    artist: MusicBrainzMatch | None = None
 
 
 def _confidence_from_score(score: int) -> float:
@@ -59,34 +52,51 @@ def _confidence_from_score(score: int) -> float:
     return 0.6
 
 
+# Deterministic offline catalog, keyed by lowercased name. Faithful to the real API: the
+# T-Series name collides across a label and an unrelated artist, both scoring 100.
+_MOCK_CATALOG: dict[str, MusicBrainzLookup] = {
+    "t-series": MusicBrainzLookup(
+        label=MusicBrainzMatch(
+            "label", "c9f5b9c5-0000-4000-8000-t-series0001", 100, "T-Series", "Distributor"
+        ),
+        artist=MusicBrainzMatch(
+            "artist", "d1e2f3a4-0000-4000-8000-tseriesgrp1", 100, "T Series", "Group"
+        ),
+    ),
+    "arijit singh": MusicBrainzLookup(
+        artist=MusicBrainzMatch(
+            "artist", "b7a9f0e2-0000-4000-8000-arijit00001", 100, "Arijit Singh", "Person"
+        ),
+    ),
+    "sony music entertainment": MusicBrainzLookup(
+        label=MusicBrainzMatch(
+            "label", "a1b2c3d4-0000-4000-8000-sony000001", 100, "Sony Music Entertainment", "Original Production"
+        ),
+    ),
+}
+
+
 class MusicBrainzClient:
     # process-wide cache so repeat channels don't re-hit the rate-limited API
-    _cache: ClassVar[dict[str, MusicBrainzMatch | None]] = {}
+    _cache: ClassVar[dict[str, MusicBrainzLookup]] = {}
 
-    async def classify_name(self, name: str) -> MusicBrainzMatch | None:
-        """Return the best artist/label match for a name, or None if not confident."""
+    async def lookup(self, name: str) -> MusicBrainzLookup:
+        """Return the best label and artist match for a name (either may be None)."""
         key = name.strip().lower()
         if key in self._cache:
             return self._cache[key]
 
         if settings.use_musicbrainz_mock:
-            match = _MOCK_CATALOG.get(key)
-            self._cache[key] = match
-            return match
+            result = _MOCK_CATALOG.get(key, MusicBrainzLookup())
+            self._cache[key] = result
+            return result
 
         label = await self._search("label", name)
         await asyncio.sleep(1.0)  # honor MusicBrainz ~1 req/s rate limit
         artist = await self._search("artist", name)
-
-        candidates = [c for c in (label, artist) if c is not None]
-        match: MusicBrainzMatch | None = None
-        if candidates:
-            best = max(candidates, key=lambda c: c.score)
-            if best.score >= MIN_TRUST_SCORE:
-                match = best
-
-        self._cache[key] = match
-        return match
+        result = MusicBrainzLookup(label=label, artist=artist)
+        self._cache[key] = result
+        return result
 
     async def _search(self, entity: str, name: str) -> MusicBrainzMatch | None:
         params = {"query": name, "fmt": "json", "limit": 3}
@@ -108,7 +118,7 @@ class MusicBrainzClient:
             score = int(top.get("score", 0) or 0)
         except (TypeError, ValueError):
             score = 0
-        return MusicBrainzMatch(entity, top.get("id", ""), score, top.get("name", name))
+        return MusicBrainzMatch(entity, top.get("id", ""), score, top.get("name", name), top.get("type", ""))
 
 
 def musicbrainz_observation(
@@ -128,6 +138,7 @@ def musicbrainz_observation(
         confidence=_confidence_from_score(match.score),
         evidence={
             "musicbrainz_type": match.entity_type,
+            "musicbrainz_subtype": match.mb_type,
             "matched_name": match.name,
             "search_score": match.score,
         },
