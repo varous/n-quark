@@ -1,0 +1,1 @@
+"""entity-service - Canonicalizes entities."""
