@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     spotify_api_base: str = "https://api.spotify.com/v1"
     spotify_token_url: str = "https://accounts.spotify.com/api/token"
     spotify_mock_mode: bool = False
+    youtube_api_key: str = ""
+    youtube_api_base: str = "https://www.googleapis.com/youtube/v3"
+    youtube_region_code: str = "IN"
+    youtube_mock_mode: bool = False
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -48,6 +52,12 @@ class Settings(BaseSettings):
         if self.spotify_mock_mode:
             return True
         return not (self.spotify_client_id and self.spotify_client_secret)
+
+    @property
+    def use_youtube_mock(self) -> bool:
+        if self.youtube_mock_mode:
+            return True
+        return not self.youtube_api_key
 
 
 settings = Settings()

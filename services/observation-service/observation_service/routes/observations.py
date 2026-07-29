@@ -7,11 +7,14 @@ from observation_service.repository import (
     count_observations,
     count_observations_for_entity,
     create_observation,
+    create_observations,
     get_observation,
     list_observations_for_entity,
     list_recent_observations,
 )
 from observation_service.schemas import (
+    ObservationBulkCreate,
+    ObservationBulkCreatedResponse,
     ObservationCreate,
     ObservationCreatedResponse,
     ObservationListResponse,
@@ -34,6 +37,20 @@ def append_observation(
 ) -> ObservationCreatedResponse:
     observation = create_observation(db, payload)
     return ObservationCreatedResponse(observation=observation)
+
+
+@router.post(
+    "/bulk",
+    response_model=ObservationBulkCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Append many immutable observations in one request",
+)
+def append_observations_bulk(
+    payload: ObservationBulkCreate,
+    db: Session = Depends(get_db),
+) -> ObservationBulkCreatedResponse:
+    observations = create_observations(db, payload.observations)
+    return ObservationBulkCreatedResponse(count=len(observations), observations=observations)
 
 
 @router.get(

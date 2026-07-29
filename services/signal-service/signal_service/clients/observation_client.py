@@ -24,7 +24,13 @@ class ObservationServiceClient:
         self,
         observations: list[NormalizedObservation],
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for observation in observations:
-            results.append(await self.append_observation(observation))
-        return results
+        """Append many observations in one request via the bulk endpoint."""
+        if not observations:
+            return []
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{self.base_url}/v1/observations/bulk",
+                json={"observations": [obs.to_payload() for obs in observations]},
+            )
+            response.raise_for_status()
+            return response.json()["observations"]

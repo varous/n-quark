@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from entity_service.config import artist_canonical_id, slugify
+from entity_service.config import canonical_id, slugify
 from entity_service.models import EntityAliasRecord, EntityRecord
 from entity_service.schemas import (
     ArtistCreate,
@@ -42,50 +42,77 @@ def _to_entity_read(record: EntityRecord) -> EntityRead:
     )
 
 
-def _unique_artist_id(db: Session, display_name: str, slug: str | None = None) -> str:
+def _unique_entity_id(
+    db: Session,
+    entity_type: str,
+    display_name: str,
+    slug: str | None = None,
+) -> str:
     if slug:
-        candidate = f"artist:{slugify(slug)}"
+        candidate = f"{slugify(entity_type)}:{slugify(slug)}"
     else:
-        candidate = artist_canonical_id(display_name)
+        candidate = canonical_id(entity_type, display_name)
 
     existing = db.get(EntityRecord, candidate)
     if existing is None:
         return candidate
 
     for _ in range(10):
-        candidate = artist_canonical_id(display_name, suffix=uuid4().hex[:8])
+        candidate = canonical_id(entity_type, display_name, suffix=uuid4().hex[:8])
         if db.get(EntityRecord, candidate) is None:
             return candidate
 
-    raise EntityResolutionError("Unable to allocate unique canonical artist id")
+    raise EntityResolutionError("Unable to allocate unique canonical entity id")
 
 
-def create_artist(db: Session, payload: ArtistCreate) -> tuple[EntityRead, bool]:
-    """Create canonical artist. Returns (entity, created)."""
+def create_entity(
+    db: Session,
+    *,
+    entity_type: str,
+    display_name: str,
+    metadata: dict | None = None,
+    aliases: list[str] | None = None,
+    alias_source: str = "manual",
+    slug: str | None = None,
+) -> tuple[EntityRead, bool]:
+    """Create a canonical entity of any type. Returns (entity, created)."""
     now = datetime.now(UTC)
-    canonical_id = _unique_artist_id(db, payload.display_name, payload.slug)
+    new_id = _unique_entity_id(db, entity_type, display_name, slug)
 
-    existing = db.get(EntityRecord, canonical_id)
+    existing = db.get(EntityRecord, new_id)
     if existing is not None:
-        _link_aliases(db, existing.id, payload.aliases, payload.alias_source, now)
+        _link_aliases(db, existing.id, aliases or [], alias_source, now)
         db.commit()
         db.refresh(existing)
         return _to_entity_read(existing), False
 
     record = EntityRecord(
-        id=canonical_id,
-        entity_type="artist",
-        display_name=payload.display_name,
-        entity_metadata=payload.metadata,
+        id=new_id,
+        entity_type=entity_type,
+        display_name=display_name,
+        entity_metadata=metadata or {},
         created_at=now,
         updated_at=now,
     )
     db.add(record)
     db.flush()
-    _link_aliases(db, record.id, payload.aliases, payload.alias_source, now)
+    _link_aliases(db, record.id, aliases or [], alias_source, now)
     db.commit()
     db.refresh(record)
     return _to_entity_read(record), True
+
+
+def create_artist(db: Session, payload: ArtistCreate) -> tuple[EntityRead, bool]:
+    """Create canonical artist. Returns (entity, created)."""
+    return create_entity(
+        db,
+        entity_type="artist",
+        display_name=payload.display_name,
+        metadata=payload.metadata,
+        aliases=payload.aliases,
+        alias_source=payload.alias_source,
+        slug=payload.slug,
+    )
 
 
 def get_entity(db: Session, canonical_id: str) -> EntityRead:
@@ -114,8 +141,6 @@ def get_entity_by_alias(db: Session, alias_key: str) -> EntityRead:
 
 def resolve_entity(db: Session, payload: EntityResolveRequest) -> EntityResolveResponse:
     """Resolve an external alias to a canonical entity, optionally creating one."""
-    now = datetime.now(UTC)
-
     alias_stmt = (
         select(EntityAliasRecord)
         .where(EntityAliasRecord.alias_key == payload.alias)
@@ -136,17 +161,13 @@ def resolve_entity(db: Session, payload: EntityResolveRequest) -> EntityResolveR
     if not payload.display_name:
         raise EntityResolutionError("display_name is required to create a new canonical entity")
 
-    if payload.entity_type != "artist":
-        raise EntityResolutionError(f"Unsupported entity_type: {payload.entity_type}")
-
-    entity_read, created = create_artist(
+    entity_read, created = create_entity(
         db,
-        ArtistCreate(
-            display_name=payload.display_name,
-            metadata=payload.metadata,
-            aliases=[payload.alias],
-            alias_source=payload.source,
-        ),
+        entity_type=payload.entity_type,
+        display_name=payload.display_name,
+        metadata=payload.metadata,
+        aliases=[payload.alias],
+        alias_source=payload.source,
     )
     return EntityResolveResponse(
         canonical_id=entity_read.id,

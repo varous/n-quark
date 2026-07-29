@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from signal_service.config import settings
 from signal_service.routes.spotify import router as spotify_router
+from signal_service.routes.youtube import router as youtube_router
 
 app = FastAPI(
     title="n-quark / signal-service",
@@ -12,6 +13,7 @@ app = FastAPI(
 )
 
 app.include_router(spotify_router)
+app.include_router(youtube_router)
 
 
 @app.get("/health")
@@ -20,6 +22,7 @@ async def health() -> dict[str, str]:
         "status": "ok",
         "service": settings.service_name,
         "spotify_mock": str(settings.use_spotify_mock).lower(),
+        "youtube_mock": str(settings.use_youtube_mock).lower(),
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

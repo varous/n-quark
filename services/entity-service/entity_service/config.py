@@ -37,8 +37,14 @@ def slugify(value: str) -> str:
     return slug.strip("-") or "unknown"
 
 
-def artist_canonical_id(display_name: str, *, suffix: str | None = None) -> str:
+def canonical_id(entity_type: str, display_name: str, *, suffix: str | None = None) -> str:
+    """Build a canonical id like ``artist:daft-punk`` or ``venue:antisocial-mumbai``."""
+    etype = slugify(entity_type)
     base = slugify(display_name)
     if suffix:
-        return f"artist:{base}-{suffix}"
-    return f"artist:{base}"
+        return f"{etype}:{base}-{suffix}"
+    return f"{etype}:{base}"
+
+
+def artist_canonical_id(display_name: str, *, suffix: str | None = None) -> str:
+    return canonical_id("artist", display_name, suffix=suffix)

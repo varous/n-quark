@@ -30,3 +30,12 @@ class SpotifyArtistSignals(BaseModel):
     observations: list[NormalizedObservation]
     fetched_at: datetime
     mock: bool = False
+
+
+class YouTubeChannelSignals(BaseModel):
+    channel_id: str
+    entity: str
+    name: str
+    observations: list[NormalizedObservation]
+    fetched_at: datetime
+    mock: bool = False

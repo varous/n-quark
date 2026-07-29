@@ -92,6 +92,104 @@ def test_default_timestamp_is_set(client: TestClient) -> None:
     assert before <= ts <= after
 
 
+def test_bulk_append_observations(client: TestClient) -> None:
+    payload = {
+        "observations": [
+            {
+                "entity": "artist:youtube:chan1",
+                "attribute": "subscriber_count",
+                "value": 1000,
+                "source": "youtube",
+                "confidence": 0.95,
+            },
+            {
+                "entity": "artist:youtube:chan1",
+                "attribute": "total_view_count",
+                "value": 50000,
+                "source": "youtube",
+                "confidence": 0.95,
+            },
+        ]
+    }
+    response = client.post("/v1/observations/bulk", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["count"] == 2
+    assert len(body["observations"]) == 2
+
+    listed = client.get("/v1/observations/artist:youtube:chan1").json()
+    assert listed["count"] == 2
+
+
+def test_provenance_valid_official_api_is_accepted(client: TestClient) -> None:
+    response = client.post(
+        "/v1/observations",
+        json={
+            "entity": "artist:youtube:chan1",
+            "attribute": "subscriber_count",
+            "value": 1000,
+            "source": "youtube",
+            "confidence": 0.95,
+            "metadata": {
+                "provenance": {
+                    "acquisition_method": "official_api",
+                    "legal_basis": "platform_api_tos",
+                    "adapter_version": "youtube-v1",
+                    "collected_at": "2026-07-29T00:00:00+00:00",
+                }
+            },
+        },
+    )
+    assert response.status_code == 201
+
+
+def test_provenance_rejects_pii(client: TestClient) -> None:
+    response = client.post(
+        "/v1/observations",
+        json={
+            "entity": "artist:youtube:chan1",
+            "attribute": "subscriber_count",
+            "value": 1000,
+            "source": "youtube",
+            "confidence": 0.95,
+            "metadata": {
+                "provenance": {
+                    "acquisition_method": "official_api",
+                    "legal_basis": "platform_api_tos",
+                    "adapter_version": "youtube-v1",
+                    "collected_at": "2026-07-29T00:00:00+00:00",
+                    "contains_pii": True,
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_provenance_rejects_scrape_without_logged_out(client: TestClient) -> None:
+    response = client.post(
+        "/v1/observations",
+        json={
+            "entity": "event:some-show",
+            "attribute": "announced",
+            "value": True,
+            "source": "bookmyshow",
+            "confidence": 0.6,
+            "metadata": {
+                "provenance": {
+                    "acquisition_method": "public_scrape",
+                    "legal_basis": "public_figure_professional",
+                    "adapter_version": "bms-v1",
+                    "collected_at": "2026-07-29T00:00:00+00:00",
+                    "robots_respected": True,
+                    "logged_out": False,
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_list_recent_observations(client: TestClient) -> None:
     for idx in range(3):
         client.post(

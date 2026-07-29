@@ -8,10 +8,8 @@ from observation_service.models import ObservationRecord
 from observation_service.schemas import ObservationCreate, ObservationRead, new_observation_id
 
 
-def create_observation(db: Session, payload: ObservationCreate) -> ObservationRead:
-    """Persist a new observation. Append-only — never updates existing rows."""
-    now = datetime.now(UTC)
-    record = ObservationRecord(
+def _build_record(payload: ObservationCreate, now: datetime) -> ObservationRecord:
+    return ObservationRecord(
         id=new_observation_id(),
         entity=payload.entity,
         attribute=payload.attribute,
@@ -23,10 +21,27 @@ def create_observation(db: Session, payload: ObservationCreate) -> ObservationRe
         observation_metadata=payload.metadata,
         created_at=now,
     )
+
+
+def create_observation(db: Session, payload: ObservationCreate) -> ObservationRead:
+    """Persist a new observation. Append-only — never updates existing rows."""
+    now = datetime.now(UTC)
+    record = _build_record(payload, now)
     db.add(record)
     db.commit()
     db.refresh(record)
     return _to_read(record)
+
+
+def create_observations(db: Session, payloads: list[ObservationCreate]) -> list[ObservationRead]:
+    """Append many observations in a single transaction. Append-only."""
+    now = datetime.now(UTC)
+    records = [_build_record(payload, now) for payload in payloads]
+    db.add_all(records)
+    db.commit()
+    for record in records:
+        db.refresh(record)
+    return [_to_read(record) for record in records]
 
 
 def list_recent_observations(
