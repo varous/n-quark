@@ -1,0 +1,39 @@
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+
+from fastapi import FastAPI
+
+from observation_service.config import settings
+from observation_service.routes.observations import router as observations_router
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+
+
+app = FastAPI(
+    title="n-quark / observation-service",
+    description="Stores immutable observations (append-only)",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+app.include_router(observations_router)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "service": settings.service_name,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {
+        "service": settings.service_name,
+        "message": "Stores immutable observations",
+    }
