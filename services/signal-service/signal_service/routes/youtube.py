@@ -5,7 +5,7 @@ from signal_service.adapters.musicbrainz import (
     MusicBrainzMatch,
     musicbrainz_observation,
 )
-from signal_service.adapters.youtube import YouTubeClient, mock_channel_payload
+from signal_service.adapters.youtube import YouTubeClient
 from signal_service.classification import classification_observation, classify_channel
 from signal_service.clients.entity_client import EntityServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
@@ -56,7 +56,12 @@ async def ingest_youtube_channel(
     # Entity classification runs ahead of resolution: infer what KIND of thing this channel
     # is (artist / label / ...) via MusicBrainz cross-reference, so a label is never resolved
     # as an artist. Heuristics are the fallback when MusicBrainz has no confident match.
-    raw = mock_channel_payload(channel_id) if settings.use_youtube_mock else None
+    # Pass the real fetched video count through so the aggregator signal works live too.
+    video_count = next(
+        (obs.value for obs in signals.observations if obs.attribute == "video_count"),
+        None,
+    )
+    raw = {"statistics": {"videoCount": video_count}} if video_count is not None else None
     classification = await classify_channel(signals.name, raw, MusicBrainzClient())
     classification_obs = classification_observation(signals.entity, classification)
 

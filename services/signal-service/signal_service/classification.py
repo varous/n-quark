@@ -12,6 +12,7 @@ observation. The result is a *candidate*: type + confidence + reasons. Low confi
 signal to route to review, not to trust blindly.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -22,6 +23,8 @@ from signal_service.adapters.musicbrainz import (
     _confidence_from_score,
 )
 from signal_service.schemas import NormalizedObservation
+
+logger = logging.getLogger(__name__)
 
 CLASSIFIER_VERSION = "entity-classifier-v3"
 
@@ -192,7 +195,8 @@ async def classify_channel(
     if mb_client is not None:
         try:
             lookup = await mb_client.lookup(name)
-        except Exception:  # noqa: BLE001 — a MusicBrainz outage must fall back, not fail
+        except Exception as exc:  # noqa: BLE001 — a MusicBrainz outage must fall back, not fail
+            logger.warning("MusicBrainz lookup failed for %r; using heuristics: %s", name, exc)
             lookup = None
         if lookup is not None:
             decision = decide_from_musicbrainz(lookup, name, raw)
