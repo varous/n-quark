@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>n-quark Pipeline Inspector (live)</title>
+<style>
+  :root {
+    --bg: #020617; --panel: #0a1120; --panel-2: #0f172a; --border: #1e293b;
+    --border-soft: #141f33; --text: #e2e8f0; --text-strong: #f8fafc; --muted: #8ea0bd;
+    --faint: #5f6f8c; --accent: #a78bfa; --accent-strong: #c4b5fd; --accent-soft: rgba(167,139,250,0.13);
+    --data: #38bdf8; --good: #34d399; --warn: #fbbf24; --flag: #fb7185;
+    --j-key: #a78bfa; --j-str: #7fd4c1; --j-num: #f0a868; --j-bool: #34d399;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #eef1f7; --panel: #ffffff; --panel-2: #f4f6fb; --border: #dce2ec;
+      --border-soft: #e7ebf2; --text: #1a2436; --text-strong: #0b1220; --muted: #55617a;
+      --faint: #8a95a8; --accent: #7c3aed; --accent-strong: #6d28d9; --accent-soft: rgba(124,58,237,0.09);
+      --data: #0369a1; --good: #047857; --warn: #b45309; --flag: #be123c;
+      --j-key: #7c3aed; --j-str: #0f766e; --j-num: #b45309; --j-bool: #047857;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 40px clamp(18px,4vw,40px) 90px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+  h1 { font-size: clamp(26px,4vw,38px); line-height: 1.05; margin: 0; letter-spacing: -0.02em; color: var(--text-strong); font-weight: 650; }
+  .lede { margin: 14px 0 0; max-width: 66ch; color: var(--muted); font-size: 15px; }
+  .lede b { color: var(--text); }
+
+  /* controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 24px 0 8px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  .field input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: ui-monospace, Menlo, monospace; min-width: 220px; }
+  .field.grow { flex: 1; }
+  .field.grow input { width: 100%; }
+  button { cursor: pointer; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-soft); color: var(--accent-strong); font-weight: 640; font-size: 13.5px; padding: 9px 18px; border-radius: 9px; }
+  button:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .status { margin: 8px 0 22px; padding: 10px 14px; border-radius: 10px; font-size: 13px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); }
+  .status.live { border-color: color-mix(in srgb, var(--good) 40%, transparent); color: var(--good); background: color-mix(in srgb, var(--good) 10%, transparent); }
+  .status.sample { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .status.err { border-color: color-mix(in srgb, var(--flag) 40%, transparent); color: var(--flag); background: color-mix(in srgb, var(--flag) 10%, transparent); }
+  .status .mono { color: inherit; }
+
+  /* stages */
+  .stage { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 20px; position: relative; }
+  .rail { position: relative; display: flex; flex-direction: column; align-items: center; }
+  .rail::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: var(--border); }
+  .stage:last-of-type .rail::before { bottom: auto; height: 34px; }
+  .node { position: relative; z-index: 1; margin-top: 4px; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stage.is-live .node { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px 22px; margin-bottom: 22px; }
+  .card.hero { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+  .card > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .card h2 { margin: 0; font-size: 18px; letter-spacing: -0.01em; color: var(--text-strong); font-weight: 620; }
+  .svc { color: var(--faint); font-size: 12.5px; }
+  .role { margin: 8px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+  .chip { margin-left: auto; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); background: var(--panel-2); white-space: nowrap; }
+  .chip.live { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft); }
+  .chip.planned { color: var(--faint); border-style: dashed; }
+
+  .added { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 2px; }
+  .added .tag { font-size: 12px; color: var(--accent-strong); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 7px; padding: 3px 9px; }
+  .added .tag::before { content: "+ "; color: var(--accent); font-weight: 700; }
+
+  .io { margin: 12px 0 0; font-size: 12.5px; color: var(--muted); }
+  .io .mono { color: var(--data); }
+
+  .code { margin: 10px 0 0; padding: 15px 16px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); overflow-x: auto; font-size: 12.5px; line-height: 1.62; }
+  .code .cap { display: block; color: var(--faint); font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 9px; }
+  pre { margin: 0; white-space: pre; font-family: ui-monospace, Menlo, monospace; }
+  .j-key { color: var(--j-key); } .j-str { color: var(--j-str); } .j-num { color: var(--j-num); } .j-bool { color: var(--j-bool); }
+  .cmt { color: var(--faint); font-style: italic; }
+
+  .note { margin-top: 24px; padding: 20px 22px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); }
+  .note h3 { margin: 0 0 8px; font-size: 14.5px; color: var(--text-strong); }
+  .note p { margin: 0 0 10px; color: var(--muted); font-size: 13px; max-width: 80ch; }
+  .note code { color: var(--accent-strong); background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+
+  @media (max-width: 620px) { .stage { grid-template-columns: 40px minmax(0,1fr); gap: 14px; } .node { width: 34px; height: 34px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Intelligence Operating System · Pipeline Inspector · live</p>
+  <h1>Trace a signal through the pipeline</h1>
+  <p class="lede">This runs the real ingest with <span class="mono">?trace=true</span> and renders the returned
+    trace <b>deterministically — no LLM</b>. Each stage's data (values, ids, the classification result, the canonical
+    id) is <b>live from the services</b>; the one-line stage descriptions are fixed reference text. Point it at your
+    running <b>api-gateway</b> and run.</p>
+
+  <div class="controls">
+    <div class="field">
+      <label for="base">api-gateway base url</label>
+      <input id="base" value="http://localhost:8000" spellcheck="false" />
+    </div>
+    <div class="field grow">
+      <label for="channel">youtube channel id</label>
+      <input id="channel" value="UCq-Fj5jknLsUf-MWSy4_brA" spellcheck="false" />
+    </div>
+    <button id="run">Run trace</button>
+  </div>
+  <div class="status" id="status">Ready.</div>
+
+  <div id="stages"></div>
+
+  <div class="note">
+    <h3>How this works</h3>
+    <p>On <b>Run</b> it sends <code>POST {base}/v1/signals/youtube/channels/{id}/ingest?trace=true</code> and renders
+      the <code>trace</code> array it returns — one card per stage, built from the live <code>{ stage, service, input,
+      output, added }</code> records. The gateway allows cross-origin requests; point it there (not directly at
+      signal-service, which has no CORS).</p>
+    <p>If no backend is reachable, it shows a <b>bundled sample trace</b> (real T-Series output captured offline) so the
+      page still tells the story — the status banner says which you're seeing. Stages 5–9 are shown as
+      <b>scaffold placeholders</b> because those services aren't built yet, so they aren't part of the live trace.</p>
+    <p>Note: each run appends observations (they're immutable/append-only by design), and in mock mode the classifier
+      uses MusicBrainz's mock catalog.</p>
+  </div>
+</div>
+
+<script>
+// ---- static reference text per live stage (authored once; not per-entity, not LLM) ----
+const STAGE_META = {
+  ingestion:      { num: "01", title: "Ingestion",           hero: false,
+    role: "External APIs are normalized into observation payloads under a type-neutral source handle — the adapter does not assert an entity type." },
+  classification: { num: "02", title: "Entity Classification", hero: true,
+    role: "Infers what kind of entity the handle is (artist / label / …) via MusicBrainz cross-reference, then heuristics — so a label is never resolved as an artist." },
+  observation:    { num: "03", title: "Observation Engine",  hero: false,
+    role: "Every payload is written once and never mutated; each row gets an immutable id and a server ingest time." },
+  entity:         { num: "04", title: "Entity Resolution",   hero: false,
+    role: "The source handle resolves to a canonical entity of the classified type, with the handle linked as an alias." },
+};
+
+// ---- static scaffold stages (services not built yet; shown as placeholders) ----
+const PLANNED = [
+  { num: "05", title: "Knowledge Graph", svc: "graph-service · :8006",
+    role: "Resolved entities and relationships become directional edges.",
+    text: 'MERGE (l:Label  { id: "label:t-series" })\nMERGE (a:Artist { id: "artist:arijit-singh" })\nMERGE (a)-[:SIGNED_TO]->(l)' },
+  { num: "06", title: "Deterministic Analytics", svc: "analytics-service · :8007",
+    role: "Reproducible metrics computed from observations + graph, before any AI.",
+    text: '{ "entity": "artist:arijit-singh",\n  "subscriber_growth_30d": 0.018,\n  "regional_strength_in": { "kolkata": 0.91 } }' },
+  { num: "07", title: "Feature Store", svc: "feature-service · :8008",
+    role: "Metrics frozen into versioned, ML-ready features.",
+    text: '{ "entity": "artist:arijit-singh", "name": "digital_momentum",\n  "value": 0.81, "version": "feat-v1" }' },
+  { num: "08", title: "Intelligence Engine", svc: "intelligence-service · :8009",
+    role: "Features become scored, explained predictions.",
+    text: '{ "engine": "artist-demand", "entity": "artist:arijit-singh",\n  "output": { "demand_score": 88.6, "momentum": "steady" } }' },
+  { num: "09", title: "API", svc: "api-gateway · :8000",
+    role: "The gateway exposes intelligence, not database tables.",
+    text: '{ "artist": "Arijit Singh", "demand_score": 88.6,\n  "strongest_markets": ["Kolkata", "Mumbai"] }' },
+];
+
+// ---- bundled sample trace: real T-Series output captured offline ----
+const SAMPLE_TRACE = [
+  {
+    "stage": "ingestion",
+    "service": "signal-service / youtube adapter",
+    "input": {
+      "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA"
+    },
+    "output": [
+      {
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "display_name",
+        "value": "T-Series",
+        "source": "youtube",
+        "timestamp": "2026-07-29T16:41:04.572079+00:00",
+        "confidence": 0.5,
+        "evidence": {
+          "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+          "channel_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA",
+          "endpoint": "/youtube/v3/channels",
+          "fetched_at": "2026-07-29T16:41:04.572079+00:00",
+          "field": "snippet.title"
+        },
+        "metadata": {
+          "adapter": "youtube-v1",
+          "signal_provider": "youtube",
+          "mock": true,
+          "provenance": {
+            "acquisition_method": "official_api",
+            "legal_basis": "platform_api_tos",
+            "data_subject_type": "entity",
+            "contains_pii": false,
+            "adapter_version": "youtube-v1",
+            "collected_at": "2026-07-29T16:41:04.572079+00:00",
+            "source_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA"
+          },
+          "normalization": "direct"
+        }
+      },
+      {
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "subscriber_count",
+        "value": 289000000,
+        "source": "youtube",
+        "timestamp": "2026-07-29T16:41:04.572079+00:00",
+        "confidence": 0.5,
+        "evidence": {
+          "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+          "channel_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA",
+          "endpoint": "/youtube/v3/channels",
+          "fetched_at": "2026-07-29T16:41:04.572079+00:00",
+          "field": "statistics.subscriberCount"
+        },
+        "metadata": {
+          "adapter": "youtube-v1",
+          "signal_provider": "youtube",
+          "mock": true,
+          "provenance": {
+            "acquisition_method": "official_api",
+            "legal_basis": "platform_api_tos",
+            "data_subject_type": "entity",
+            "contains_pii": false,
+            "adapter_version": "youtube-v1",
+            "collected_at": "2026-07-29T16:41:04.572079+00:00",
+            "source_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA"
+          },
+          "normalization": "direct"
+        }
+      },
+      {
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "total_view_count",
+        "value": 270000000000,
+        "source": "youtube",
+        "timestamp": "2026-07-29T16:41:04.572079+00:00",
+        "confidence": 0.5,
+        "evidence": {
+          "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+          "channel_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA",
+          "endpoint": "/youtube/v3/channels",
+          "fetched_at": "2026-07-29T16:41:04.572079+00:00",
+          "field": "statistics.viewCount"
+        },
+        "metadata": {
+          "adapter": "youtube-v1",
+          "signal_provider": "youtube",
+          "mock": true,
+          "provenance": {
+            "acquisition_method": "official_api",
+            "legal_basis": "platform_api_tos",
+            "data_subject_type": "entity",
+            "contains_pii": false,
+            "adapter_version": "youtube-v1",
+            "collected_at": "2026-07-29T16:41:04.572079+00:00",
+            "source_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA"
+          },
+          "normalization": "direct"
+        }
+      },
+      {
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "video_count",
+        "value": 20500,
+        "source": "youtube",
+        "timestamp": "2026-07-29T16:41:04.572079+00:00",
+        "confidence": 0.5,
+        "evidence": {
+          "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+          "channel_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA",
+          "endpoint": "/youtube/v3/channels",
+          "fetched_at": "2026-07-29T16:41:04.572079+00:00",
+          "field": "statistics.videoCount"
+        },
+        "metadata": {
+          "adapter": "youtube-v1",
+          "signal_provider": "youtube",
+          "mock": true,
+          "provenance": {
+            "acquisition_method": "official_api",
+            "legal_basis": "platform_api_tos",
+            "data_subject_type": "entity",
+            "contains_pii": false,
+            "adapter_version": "youtube-v1",
+            "collected_at": "2026-07-29T16:41:04.572079+00:00",
+            "source_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA"
+          },
+          "normalization": "direct"
+        }
+      },
+      {
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "trending_rank_in",
+        "value": 2,
+        "source": "youtube",
+        "timestamp": "2026-07-29T16:41:04.572079+00:00",
+        "confidence": 0.5,
+        "evidence": {
+          "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+          "channel_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA",
+          "endpoint": "/youtube/v3/channels",
+          "fetched_at": "2026-07-29T16:41:04.572079+00:00",
+          "field": "videos.mostPopular",
+          "region_code": "IN"
+        },
+        "metadata": {
+          "adapter": "youtube-v1",
+          "signal_provider": "youtube",
+          "mock": true,
+          "provenance": {
+            "acquisition_method": "official_api",
+            "legal_basis": "platform_api_tos",
+            "data_subject_type": "entity",
+            "contains_pii": false,
+            "adapter_version": "youtube-v1",
+            "collected_at": "2026-07-29T16:41:04.572079+00:00",
+            "source_url": "https://www.youtube.com/channel/UCq-Fj5jknLsUf-MWSy4_brA"
+          },
+          "normalization": "ranked",
+          "region_code": "IN"
+        }
+      }
+    ],
+    "added": [
+      "type-neutral source handle (youtube:channel:*)",
+      "attribute mapping",
+      "source",
+      "confidence",
+      "provenance envelope",
+      "typed values (API strings -> int)"
+    ]
+  },
+  {
+    "stage": "classification",
+    "service": "signal-service / entity-classifier",
+    "input": {
+      "channel_id": "UCq-Fj5jknLsUf-MWSy4_brA",
+      "name": "T-Series"
+    },
+    "output": {
+      "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+      "attribute": "candidate_entity_type",
+      "value": "label",
+      "source": "entity-classifier",
+      "timestamp": "2026-07-29T16:41:04.572462+00:00",
+      "confidence": 0.97,
+      "evidence": {
+        "method": "musicbrainz",
+        "reasons": [
+          "musicbrainz: 'T-Series' is a label (score 100, mbid c9f5b9c5-0000-4000-8000-t-series0001)"
+        ],
+        "needs_review": false,
+        "mbid": "c9f5b9c5-0000-4000-8000-t-series0001"
+      },
+      "metadata": {
+        "classifier_version": "entity-classifier-v2",
+        "derived": true
+      }
+    },
+    "added": [
+      "inferred entity_type = label",
+      "confidence = 0.97",
+      "method = musicbrainz",
+      "reasons + needs_review flag"
+    ]
+  },
+  {
+    "stage": "observation",
+    "service": "observation-service",
+    "input": {
+      "observations_in": 7
+    },
+    "output": [
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000001",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "display_name",
+        "value": "T-Series",
+        "source": "youtube",
+        "confidence": 0.99,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000002",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "subscriber_count",
+        "value": 289000000,
+        "source": "youtube",
+        "confidence": 0.95,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000003",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "total_view_count",
+        "value": 270000000000,
+        "source": "youtube",
+        "confidence": 0.95,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000004",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "video_count",
+        "value": 20500,
+        "source": "youtube",
+        "confidence": 0.95,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000005",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "trending_rank_in",
+        "value": 2,
+        "source": "youtube",
+        "confidence": 0.95,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000006",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "candidate_entity_type",
+        "value": "label",
+        "source": "entity-classifier",
+        "confidence": 0.97,
+        "created_at": "2026-07-29T15:44:48Z"
+      },
+      {
+        "id": "0a1b2c3d-1111-4000-8000-000000000007",
+        "entity": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+        "attribute": "musicbrainz_id",
+        "value": "c9f5b9c5-0000-4000-8000-t-series0001",
+        "source": "musicbrainz",
+        "confidence": 0.97,
+        "created_at": "2026-07-29T15:44:48Z"
+      }
+    ],
+    "added": [
+      "uuid",
+      "created_at (server ingest time)",
+      "append-only guarantee"
+    ]
+  },
+  {
+    "stage": "entity",
+    "service": "entity-service",
+    "input": {
+      "alias": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+      "entity_type": "label",
+      "display_name": "T-Series"
+    },
+    "output": {
+      "canonical_id": "label:t-series",
+      "created": true,
+      "alias_linked": true,
+      "entity": {
+        "id": "label:t-series",
+        "entity_type": "label",
+        "display_name": "T-Series",
+        "aliases": [
+          {
+            "alias_key": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
+            "source": "youtube"
+          }
+        ]
+      }
+    },
+    "added": [
+      "canonical_id of the classified type",
+      "alias link (source handle -> canonical entity)"
+    ]
+  }
+];
+
+const $ = (id) => document.getElementById(id);
+
+function highlight(text) {
+  const re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?)/g;
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.replace(re, (m, str, colon, bool, num) => {
+    if (str !== undefined) return colon ? '<span class="j-key">' + str + "</span>" + colon : '<span class="j-str">' + str + "</span>";
+    if (bool !== undefined) return '<span class="j-bool">' + m + "</span>";
+    if (num !== undefined) return '<span class="j-num">' + m + "</span>";
+    return m;
+  });
+}
+
+function codeBlock(cap, text) {
+  const div = document.createElement("div");
+  div.className = "code";
+  const c = document.createElement("span"); c.className = "cap"; c.textContent = cap; div.appendChild(c);
+  const pre = document.createElement("pre"); pre.innerHTML = highlight(text); div.appendChild(pre);
+  return div;
+}
+
+function liveCard(record) {
+  const meta = STAGE_META[record.stage] || { num: "··", title: record.stage, role: "", hero: false };
+  const stage = document.createElement("section");
+  stage.className = "stage is-live";
+  stage.innerHTML = `<div class="rail"><div class="node">${meta.num}</div></div>`;
+  const card = document.createElement("article");
+  card.className = "card" + (meta.hero ? " hero" : "");
+
+  const header = document.createElement("header");
+  header.innerHTML = `<h2>${meta.title}</h2><span class="svc mono">${record.service}</span><span class="chip live">live</span>`;
+  card.appendChild(header);
+
+  const role = document.createElement("p"); role.className = "role"; role.textContent = meta.role; card.appendChild(role);
+
+  if (Array.isArray(record.added) && record.added.length) {
+    const added = document.createElement("div"); added.className = "added";
+    record.added.forEach((a) => { const t = document.createElement("span"); t.className = "tag"; t.textContent = a; added.appendChild(t); });
+    card.appendChild(added);
+  }
+
+  const io = document.createElement("p"); io.className = "io";
+  io.innerHTML = `input: <span class="mono">${escapeHtml(JSON.stringify(record.input))}</span>`;
+  card.appendChild(io);
+
+  const out = record.output;
+  const many = Array.isArray(out);
+  const cap = many ? `output — ${out.length} record${out.length === 1 ? "" : "s"}` : "output";
+  card.appendChild(codeBlock(cap, JSON.stringify(out, null, 2)));
+
+  stage.appendChild(card);
+  return stage;
+}
+
+function plannedCard(p) {
+  const stage = document.createElement("section");
+  stage.className = "stage";
+  stage.innerHTML = `<div class="rail"><div class="node">${p.num}</div></div>`;
+  const card = document.createElement("article");
+  card.className = "card";
+  card.innerHTML = `<header><h2>${p.title}</h2><span class="svc mono">${p.svc}</span><span class="chip planned">scaffold</span></header><p class="role">${p.role}</p>`;
+  card.appendChild(codeBlock("representative — not in live trace", p.text));
+  stage.appendChild(card);
+  return stage;
+}
+
+function escapeHtml(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function render(trace) {
+  const root = $("stages");
+  root.textContent = "";
+  trace.forEach((r) => root.appendChild(liveCard(r)));
+  PLANNED.forEach((p) => root.appendChild(plannedCard(p)));
+}
+
+function setStatus(kind, html) { const el = $("status"); el.className = "status " + kind; el.innerHTML = html; }
+
+async function run() {
+  const base = $("base").value.replace(/\/+$/, "");
+  const channel = $("channel").value.trim();
+  const url = `${base}/v1/signals/youtube/channels/${encodeURIComponent(channel)}/ingest?trace=true`;
+  $("run").disabled = true;
+  setStatus("", `Requesting <span class="mono">${escapeHtml(url)}</span> …`);
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    if (!Array.isArray(body.trace)) throw new Error("response had no trace array");
+    const ms = Math.round(performance.now() - t0);
+    render(body.trace);
+    setStatus("live", `● Live — traced <span class="mono">${escapeHtml(channel)}</span> → <span class="mono">${escapeHtml(body.canonical_id || "?")}</span> in ${ms} ms (${body.trace.length} live stages)`);
+  } catch (err) {
+    render(SAMPLE_TRACE);
+    setStatus("sample", `Backend not reachable (${escapeHtml(err.message)}) — showing the <b>bundled sample trace</b>. Start the stack and set the gateway URL, then Run.`);
+  } finally {
+    $("run").disabled = false;
+  }
+}
+
+$("run").addEventListener("click", run);
+// Render the bundled sample immediately so the page is never empty; then try live.
+render(SAMPLE_TRACE);
+setStatus("sample", "Showing bundled sample trace. Press <b>Run trace</b> to fetch live from your gateway.");
+</script>
+</body>
+</html>

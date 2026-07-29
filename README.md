@@ -93,6 +93,19 @@ curl -X POST http://localhost:8004/v1/observations -H "Content-Type: application
   -d '{"entity":"artist:example","attribute":"genre","value":"electronic","source":"seed","confidence":0.9}'
 ```
 
+### Pipeline Inspector
+
+`tools/pipeline-inspector.html` renders the ingest pipeline trace stage-by-stage
+(ingestion → classification → observation → entity), live from the running stack.
+The YouTube ingest endpoint returns a per-stage trace with `?trace=true`:
+
+```bash
+curl -X POST "http://localhost:8000/v1/signals/youtube/channels/UCq-Fj5jknLsUf-MWSy4_brA/ingest?trace=true"
+```
+
+Open the tool, point it at the api-gateway URL, and run — it renders the returned
+trace deterministically (no LLM). With no backend reachable it shows a bundled sample.
+
 ### Local development (without Docker)
 
 Start all backend services on localhost:
