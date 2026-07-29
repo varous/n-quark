@@ -147,6 +147,8 @@ services:
     build: ./services/api-gateway
     ports:
       - "8000:8000"
+    environment:
+      NQUARK_NETWORK_MODE: docker
     depends_on:
       - crawl-service
       - media-service

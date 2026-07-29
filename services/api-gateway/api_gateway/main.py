@@ -20,24 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DOWNSTREAM_SERVICES: dict[str, str] = {
-    "crawl": "http://crawl-service:8001",
-    "media": "http://media-service:8002",
-    "signal": "http://signal-service:8003",
-    "observation": "http://observation-service:8004",
-    "entity": "http://entity-service:8005",
-    "graph": "http://graph-service:8006",
-    "analytics": "http://analytics-service:8007",
-    "feature": "http://feature-service:8008",
-    "intelligence": "http://intelligence-service:8009",
-}
-
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "service": settings.service_name,
+        "network_mode": settings.network_mode,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 
@@ -54,9 +43,10 @@ async def root() -> dict[str, str]:
 async def platform_status() -> dict[str, object]:
     """Aggregate health from all downstream services."""
     results: dict[str, object] = {}
+    downstream = settings.downstream_services
 
     async with httpx.AsyncClient(timeout=5.0) as client:
-        for name, base_url in DOWNSTREAM_SERVICES.items():
+        for name, base_url in downstream.items():
             try:
                 response = await client.get(f"{base_url}/health")
                 results[name] = response.json()
@@ -69,6 +59,7 @@ async def platform_status() -> dict[str, object]:
 
     return {
         "status": "ok" if healthy else "degraded",
+        "network_mode": settings.network_mode,
         "timestamp": datetime.now(UTC).isoformat(),
         "services": results,
     }

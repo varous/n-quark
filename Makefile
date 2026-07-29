@@ -1,4 +1,4 @@
-.PHONY: help up down build logs test lint frontend api-gateway
+.PHONY: help up down build logs test lint frontend api-gateway dev-local
 
 help:
 	@echo "n-quark development commands"
@@ -11,6 +11,7 @@ help:
 	@echo "  make lint        Run ruff on all services"
 	@echo "  make frontend    Start frontend dev server locally"
 	@echo "  make api-gateway Start api-gateway locally"
+	@echo "  make dev-local   Start all backend services on localhost (no Docker)"
 
 up:
 	docker compose up -d
@@ -40,4 +41,7 @@ frontend:
 	cd frontend && npm run dev
 
 api-gateway:
-	cd services/api-gateway && uvicorn api_gateway.main:app --reload --port 8000
+	cd services/api-gateway && NQUARK_NETWORK_MODE=local uvicorn api_gateway.main:app --reload --port 8000
+
+dev-local:
+	bash scripts/dev-local.sh

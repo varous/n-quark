@@ -51,6 +51,7 @@ Most services only expose `/health` and `/` in the scaffold; full stack health a
 
 ### Gotchas
 
-- Docker Compose is required for end-to-end platform status; the api-gateway aggregates health from internal service hostnames (`crawl-service:8001`, etc.).
+- **Errno -3 / name resolution failure**: The api-gateway resolves downstream services by hostname. Outside Docker Compose it defaults to `localhost:8001–8009`; inside Compose it uses Docker service names (`crawl-service`, etc.). Run `make dev-local` to start all backend services locally, or use `docker compose up` for the full stack. Override with `NQUARK_NETWORK_MODE=local|docker`.
+- Docker Compose is required for end-to-end platform status when not using `make dev-local`.
 - Neo4j healthcheck may take ~30s on first boot.
 - Default credentials are in `.env.example` (development only).

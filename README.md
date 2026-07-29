@@ -63,7 +63,23 @@ Check platform health:
 curl http://localhost:8000/v1/platform/status
 ```
 
-### Local development
+### Local development (without Docker)
+
+Start all backend services on localhost:
+
+```bash
+make dev-local
+```
+
+In another terminal, start the frontend:
+
+```bash
+cd frontend && npm run dev
+```
+
+The api-gateway auto-detects the environment: it uses `localhost:8001–8009` outside Docker and Docker service hostnames inside Compose. Override with `NQUARK_NETWORK_MODE=local` or `NQUARK_NETWORK_MODE=docker`.
+
+### Local development (single service)
 
 ```bash
 # Frontend only
