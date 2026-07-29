@@ -49,6 +49,21 @@ Most services only expose `/health` and `/` in the scaffold; full stack health a
 | intelligence-service | 8009 |
 | frontend | 5173 |
 
+### signal-service (Spotify adapter)
+
+Normalizes Spotify artist signals into observations via `observation-service`. Uses **mock mode** when `NQUARK_SPOTIFY_CLIENT_ID` / `NQUARK_SPOTIFY_CLIENT_SECRET` are unset.
+
+```bash
+# Preview normalized signals (no write)
+curl http://localhost:8003/v1/signals/spotify/artists/4tZwfgrHOc3mvqYFCOCYO6/preview
+
+# Ingest → append observations
+curl -X POST http://localhost:8003/v1/signals/spotify/artists/4tZwfgrHOc3mvqYFCOCYO6/ingest
+curl http://localhost:8004/v1/observations/artist:spotify:4tZwfgrHOc3mvqYFCOCYO6
+```
+
+Set `NQUARK_OBSERVATION_SERVICE_URL=http://localhost:8004` for local dev.
+
 ### observation-service (append-only store)
 
 Requires PostgreSQL. Migrations run automatically in Docker; locally:

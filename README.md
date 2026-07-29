@@ -63,6 +63,16 @@ Check platform health:
 curl http://localhost:8000/v1/platform/status
 ```
 
+### signal-service
+
+Spotify adapter normalizes artist signals and writes append-only observations.
+
+```bash
+curl -X POST http://localhost:8003/v1/signals/spotify/artists/4tZwfgrHOc3mvqYFCOCYO6/ingest
+```
+
+Mock mode is enabled by default when Spotify credentials are not configured.
+
 ### observation-service
 
 Append-only observation store backed by PostgreSQL. See [AGENTS.md](AGENTS.md) for migrate/run instructions.

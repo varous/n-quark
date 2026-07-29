@@ -1,4 +1,23 @@
+import os
+from pathlib import Path
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def detect_network_mode() -> str:
+    explicit = os.environ.get("NQUARK_NETWORK_MODE", "").lower()
+    if explicit in ("local", "docker"):
+        return explicit
+    if Path("/.dockerenv").exists():
+        return "docker"
+    return "local"
+
+
+def default_observation_service_url() -> str:
+    if detect_network_mode() == "docker":
+        return "http://observation-service:8004"
+    return "http://localhost:8004"
 
 
 class Settings(BaseSettings):
@@ -7,6 +26,13 @@ class Settings(BaseSettings):
     service_name: str = "signal-service"
     port: int = 8003
     log_level: str = "info"
+    network_mode: str = Field(default_factory=detect_network_mode)
+    observation_service_url: str = Field(default_factory=default_observation_service_url)
+    spotify_client_id: str = ""
+    spotify_client_secret: str = ""
+    spotify_api_base: str = "https://api.spotify.com/v1"
+    spotify_token_url: str = "https://accounts.spotify.com/api/token"
+    spotify_mock_mode: bool = False
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -16,6 +42,12 @@ class Settings(BaseSettings):
     minio_endpoint: str = "minio:9000"
     minio_access_key: str = "nquark"
     minio_secret_key: str = "nquark"
+
+    @property
+    def use_spotify_mock(self) -> bool:
+        if self.spotify_mock_mode:
+            return True
+        return not (self.spotify_client_id and self.spotify_client_secret)
 
 
 settings = Settings()
