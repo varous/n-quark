@@ -1,4 +1,4 @@
-.PHONY: help up down build logs test lint frontend api-gateway dev-local
+.PHONY: help up down build logs test lint frontend api-gateway dev-local observation-migrate
 
 help:
 	@echo "n-quark development commands"
@@ -12,6 +12,7 @@ help:
 	@echo "  make frontend    Start frontend dev server locally"
 	@echo "  make api-gateway Start api-gateway locally"
 	@echo "  make dev-local   Start all backend services on localhost (no Docker)"
+	@echo "  make observation-migrate  Run observation-service Alembic migrations"
 
 up:
 	docker compose up -d
@@ -45,3 +46,6 @@ api-gateway:
 
 dev-local:
 	bash scripts/dev-local.sh
+
+observation-migrate:
+	cd services/observation-service && alembic upgrade head

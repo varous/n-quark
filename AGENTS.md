@@ -49,6 +49,18 @@ Most services only expose `/health` and `/` in the scaffold; full stack health a
 | intelligence-service | 8009 |
 | frontend | 5173 |
 
+### observation-service (append-only store)
+
+Requires PostgreSQL. Migrations run automatically in Docker; locally:
+
+```bash
+docker compose up postgres -d
+make observation-migrate
+cd services/observation-service && uvicorn observation_service.main:app --reload --port 8004
+```
+
+Endpoints: `POST /v1/observations`, `GET /v1/observations/{entity_id}`, `GET /v1/observations/by-id/{uuid}`
+
 ### Gotchas
 
 - **Errno -3 / name resolution failure**: The api-gateway resolves downstream services by hostname. Outside Docker Compose it defaults to `localhost:8001–8009`; inside Compose it uses Docker service names (`crawl-service`, etc.). Run `make dev-local` to start all backend services locally, or use `docker compose up` for the full stack. Override with `NQUARK_NETWORK_MODE=local|docker`.

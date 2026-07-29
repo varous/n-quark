@@ -63,6 +63,15 @@ Check platform health:
 curl http://localhost:8000/v1/platform/status
 ```
 
+### observation-service
+
+Append-only observation store backed by PostgreSQL. See [AGENTS.md](AGENTS.md) for migrate/run instructions.
+
+```bash
+curl -X POST http://localhost:8004/v1/observations -H "Content-Type: application/json" \
+  -d '{"entity":"artist:example","attribute":"genre","value":"electronic","source":"seed","confidence":0.9}'
+```
+
 ### Local development (without Docker)
 
 Start all backend services on localhost:
