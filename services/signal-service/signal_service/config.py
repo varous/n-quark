@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     youtube_api_base: str = "https://www.googleapis.com/youtube/v3"
     youtube_region_code: str = "IN"
     youtube_mock_mode: bool = False
+    musicbrainz_api_base: str = "https://musicbrainz.org/ws/2"
+    musicbrainz_user_agent: str = "n-quark/0.1 (https://github.com/varous/n-quark)"
+    musicbrainz_mock_mode: bool = False
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -65,6 +68,11 @@ class Settings(BaseSettings):
         if self.youtube_mock_mode:
             return True
         return not self.youtube_api_key
+
+    @property
+    def use_musicbrainz_mock(self) -> bool:
+        # MusicBrainz needs no API key — it is open — so mock only when explicitly set.
+        return self.musicbrainz_mock_mode
 
 
 settings = Settings()

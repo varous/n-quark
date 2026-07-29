@@ -1,7 +1,12 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
+from signal_service.adapters.musicbrainz import (
+    MusicBrainzClient,
+    MusicBrainzMatch,
+    musicbrainz_observation,
+)
 from signal_service.adapters.youtube import YouTubeClient, mock_channel_payload
-from signal_service.classification import classification_observation, classify_youtube_channel
+from signal_service.classification import classification_observation, classify_channel
 from signal_service.clients.entity_client import EntityServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
@@ -49,12 +54,26 @@ async def ingest_youtube_channel(
         ) from exc
 
     # Entity classification runs ahead of resolution: infer what KIND of thing this channel
-    # is (artist / label / ...) so a label is never resolved as an artist.
+    # is (artist / label / ...) via MusicBrainz cross-reference, so a label is never resolved
+    # as an artist. Heuristics are the fallback when MusicBrainz has no confident match.
     raw = mock_channel_payload(channel_id) if settings.use_youtube_mock else None
-    classification = classify_youtube_channel(channel_id, signals.name, raw)
+    classification = await classify_channel(signals.name, raw, MusicBrainzClient())
     classification_obs = classification_observation(signals.entity, classification)
 
     outbound = [*signals.observations, classification_obs]
+    if classification.method == "musicbrainz" and classification.mbid:
+        # Backbone enrichment: attach the canonical MusicBrainz id to the entity.
+        outbound.append(
+            musicbrainz_observation(
+                signals.entity,
+                MusicBrainzMatch(
+                    classification.entity_type,
+                    classification.mbid,
+                    round(classification.confidence * 100),
+                    signals.name,
+                ),
+            )
+        )
     try:
         persisted = await observation_client.append_observations(outbound)
     except Exception as exc:  # noqa: BLE001

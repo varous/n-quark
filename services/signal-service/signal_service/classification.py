@@ -5,30 +5,20 @@ artist. A YouTube channel id identifies a thing but says nothing about its kind,
 adapter must not assert a type; this step infers it.
 
 Deterministic-first (per the product philosophy):
-  1. a known-entity registry — stands in for a MusicBrainz artist/label cross-reference
-     until the MusicBrainz adapter lands (roadmap #3);
-  2. name / structure heuristics.
-An AI fallback would slot in as step 3, emitting its guess as a low-confidence observation.
-
-The result is a *candidate*: type + confidence + the reasons behind it. Low confidence is a
+  1. MusicBrainz cross-reference — artist vs label ground truth (highest precision);
+  2. name / structure heuristics — when MusicBrainz has no confident match.
+An AI classifier would slot in as a third tier, emitting its guess as a low-confidence
+observation. The result is a *candidate*: type + confidence + reasons. Low confidence is a
 signal to route to review, not to trust blindly.
 """
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from signal_service.adapters.musicbrainz import MusicBrainzClient, _confidence_from_score
 from signal_service.schemas import NormalizedObservation
 
-CLASSIFIER_VERSION = "entity-classifier-v1"
-
-# Stand-in for MusicBrainz artist/label disambiguation, keyed by YouTube channel id.
-# In MusicBrainz, T-Series resolves to a *label*, not an artist.
-KNOWN_CHANNEL_TYPES: dict[str, tuple[str, str]] = {
-    "UCq-Fj5jknLsUf-MWSy4_brA": (
-        "label",
-        "musicbrainz: 'T-Series' is a label (Super Cassettes Industries), not an artist",
-    ),
-}
+CLASSIFIER_VERSION = "entity-classifier-v2"
 
 # Tokens that signal an organization/label rather than a performing artist.
 LABEL_NAME_TOKENS = (
@@ -52,24 +42,14 @@ AGGREGATOR_VIDEO_THRESHOLD = 2000
 class Classification:
     entity_type: str
     confidence: float
-    method: str  # "registry" | "heuristic" | "default"
+    method: str  # "musicbrainz" | "heuristic" | "default"
     reasons: list[str] = field(default_factory=list)
     needs_review: bool = False
+    mbid: str | None = None
 
 
-def classify_youtube_channel(
-    channel_id: str,
-    name: str,
-    raw: dict | None = None,
-) -> Classification:
-    """Infer the entity type behind a YouTube channel. Never assumes 'artist'."""
-    # 1. Deterministic registry (MusicBrainz stand-in) — highest precision.
-    known = KNOWN_CHANNEL_TYPES.get(channel_id)
-    if known is not None:
-        entity_type, reason = known
-        return Classification(entity_type, 0.97, "registry", [reason])
-
-    # 2. Name / structure heuristics.
+def classify_by_heuristics(name: str, raw: dict | None = None) -> Classification:
+    """Fallback classifier: name / structure heuristics. Never assumes 'artist' blindly."""
     lowered = name.lower()
     token_hits = [token for token in LABEL_NAME_TOKENS if token in lowered]
     statistics = (raw or {}).get("statistics") or {}
@@ -91,15 +71,44 @@ def classify_youtube_channel(
             needs_review=confidence < 0.7,
         )
 
-    # 3. No label signal — provisionally an artist, but low confidence and flagged.
-    #    We do NOT silently trust this; an AI classifier / human review would confirm.
+    # No label signal — provisionally an artist, but low confidence and flagged for review.
     return Classification(
         "artist",
         0.5,
         "default",
-        ["no label signal detected; provisionally artist pending confirmation"],
+        ["no MusicBrainz match and no label signal; provisionally artist pending confirmation"],
         needs_review=True,
     )
+
+
+async def classify_channel(
+    name: str,
+    raw: dict | None = None,
+    mb_client: MusicBrainzClient | None = None,
+) -> Classification:
+    """Infer entity type: MusicBrainz first, heuristics as fallback. Never assumes artist."""
+    if mb_client is not None:
+        try:
+            match = await mb_client.classify_name(name)
+        except Exception:  # noqa: BLE001 — a MusicBrainz outage must fall back, not fail
+            match = None
+        if match is not None:
+            confidence = _confidence_from_score(match.score)
+            return Classification(
+                match.entity_type,
+                confidence,
+                "musicbrainz",
+                [
+                    (
+                        f"musicbrainz: '{match.name}' is a {match.entity_type} "
+                        f"(score {match.score}, mbid {match.mbid})"
+                    )
+                ],
+                needs_review=confidence < 0.7,
+                mbid=match.mbid,
+            )
+
+    return classify_by_heuristics(name, raw)
 
 
 def classification_observation(
@@ -124,6 +133,7 @@ def classification_observation(
             "method": classification.method,
             "reasons": classification.reasons,
             "needs_review": classification.needs_review,
+            "mbid": classification.mbid,
         },
         metadata={
             "classifier_version": CLASSIFIER_VERSION,

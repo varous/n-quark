@@ -95,6 +95,7 @@ services:
       NQUARK_YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       NQUARK_YOUTUBE_REGION_CODE: ${YOUTUBE_REGION_CODE:-IN}
       NQUARK_YOUTUBE_MOCK_MODE: ${YOUTUBE_MOCK_MODE:-true}
+      NQUARK_MUSICBRAINZ_MOCK_MODE: ${MUSICBRAINZ_MOCK_MODE:-true}
     depends_on:
       postgres:
         condition: service_healthy

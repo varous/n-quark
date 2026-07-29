@@ -9,7 +9,8 @@ from signal_service.adapters.youtube import (
     mock_channel_payload,
     normalize_channel_response,
 )
-from signal_service.classification import classify_youtube_channel
+from signal_service.adapters.musicbrainz import MusicBrainzClient
+from signal_service.classification import classify_by_heuristics, classify_channel
 from signal_service.config import settings
 from signal_service.main import app
 from signal_service.schemas import NormalizedObservation
@@ -25,25 +26,35 @@ def test_entity_id_is_type_neutral() -> None:
     assert entity_id_for_youtube_channel("abc123") == "youtube:channel:abc123"
 
 
-def test_classify_tseries_as_label_not_artist() -> None:
-    c = classify_youtube_channel(
-        DEFAULT_MOCK_CHANNEL_ID, "T-Series", mock_channel_payload(DEFAULT_MOCK_CHANNEL_ID)
+async def test_classify_tseries_as_label_via_musicbrainz(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
+    MusicBrainzClient._cache.clear()
+    c = await classify_channel(
+        "T-Series", mock_channel_payload(DEFAULT_MOCK_CHANNEL_ID), MusicBrainzClient()
     )
     assert c.entity_type == "label"
-    assert c.method == "registry"
+    assert c.method == "musicbrainz"
     assert c.confidence >= 0.9
+    assert c.mbid is not None
 
 
-def test_classify_label_by_name_heuristic() -> None:
-    c = classify_youtube_channel(
-        "UCsomethingelse", "Believe Records", {"statistics": {"videoCount": "5000"}}
+async def test_classify_falls_back_to_heuristics_when_no_mb_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
+    MusicBrainzClient._cache.clear()
+    # "Believe Records" isn't in the MB mock catalog -> heuristics catch the label token.
+    c = await classify_channel(
+        "Believe Records", {"statistics": {"videoCount": "5000"}}, MusicBrainzClient()
     )
     assert c.entity_type == "label"
     assert c.method == "heuristic"
 
 
 def test_classify_unknown_defaults_to_low_confidence_artist() -> None:
-    c = classify_youtube_channel("UCzzz", "Some Person", {"statistics": {"videoCount": "40"}})
+    c = classify_by_heuristics("Some Person", {"statistics": {"videoCount": "40"}})
     assert c.entity_type == "artist"
     assert c.method == "default"
     assert c.needs_review is True
@@ -92,8 +103,11 @@ def test_numeric_stats_are_coerced_to_int() -> None:
 
 
 @pytest.fixture()
-def _stub_resolve(monkeypatch: pytest.MonkeyPatch):
-    """Stub entity-service resolution so ingest tests don't hit the network."""
+def _offline_pipeline(monkeypatch: pytest.MonkeyPatch):
+    """Run classification + resolution offline: MusicBrainz mock + stubbed entity-service."""
+    monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
+    MusicBrainzClient._cache.clear()
+
     async def fake_resolve(self, **kwargs):
         etype = kwargs["entity_type"]
         return {"canonical_id": f"{etype}:t-series", "created": True, "alias_linked": True}
@@ -120,7 +134,7 @@ def test_preview_youtube_channel_mock_mode(
 def test_ingest_classifies_tseries_as_label(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    _stub_resolve: None,
+    _offline_pipeline: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
 
@@ -151,7 +165,7 @@ def test_ingest_classifies_tseries_as_label(
 def test_ingest_with_trace_returns_four_stage_pipeline(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    _stub_resolve: None,
+    _offline_pipeline: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
 
@@ -184,7 +198,7 @@ def test_ingest_with_trace_returns_four_stage_pipeline(
 def test_ingest_without_trace_omits_trace(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    _stub_resolve: None,
+    _offline_pipeline: None,
 ) -> None:
     monkeypatch.setattr(settings, "youtube_mock_mode", True)
     with patch(
