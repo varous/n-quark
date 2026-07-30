@@ -166,28 +166,43 @@ class DataForSEOProvider:
 
 # ------------------------------------------------------------------- serpapi (dev)
 class SerpApiProvider:
-    """Dev option (free tier, fast). Untested live — validate once a key is configured."""
+    """Dev option (free tier, fast). GEO_MAP_0 is the single-query interest-by-region map
+    (GEO_MAP is the multi-term compared variant and 400s for one query)."""
 
     name = "serpapi"
 
+    def _scrub(self, text: str) -> str:
+        """Never let the api_key surface in an error message or log line."""
+        return text.replace(settings.serpapi_key, "***") if settings.serpapi_key else text
+
     async def _get(self, client: httpx.AsyncClient, query: str, region: str, data_type: str) -> dict[str, Any]:
-        response = await client.get(
-            settings.serpapi_api_base,
-            params={
-                "engine": "google_trends",
-                "q": query,
-                "geo": region,
-                "data_type": data_type,
-                "api_key": settings.serpapi_key,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await client.get(
+                settings.serpapi_api_base,
+                params={
+                    "engine": "google_trends",
+                    "q": query,
+                    "geo": region,
+                    "data_type": data_type,
+                    "api_key": settings.serpapi_key,
+                },
+            )
+        except httpx.HTTPError as exc:
+            # `from None` drops the chained cause so the key-bearing URL can't leak via __cause__.
+            raise ValueError(f"SerpApi {data_type} request failed: {self._scrub(str(exc))}") from None
+
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("error") or response.text[:200]
+            except ValueError:
+                detail = f"HTTP {response.status_code}"
+            raise ValueError(f"SerpApi {data_type} error: {self._scrub(str(detail))}")
         return response.json()
 
     async def fetch(self, query: str, region: str) -> TrendsRaw:
         raw = TrendsRaw(query=query, region=region)
         async with httpx.AsyncClient(timeout=20.0) as client:
-            geo = await self._get(client, query, region, "GEO_MAP")
+            geo = await self._get(client, query, region, "GEO_MAP_0")
             raw.interest_by_region = {
                 r.get("location", "?"): int(r.get("value") or r.get("extracted_value") or 0)
                 for r in (geo.get("interest_by_region") or [])
