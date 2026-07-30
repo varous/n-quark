@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 
 from signal_service.adapters.ticketing import (
     MockTicketingProvider,
+    _india_city_region,
+    _jsonld_events,
     event_from_boshow,
+    event_from_district,
+    event_from_skillbox,
     normalize_event,
     split_lineup,
     split_location,
@@ -86,6 +90,49 @@ def test_project_ticketing_graph_builds_structural_edges() -> None:
     assert ("event:free-folk-nite", "FEATURES", "artist:dolinman") in rels
     assert ("event:free-folk-nite", "IN_REGION", "region:west-bengal") in rels
     assert {n.type for n in projection.nodes} == {"event", "venue", "artist", "region"}
+
+
+def test_india_city_region_parses_pincode_segment() -> None:
+    addr = "ELCO Arcade, B18, Hill Rd, Bandra West, Mumbai, Maharashtra 400050"
+    assert _india_city_region(addr) == ("Mumbai", "Maharashtra")
+
+
+def test_district_event_from_jsonld() -> None:
+    html = """
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Event","name":"Prateek Kuhad Live",
+     "startDate":"2026-09-12T19:00:00.000Z",
+     "location":{"@type":"Place","name":"Phoenix Marketcity","address":"Whitefield, Bengaluru, Karnataka 560048"},
+     "offers":{"@type":"AggregateOffer","lowPrice":1499,"priceCurrency":"INR"},
+     "performer":[{"@type":"Person","name":"Prateek Kuhad"}],
+     "organizer":{"@type":"Organization","name":"District"}}
+    </script>"""
+    events = _jsonld_events(html)
+    assert len(events) == 1
+    ev = event_from_district(events[0], "https://www.district.in/events/prateek-kuhad-blr")
+    assert ev.source == "district"
+    assert ev.event_name == "Prateek Kuhad Live"
+    assert ev.city == "Bengaluru" and ev.region == "Karnataka"
+    assert ev.venue_name == "Phoenix Marketcity"
+    assert ev.artists == ["Prateek Kuhad"]
+    assert ev.price_min == 1499.0 and ev.currency == "INR"
+    assert ev.fill_ratio is None  # District has no sold-count
+
+
+def test_skillbox_event_from_details() -> None:
+    data = {
+        "EventId": 35536, "event_slug": "vanaghotra-the-decade-ritual",
+        "event_display_name": "Vanaghotra || The Decade Ritual",
+        "date_from": "2026-12-31 15:00:00", "min_price": 1999, "max_price": 3500,
+        "city_name": "Goa", "venue_name": "DPedro",
+        "venue_address": "Mandrem, Goa 403512, India", "status": 1,
+    }
+    ev = event_from_skillbox(data)
+    assert ev.source == "skillbox" and ev.source_event_id == "35536"
+    assert ev.event_name == "Vanaghotra || The Decade Ritual"
+    assert ev.city == "Goa" and ev.venue_name == "DPedro"
+    assert ev.price_min == 1999.0 and ev.currency == "INR"
+    assert ev.starts_at is not None and ev.fill_ratio is None
 
 
 @pytest.fixture()

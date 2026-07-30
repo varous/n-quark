@@ -20,6 +20,7 @@ resolve by name into the same canonical entities the YouTube/Trends pipelines pr
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -31,6 +32,15 @@ from signal_service.config import settings
 from signal_service.schemas import NormalizedObservation
 
 ADAPTER_VERSION = "ticketing-v1"
+
+DISTRICT_BASE = "https://www.district.in"
+SKILLBOX_BASE = "https://www.skillboxes.com"
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    )
+}
 
 # Boshow separates performers in a lineup string with a bullet.
 _LINEUP_SEP = re.compile(r"\s*[•|]\s*")
@@ -141,6 +151,100 @@ def event_from_boshow(item: dict[str, Any], *, fetched_at: datetime | None = Non
         tickets_sold=item.get("tickets_sold") if isinstance(item.get("tickets_sold"), int) else None,
         verified=bool(item.get("verified")),
         fetched_at=fetched_at or datetime.now(UTC),
+    )
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _india_city_region(address: str) -> tuple[str, str]:
+    """Best-effort city/state from an Indian address string: '..., City, State PIN'."""
+    parts = [p.strip() for p in (address or "").split(",") if p.strip()]
+    for i, seg in enumerate(parts):
+        m = re.search(r"\b(\d{6})\b", seg)  # the segment with the 6-digit PIN is 'State PIN'
+        if m:
+            region = seg.replace(m.group(1), "").strip()
+            city = parts[i - 1] if i > 0 else ""
+            return city, region
+    return (parts[-2] if len(parts) >= 2 else ""), (parts[-1] if parts else "")
+
+
+def _jsonld_events(html: str) -> list[dict[str, Any]]:
+    """Extract schema.org Event nodes from a page's JSON-LD (handles @graph + arrays)."""
+    events: list[dict[str, Any]] = []
+    for block in re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', html, re.DOTALL):
+        try:
+            parsed = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        nodes = parsed if isinstance(parsed, list) else [parsed]
+        expanded: list[Any] = []
+        for node in nodes:
+            if isinstance(node, dict) and "@graph" in node:
+                expanded.extend(node["@graph"])
+            else:
+                expanded.append(node)
+        events.extend(n for n in expanded if isinstance(n, dict) and n.get("@type") == "Event")
+    return events
+
+
+def event_from_district(node: dict[str, Any], url: str, *, fetched_at: datetime | None = None) -> TicketingEvent:
+    """Map a District schema.org Event (JSON-LD) to the canonical TicketingEvent."""
+    loc = node.get("location") or {}
+    if isinstance(loc, list):
+        loc = loc[0] if loc else {}
+    venue = loc.get("name", "") if isinstance(loc, dict) else ""
+    addr = loc.get("address", "") if isinstance(loc, dict) else ""
+    if isinstance(addr, dict):
+        city, region = addr.get("addressLocality", ""), addr.get("addressRegion", "")
+    else:
+        city, region = _india_city_region(addr)
+
+    offers = node.get("offers") or {}
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    price = _to_float(offers.get("lowPrice") or offers.get("price")) if isinstance(offers, dict) else None
+    currency = offers.get("priceCurrency", "INR") if isinstance(offers, dict) else "INR"
+
+    perf = node.get("performer") or []
+    if isinstance(perf, dict):
+        perf = [perf]
+    artists = [p["name"].strip() for p in perf if isinstance(p, dict) and p.get("name")]
+    org = node.get("organizer") or {}
+    keywords = node.get("keywords")
+    slug = url.rstrip("/").split("/events/")[-1]
+    return TicketingEvent(
+        source="district", source_event_id=slug, event_slug=slug,
+        event_name=(node.get("name") or "").strip(), event_url=url,
+        city=city, region=region, country="India", venue_name=(venue or "").strip(),
+        artists=artists, curator=org.get("name") if isinstance(org, dict) else None,
+        category=(keywords.split(",")[0].strip() if isinstance(keywords, str) and keywords else "Event"),
+        language="", currency=currency or "INR", price_min=price,
+        is_free=(price == 0.0), starts_at=_parse_dt(node.get("startDate")),
+        capacity=None, tickets_sold=None, verified=True, fetched_at=fetched_at or datetime.now(UTC),
+    )
+
+
+def event_from_skillbox(data: dict[str, Any], *, fetched_at: datetime | None = None) -> TicketingEvent:
+    """Map a Skillbox event-details record to the canonical TicketingEvent."""
+    slug = data.get("event_slug", "")
+    starts = data.get("date_from")
+    starts_dt = _parse_dt(starts.replace(" ", "T")) if isinstance(starts, str) else None
+    price = _to_float(data.get("min_price"))
+    city = (data.get("city_name") or "").strip()
+    return TicketingEvent(
+        source="skillbox", source_event_id=str(data.get("EventId") or slug), event_slug=slug,
+        event_name=(data.get("event_display_name") or "").strip(),
+        event_url=f"{SKILLBOX_BASE}/events/{slug}",
+        city=city, region=city, country="India",  # Skillbox city_name doubles as the state (e.g. Goa)
+        venue_name=(data.get("venue_name") or "").strip(), artists=[], curator=None,
+        category="Event", language="", currency="INR", price_min=price,
+        is_free=(price == 0.0), starts_at=starts_dt, capacity=None, tickets_sold=None,
+        verified=bool(data.get("status")), fetched_at=fetched_at or datetime.now(UTC),
     )
 
 
@@ -271,6 +375,60 @@ class BoshowProvider:
         raise ValueError(f"boshow: event not found for ref {event_ref!r}")
 
 
+def _sitemap_slugs(xml: str, limit: int) -> list[str]:
+    locs = re.findall(r"<loc>([^<]+)</loc>", xml)
+    slugs = [loc.rstrip("/").split("/events/")[-1] for loc in locs if "/events/" in loc]
+    return slugs[:limit]
+
+
+class DistrictProvider:
+    """public_scrape of District (Zomato). robots-allowed; discovery via the events sitemap,
+    extraction from each page's schema.org Event JSON-LD. Plain httpx (SSR pages)."""
+
+    name = "district"
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        url = f"{DISTRICT_BASE}/events/search-sitemap/event-detail-pages.xml"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return _sitemap_slugs(r.text, limit)
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        url = event_ref if event_ref.startswith("http") else f"{DISTRICT_BASE}/events/{event_ref}"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            events = _jsonld_events(r.text)
+        if not events:
+            raise ValueError(f"district: no Event JSON-LD at {url}")
+        return event_from_district(events[0], url)
+
+
+class SkillboxProvider:
+    """public_scrape of Skillbox. robots-allowed; discovery via the event sitemap, extraction
+    via the JSON API POST /servers/v3/api/event-new/event-details {slug}. Plain httpx."""
+
+    name = "skillbox"
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        url = f"{SKILLBOX_BASE}/media/sitemap/sitemap-event.xml"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return _sitemap_slugs(r.text, limit)
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        url = f"{SKILLBOX_BASE}/servers/v3/api/event-new/event-details"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS) as c:
+            r = await c.post(url, json={"slug": event_ref})
+            r.raise_for_status()
+            payload = r.json()
+        if not payload.get("success") or not payload.get("data"):
+            raise ValueError(f"skillbox: event not found for slug {event_ref!r}")
+        return event_from_skillbox(payload["data"])
+
+
 class PartnerFeedProvider:
     """Placeholder for platforms that are not compliantly scrapable (e.g. BookMyShow).
 
@@ -293,6 +451,10 @@ def get_provider() -> TicketingProvider:
     provider = settings.ticketing_provider.lower()
     if provider == "boshow":
         return BoshowProvider()
+    if provider == "district":
+        return DistrictProvider()
+    if provider == "skillbox":
+        return SkillboxProvider()
     if provider in ("bookmyshow", "bms"):
         return PartnerFeedProvider("bookmyshow")
     return MockTicketingProvider()
