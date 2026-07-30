@@ -121,7 +121,9 @@
       output, added }</code> records. The gateway allows cross-origin requests; point it there (not directly at
       signal-service, which has no CORS).</p>
     <p>If no backend is reachable, it shows a <b>bundled sample trace</b> (real T-Series output captured offline) so the
-      page still tells the story — the status banner says which you're seeing. Stages 5–9 are shown as
+      page still tells the story — the status banner says which you're seeing. Stage 5 (the knowledge graph) is now
+      <b>live</b>; the T-Series sample shows a node with no edges because <span class="mono">STRONG_IN</span> region
+      edges come from Google Trends demand — run a Trends query to see them. Stages 6–9 are still
       <b>scaffold placeholders</b> because those services aren't built yet, so they aren't part of the live trace.</p>
     <p>Note: each run appends observations (they're immutable/append-only by design), and in mock mode the classifier
       uses MusicBrainz's mock catalog.</p>
@@ -138,14 +140,13 @@ const STAGE_META = {
   observation:    { num: "03", title: "Observation Engine",  hero: false,
     role: "Every payload is written once and never mutated; each row gets an immutable id and a server ingest time." },
   entity:         { num: "04", title: "Entity Resolution",   hero: false,
-    role: "The source handle resolves to a canonical entity of the classified type, with the handle linked as an alias." },
+    role: "The source handle resolves to a canonical entity of the classified type. The handle AND external identity ids (MBID, Google KG mID) link as aliases — the backbone that unifies the same act across sources." },
+  graph:          { num: "05", title: "Knowledge Graph",     hero: true,
+    role: "The resolved entity becomes a node — identity ids and popularity as properties — and geographic demand becomes STRONG_IN edges to regions. Projected into Neo4j idempotently (no timestamps → re-ingest converges)." },
 };
 
 // ---- static scaffold stages (services not built yet; shown as placeholders) ----
 const PLANNED = [
-  { num: "05", title: "Knowledge Graph", svc: "graph-service · :8006",
-    role: "Resolved entities and relationships become directional edges.",
-    text: 'MERGE (l:Label  { id: "label:t-series" })\nMERGE (a:Artist { id: "artist:arijit-singh" })\nMERGE (a)-[:SIGNED_TO]->(l)' },
   { num: "06", title: "Deterministic Analytics", svc: "analytics-service · :8007",
     role: "Reproducible metrics computed from observations + graph, before any AI.",
     text: '{ "entity": "artist:arijit-singh",\n  "subscriber_growth_30d": 0.018,\n  "regional_strength_in": { "kolkata": 0.91 } }' },
@@ -456,21 +457,49 @@ const SAMPLE_TRACE = [
       "canonical_id": "label:t-series",
       "created": true,
       "alias_linked": true,
+      "aliases_linked": ["mbid:d8067fa7-8758-4527-b436-ce5faff3e576"],
       "entity": {
         "id": "label:t-series",
         "entity_type": "label",
         "display_name": "T-Series",
         "aliases": [
-          {
-            "alias_key": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA",
-            "source": "youtube"
-          }
+          { "alias_key": "youtube:channel:UCq-Fj5jknLsUf-MWSy4_brA", "source": "youtube" },
+          { "alias_key": "mbid:d8067fa7-8758-4527-b436-ce5faff3e576", "source": "musicbrainz" }
         ]
       }
     },
     "added": [
       "canonical_id of the classified type",
-      "alias link (source handle -> canonical entity)"
+      "alias link (source handle -> canonical entity)",
+      "external id folded in as alias (mbid:*) — the cross-source backbone"
+    ]
+  },
+  {
+    "stage": "graph",
+    "service": "graph-service",
+    "input": { "node_id": "label:t-series", "observations_in": 8 },
+    "output": {
+      "nodes": [
+        {
+          "id": "label:t-series",
+          "type": "label",
+          "properties": {
+            "display_name": "T-Series",
+            "mbid": "d8067fa7-8758-4527-b436-ce5faff3e576",
+            "subscriber_count": 314000000,
+            "total_view_count": 350049783723,
+            "video_count": 26780,
+            "classification_method": "musicbrainz+tiebreak",
+            "needs_review": true
+          }
+        }
+      ],
+      "edges": []
+    },
+    "added": [
+      "canonical entity node (identity + popularity as properties)",
+      "STRONG_IN edges to region nodes (from geographic demand — populated on Trends ingest)",
+      "idempotent projection (no timestamps -> converges on re-ingest)"
     ]
   }
 ];
