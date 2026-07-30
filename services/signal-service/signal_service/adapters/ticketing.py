@@ -3,8 +3,8 @@
 Ticketing is the closest thing to commercial truth in this domain: an event's fill ratio
 (tickets sold / capacity) is real demand, not a search proxy. The dominant hub (BookMyShow)
 is bot-walled with no public API, so it is parked as ``partner_feed`` (needs a deal). The
-regional players are far more open — **Boshow** (Kolkata-rooted grassroots platform) exposes a
-clean, unauthenticated JSON API that uniquely returns ``tickets_sold`` and capacity per show.
+regional players are far more open — **Boshow** (Kolkata-rooted grassroots platform) exposes an
+unauthenticated form-encoded search API that uniquely returns ``tickets_sold`` and capacity per show.
 
 No single canonical API exists, so the provider is pluggable (like Google Trends):
   - ``mock``     — default; seeded with real Boshow-shaped records, so tests are faithful.
@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 import httpx
 
@@ -206,13 +206,14 @@ class MockTicketingProvider:
 
 
 class BoshowProvider:
-    """public_scrape of Boshow's unauthenticated JSON API.
+    """public_scrape of Boshow's unauthenticated /api/search (no per-show JSON endpoint).
 
-    Discovery + extraction both go through /api/search (there is no per-show JSON endpoint —
-    the share URL returns only OG-tag HTML). ``extract`` matches the requested slug within the
-    search results. Boshow renders in-browser and its API is sensitive to the request shape,
-    so this is best-effort and may need the exact browser contract; failures surface upstream
-    and fall back to mock by configuration.
+    Boshow is an Apache Cordova hybrid app served on web. The API is not JSON — it is
+    ``application/x-www-form-urlencoded`` and requires ``X-Requested-With: XMLHttpRequest``;
+    that (not TLS/cookies) is why a JSON POST hangs. ``token`` is empty, so no auth is needed.
+    The contract is quirky: ``offset`` behaves as a *result count* (not a skip), ``dateFrom``
+    is a floor for upcoming events (``dateTo`` must equal it), and ``search`` filters by name.
+    Contract captured once with a headless browser; the live provider is plain httpx.
     """
 
     name = "boshow"
@@ -220,31 +221,53 @@ class BoshowProvider:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
     )
+    # Full field set the app sends; token is empty (no auth). offset is really a max-count.
+    _BASE_FORM: ClassVar[dict[str, Any]] = {
+        "capacity": 0, "currency": "INR", "displayType": "shows", "genre": "",
+        "guests": 1, "languages": "", "member_id": "", "online": -1, "priceRange": -1,
+        "ratingRange": 60, "showType": "", "sort": "show_date", "space_filters": "",
+        "token": "", "verified": 0, "limit": 0,
+    }
 
-    async def _search(self, query: str) -> list[dict[str, Any]]:
-        url = f"{settings.boshow_api_base.rstrip('/')}/search"
-        headers = {
+    def _headers(self) -> dict[str, str]:
+        return {
             "User-Agent": self._UA,
-            "content-type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
             "origin": "https://www.boshow.in",
-            "referer": "https://www.boshow.in/",
+            "referer": "https://www.boshow.in/indexall.html",
         }
-        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            resp = await client.post(url, json={"search": query})
+
+    async def _search(
+        self, *, term: str = "", count: int = 40, location: str = "Anywhere"
+    ) -> list[dict[str, Any]]:
+        # dateFrom is a floor for upcoming events; UTC (behind IST) never skips today's events.
+        today = datetime.now(UTC).strftime("%Y/%m/%d")
+        form = {
+            **self._BASE_FORM,
+            "dateFrom": today, "dateTo": today, "offset": max(count, 1),
+            "search": term, "location": location or "Anywhere",
+        }
+        url = f"{settings.boshow_api_base.rstrip('/')}/search"
+        async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+            resp = await client.post(url, data=form)
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, list) else []
 
     async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
-        results = await self._search(city or "")
+        # city, when given, filters the API's `location`; otherwise list everything upcoming.
+        results = await self._search(count=max(limit, 10), location=city or "Anywhere")
         return [r.get("slug") for r in results if r.get("slug")][:limit]
 
     async def extract(self, event_ref: str) -> TicketingEvent:
-        # Search by a term derived from the slug, then match the exact slug in results.
-        term = event_ref.replace("-", " ")
-        for item in await self._search(term):
-            if item.get("slug") == event_ref:
-                return event_from_boshow(item)
+        # `search` filters by name, so derive a term from the slug (minus its trailing date),
+        # then match the exact slug. Fall back to a broad listing if the term is too narrow.
+        term = " ".join(w for w in event_ref.split("-")[:4] if not w.isdigit())
+        for items in (await self._search(term=term, count=60), await self._search(count=120)):
+            for item in items:
+                if item.get("slug") == event_ref:
+                    return event_from_boshow(item)
         raise ValueError(f"boshow: event not found for ref {event_ref!r}")
 
 
