@@ -49,6 +49,7 @@ class GraphStore(Protocol):
     def upsert_node(self, node: Node) -> Node: ...
     def upsert_edge(self, edge: Edge) -> Edge: ...
     def get_node(self, node_id: str) -> Node | None: ...
+    def list_nodes(self, node_type: str | None = None, limit: int = 100) -> list[Node]: ...
     def neighbors(
         self, node_id: str, direction: Direction = "both", relationship: str | None = None
     ) -> list[Neighbor]: ...
@@ -92,6 +93,10 @@ class InMemoryGraphStore:
 
     def get_node(self, node_id: str) -> Node | None:
         return self._nodes.get(node_id)
+
+    def list_nodes(self, node_type: str | None = None, limit: int = 100) -> list[Node]:
+        nodes = [n for n in self._nodes.values() if node_type is None or n.type == node_type]
+        return nodes[:limit]
 
     def neighbors(
         self, node_id: str, direction: Direction = "both", relationship: str | None = None
@@ -163,6 +168,16 @@ class Neo4jGraphStore:
                 "MATCH (n:Entity {id: $id}) RETURN n", id=node_id
             ).single()
             return self._to_node(record["n"]) if record else None
+
+    def list_nodes(self, node_type: str | None = None, limit: int = 100) -> list[Node]:
+        with self._driver.session() as session:
+            if node_type:
+                query = "MATCH (n:Entity {type: $type}) RETURN n ORDER BY n.id LIMIT $lim"
+                params: dict[str, object] = {"type": node_type, "lim": limit}
+            else:
+                query = "MATCH (n:Entity) RETURN n ORDER BY n.id LIMIT $lim"
+                params = {"lim": limit}
+            return [self._to_node(record["n"]) for record in session.run(query, **params)]
 
     def neighbors(
         self, node_id: str, direction: Direction = "both", relationship: str | None = None

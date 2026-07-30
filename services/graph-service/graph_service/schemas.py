@@ -53,6 +53,11 @@ class NeighborsResponse(BaseModel):
     neighbors: list[NeighborRead]
 
 
+class NodeListResponse(BaseModel):
+    count: int
+    nodes: list[NodeRead]
+
+
 class GraphStats(BaseModel):
     nodes: int
     edges: int

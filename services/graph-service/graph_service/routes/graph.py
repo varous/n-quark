@@ -11,6 +11,7 @@ from graph_service.schemas import (
     GraphStats,
     NeighborRead,
     NeighborsResponse,
+    NodeListResponse,
     NodeRead,
     NodeUpsert,
 )
@@ -55,6 +56,19 @@ def upsert_batch(payload: GraphBatch, store: GraphStore = Depends(get_store)) ->
 @router.get("/stats", response_model=GraphStats, summary="Node and edge counts")
 def graph_stats(store: GraphStore = Depends(get_store)) -> GraphStats:
     return GraphStats(**store.stats())
+
+
+@router.get("/nodes", response_model=NodeListResponse, summary="List nodes, optionally by type")
+def list_nodes(
+    node_type: str | None = Query(default=None, alias="type"),
+    limit: int = Query(default=100, ge=1, le=500),
+    store: GraphStore = Depends(get_store),
+) -> NodeListResponse:
+    nodes = store.list_nodes(node_type, limit)
+    return NodeListResponse(
+        count=len(nodes),
+        nodes=[NodeRead(id=n.id, type=n.type, properties=n.properties) for n in nodes],
+    )
 
 
 @router.get("/nodes/{node_id}", response_model=NodeRead, summary="Get a node by id")

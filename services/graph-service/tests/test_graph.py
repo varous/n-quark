@@ -138,6 +138,17 @@ def test_batch_is_idempotent(client: TestClient) -> None:
     assert client.get("/v1/graph/stats").json() == {"nodes": 2, "edges": 1}
 
 
+def test_list_nodes_by_type(client: TestClient) -> None:
+    client.post("/v1/graph/nodes", json={"id": "artist:a", "type": "artist"})
+    client.post("/v1/graph/nodes", json={"id": "artist:b", "type": "artist"})
+    client.post("/v1/graph/nodes", json={"id": "region:x", "type": "region"})
+    artists = client.get("/v1/graph/nodes?type=artist").json()
+    assert artists["count"] == 2
+    assert {n["id"] for n in artists["nodes"]} == {"artist:a", "artist:b"}
+    assert client.get("/v1/graph/nodes").json()["count"] == 3  # all types
+    assert client.get("/v1/graph/nodes?type=region&limit=1").json()["count"] == 1
+
+
 def test_health_reports_backend(client: TestClient) -> None:
     # default backend from settings (neo4j); the store is overridden to in-memory for tests
     assert client.get("/health").json()["service"] == "graph-service"

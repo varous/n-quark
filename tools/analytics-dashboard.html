@@ -1,0 +1,274 @@
+<title>n-quark — Demand Intelligence</title>
+<style>
+  :root {
+    --bg: #f5f6fb; --surface: #ffffff; --surface-2: #f0f2f8; --border: #e3e6f0;
+    --text: #14161f; --muted: #565d72; --faint: #888ea3;
+    --accent: #4f46e5; --accent-weak: #ecebfe;
+    --opportunity: #b45309; --balanced: #047857; --demand-led: #4338ca; --supply-only: #5b6472;
+    --bar-track: #eceef5;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --shadow: 0 1px 2px rgba(19,22,40,.04), 0 4px 20px rgba(19,22,40,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0d16; --surface: #121727; --surface-2: #0e1320; --border: #242c40;
+      --text: #eef1f8; --muted: #9aa2b7; --faint: #6b7488;
+      --accent: #7c6cff; --accent-weak: #1d1b39;
+      --opportunity: #f5a524; --balanced: #34d399; --demand-led: #a5a0ff; --supply-only: #8b93a7;
+      --bar-track: #1c2334; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 26px rgba(0,0,0,.28);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6fb; --surface: #ffffff; --surface-2: #f0f2f8; --border: #e3e6f0;
+    --text: #14161f; --muted: #565d72; --faint: #888ea3; --accent: #4f46e5; --accent-weak: #ecebfe;
+    --opportunity: #b45309; --balanced: #047857; --demand-led: #4338ca; --supply-only: #5b6472;
+    --bar-track: #eceef5; --shadow: 0 1px 2px rgba(19,22,40,.04), 0 4px 20px rgba(19,22,40,.05);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0d16; --surface: #121727; --surface-2: #0e1320; --border: #242c40;
+    --text: #eef1f8; --muted: #9aa2b7; --faint: #6b7488; --accent: #7c6cff; --accent-weak: #1d1b39;
+    --opportunity: #f5a524; --balanced: #34d399; --demand-led: #a5a0ff; --supply-only: #8b93a7;
+    --bar-track: #1c2334; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 26px rgba(0,0,0,.28);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: clamp(24px, 5vw, 56px) clamp(16px, 4vw, 40px) 80px; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .16em; font-size: 11px; font-weight: 600;
+    color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(26px, 4vw, 38px); font-weight: 680; letter-spacing: -.02em; margin: 0 0 8px;
+    text-wrap: balance; }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0 0 22px; font-size: 15px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .controls label { font-size: 12px; color: var(--faint); }
+  input[type=text] { font-family: var(--font-mono); font-size: 13px; padding: 8px 11px; min-width: 260px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+  button { font-family: var(--font-sans); font-weight: 600; font-size: 13px; padding: 8px 16px;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+  button:hover { filter: brightness(1.06); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .status { font-size: 12.5px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--muted); margin-bottom: 26px; display: inline-block; }
+  .status.live { color: var(--balanced); border-color: color-mix(in srgb, var(--balanced) 35%, var(--border)); }
+  .status.sample { color: var(--muted); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px;
+    background: currentColor; vertical-align: middle; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 34px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
+    box-shadow: var(--shadow); }
+  .tile .n { font-family: var(--font-mono); font-size: 30px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1; }
+  .tile.hot .n { color: var(--opportunity); }
+  .tile .k { font-size: 12px; color: var(--faint); margin-top: 8px; text-transform: uppercase; letter-spacing: .07em; }
+
+  section { margin-bottom: 40px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+    font-weight: 650; margin: 0 0 4px; }
+  .sub { color: var(--faint); font-size: 13px; margin: 0 0 16px; }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+    box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
+    font-weight: 600; padding: 13px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .market { font-weight: 600; }
+  .who { color: var(--muted); font-size: 12.5px; }
+
+  .pill { display: inline-block; font-size: 11px; font-weight: 650; letter-spacing: .03em; padding: 3px 9px;
+    border-radius: 999px; text-transform: uppercase; white-space: nowrap;
+    color: var(--v); background: color-mix(in srgb, var(--v) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--v) 32%, transparent); }
+  .v-undersupplied { --v: var(--opportunity); }
+  .v-balanced { --v: var(--balanced); }
+  .v-demand-led { --v: var(--demand-led); }
+  .v-supply-only { --v: var(--supply-only); }
+
+  /* demand vs supply mini bars */
+  .ds { display: grid; grid-template-columns: 14px 1fr; gap: 4px 8px; align-items: center; min-width: 130px; }
+  .ds .lab { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+  .ds .track { height: 7px; background: var(--bar-track); border-radius: 4px; overflow: hidden; }
+  .ds .fill { height: 100%; border-radius: 4px; }
+  .ds .fill.d { background: var(--accent); }
+  .ds .fill.s { background: var(--supply-only); }
+
+  /* artist leaderboard */
+  .lb { display: flex; flex-direction: column; gap: 2px; }
+  .row { display: grid; grid-template-columns: 30px 1fr; gap: 16px; align-items: center; padding: 14px 18px;
+    border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: none; }
+  .rank { font-family: var(--font-mono); font-size: 13px; color: var(--faint); text-align: right; }
+  .who-name { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .who-name .nm { font-weight: 600; font-size: 15px; }
+  .who-name .mkts { color: var(--faint); font-size: 12.5px; }
+  .scorebar { display: grid; grid-template-columns: 1fr 52px; gap: 12px; align-items: center; margin-top: 7px; }
+  .scoretrack { height: 9px; background: var(--bar-track); border-radius: 5px; overflow: hidden; }
+  .scorefill { height: 100%; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, var(--surface)), var(--accent)); border-radius: 5px; }
+  .scoreval { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; font-size: 16px; text-align: right; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .chip { font-size: 11px; font-family: var(--font-mono); color: var(--muted); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+  .chip.missing { color: var(--faint); border-style: dashed; opacity: .8; }
+  .zero { color: var(--faint); font-size: 12.5px; }
+
+  .note { margin-top: 30px; padding: 18px 20px; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 12px; color: var(--muted); font-size: 13px; }
+  .note b { color: var(--text); }
+  code { font-family: var(--font-mono); font-size: 12px; background: var(--surface); padding: 1px 5px;
+    border-radius: 5px; border: 1px solid var(--border); }
+  @media (max-width: 560px) { .row { grid-template-columns: 24px 1fr; gap: 10px; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">n-quark · intelligence</p>
+    <h1>Demand Intelligence</h1>
+    <p class="lede">Deterministic demand scoring computed over the knowledge graph — where search demand
+      (Google Trends) and real event supply (ticketing) resolve to shared artist and region nodes. No AI in the
+      scoring; every number is reproducible and explained.</p>
+    <div class="controls">
+      <label for="base">API gateway</label>
+      <input type="text" id="base" value="http://localhost:8000" spellcheck="false" />
+      <button id="refresh">Refresh</button>
+    </div>
+    <div class="status sample" id="status">Loading…</div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <section>
+    <h2>Market Intelligence</h2>
+    <p class="sub">Regions ranked by demand-to-supply — <b>undersupplied</b> markets are where demand exists but
+      no events do yet (the booking opportunity).</p>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Market</th><th>Demand vs supply</th><th>Signal</th><th class="num">Avg fill</th>
+          <th class="num">Avg price</th><th>Who wants it</th>
+        </tr></thead>
+        <tbody id="regions"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Artist Demand</h2>
+    <p class="sub">Scored 0–100 from search momentum, geographic reach, and digital popularity — renormalized over
+      the signals actually present, so a missing input is never silently counted as zero.</p>
+    <div class="scroll"><div class="lb" id="artists"></div></div>
+  </section>
+
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+const SAMPLE = {"stats": {"nodes": 32,"edges": 42},"regions": [{"region_id": "region:andaman-and-nicobar-islands","demand_signals": 2,"supply_signals": 0,"demanding_artists": ["Arijit Singh","Shreya Ghoshal"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 2.0,"verdict": "undersupplied"},{"region_id": "region:arunachal-pradesh","demand_signals": 2,"supply_signals": 0,"demanding_artists": ["Arijit Singh","Shreya Ghoshal"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 2.0,"verdict": "undersupplied"},{"region_id": "region:assam","demand_signals": 2,"supply_signals": 0,"demanding_artists": ["Arijit Singh","Shreya Ghoshal"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 2.0,"verdict": "undersupplied"},{"region_id": "region:tripura","demand_signals": 2,"supply_signals": 0,"demanding_artists": ["Arijit Singh","Shreya Ghoshal"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 2.0,"verdict": "undersupplied"},{"region_id": "region:west-bengal","demand_signals": 2,"supply_signals": 2,"demanding_artists": ["Arijit Singh","Shreya Ghoshal"],"avg_fill_ratio": 0.127,"avg_price": 549.0,"demand_supply_ratio": 1.0,"verdict": "balanced"},{"region_id": "region:chandigarh","demand_signals": 1,"supply_signals": 0,"demanding_artists": ["Diljit Dosanjh"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 1.0,"verdict": "undersupplied"},{"region_id": "region:delhi","demand_signals": 1,"supply_signals": 0,"demanding_artists": ["Diljit Dosanjh"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 1.0,"verdict": "undersupplied"},{"region_id": "region:haryana","demand_signals": 1,"supply_signals": 0,"demanding_artists": ["Diljit Dosanjh"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 1.0,"verdict": "undersupplied"},{"region_id": "region:himachal-pradesh","demand_signals": 1,"supply_signals": 0,"demanding_artists": ["Diljit Dosanjh"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 1.0,"verdict": "undersupplied"},{"region_id": "region:punjab","demand_signals": 1,"supply_signals": 0,"demanding_artists": ["Diljit Dosanjh"],"avg_fill_ratio": null,"avg_price": null,"demand_supply_ratio": 1.0,"verdict": "undersupplied"},{"region_id": "region:mumbai","demand_signals": 0,"supply_signals": 1,"demanding_artists": [],"avg_fill_ratio": null,"avg_price": 0.0,"demand_supply_ratio": 0.0,"verdict": "supply-only"},{"region_id": "region:uttar-pradesh","demand_signals": 0,"supply_signals": 1,"demanding_artists": [],"avg_fill_ratio": null,"avg_price": 199.0,"demand_supply_ratio": 0.0,"verdict": "supply-only"}],"artists": [{"entity_id": "artist:arijit-singh","demand_score": 100.0,"components": {"momentum": 1.0,"reach": 1.0},"strongest_markets": ["Arunachal Pradesh","Assam","Tripura"],"missing_signals": ["popularity"]},{"entity_id": "artist:diljit-dosanjh","demand_score": 77.1,"components": {"momentum": 0.6,"reach": 1.0},"strongest_markets": ["Delhi","Haryana","Himachal Pradesh"],"missing_signals": ["popularity"]},{"entity_id": "artist:shreya-ghoshal","demand_score": 77.1,"components": {"momentum": 0.6,"reach": 1.0},"strongest_markets": ["Assam","West Bengal","Tripura"],"missing_signals": ["popularity"]},{"entity_id": "artist:dolinman","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]},{"entity_id": "artist:gaboo","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]},{"entity_id": "artist:manas","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]},{"entity_id": "artist:pilu","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]},{"entity_id": "artist:rajoshi","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]},{"entity_id": "artist:skinny-mos","demand_score": 0.0,"components": {},"strongest_markets": [],"missing_signals": ["momentum","popularity","reach"]}]};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const inr = (v) => v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
+const pct = (v) => v == null ? "—" : Math.round(v * 100) + "%";
+const VLABEL = { undersupplied: "Undersupplied", balanced: "Balanced", "demand-led": "Demand-led", "supply-only": "Supply-only" };
+
+function renderStats(data) {
+  const under = data.regions.filter(r => r.verdict === "undersupplied").length;
+  const tiles = [
+    { n: under, k: "Undersupplied markets", hot: true },
+    { n: data.regions.length, k: "Regions tracked" },
+    { n: data.artists.length, k: "Artists scored" },
+    { n: (data.stats && data.stats.nodes) ?? "—", k: "Graph nodes" },
+    { n: (data.stats && data.stats.edges) ?? "—", k: "Graph edges" },
+  ];
+  $("stats").innerHTML = tiles.map(t =>
+    `<div class="tile${t.hot ? " hot" : ""}"><div class="n">${t.n}</div><div class="k">${t.k}</div></div>`
+  ).join("");
+}
+
+function dsBars(demand, supply) {
+  const max = Math.max(demand, supply, 1);
+  const w = (v) => Math.round((v / max) * 100);
+  return `<div class="ds">
+    <span class="lab">D</span><div class="track"><div class="fill d" style="width:${w(demand)}%"></div></div>
+    <span class="lab">S</span><div class="track"><div class="fill s" style="width:${w(supply)}%"></div></div>
+  </div>`;
+}
+
+function renderRegions(regions) {
+  const name = (id) => esc((id || "").replace(/^region:/, "").replace(/-/g, " "));
+  $("regions").innerHTML = regions.map(r => `
+    <tr>
+      <td class="market" style="text-transform:capitalize">${name(r.region_id)}</td>
+      <td>${dsBars(r.demand_signals, r.supply_signals)}
+        <span class="num" style="font-size:11px;color:var(--faint)">${r.demand_signals}·${r.supply_signals}</span></td>
+      <td><span class="pill v-${r.verdict}">${VLABEL[r.verdict] || r.verdict}</span></td>
+      <td class="num">${pct(r.avg_fill_ratio)}</td>
+      <td class="num">${inr(r.avg_price)}</td>
+      <td class="who">${(r.demanding_artists || []).map(esc).join(", ") || "—"}</td>
+    </tr>`).join("");
+}
+
+function renderArtists(artists) {
+  const name = (id) => esc((id || "").replace(/^artist:/, "").replace(/-/g, " "));
+  $("artists").innerHTML = artists.map((a, i) => {
+    const comps = Object.keys(a.components || {});
+    const chips = comps.map(c => `<span class="chip">${c} ${a.components[c].toFixed(2)}</span>`).join("")
+      + (a.missing_signals || []).map(m => `<span class="chip missing">${m}: n/a</span>`).join("");
+    const mkts = (a.strongest_markets || []).length
+      ? `<span class="mkts">· strong in ${a.strongest_markets.map(esc).join(", ")}</span>` : "";
+    const body = a.demand_score > 0
+      ? `<div class="scorebar">
+           <div class="scoretrack"><div class="scorefill" style="width:${a.demand_score}%"></div></div>
+           <div class="scoreval">${a.demand_score.toFixed(0)}</div></div>
+         <div class="chips">${chips}</div>`
+      : `<div class="zero">No demand signals yet — appears only as an event performer.</div>`;
+    return `<div class="row">
+      <div class="rank">${i + 1}</div>
+      <div><div class="who-name"><span class="nm" style="text-transform:capitalize">${name(a.entity_id)}</span>${mkts}</div>${body}</div>
+    </div>`;
+  }).join("");
+}
+
+function render(data) {
+  renderStats(data);
+  renderRegions(data.regions);
+  renderArtists(data.artists);
+}
+
+function setStatus(kind, html) { const el = $("status"); el.className = "status " + kind; el.innerHTML = html; }
+
+async function loadLive() {
+  const base = $("base").value.replace(/\/+$/, "");
+  const j = async (u) => { const r = await fetch(base + u); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); };
+  setStatus("sample", "Fetching live from the gateway…");
+  try {
+    const [regionNodes, artistNodes, stats] = await Promise.all([
+      j("/v1/graph/nodes?type=region&limit=200"), j("/v1/graph/nodes?type=artist&limit=200"), j("/v1/graph/stats"),
+    ]);
+    const regions = await Promise.all(regionNodes.nodes.map(n => j("/v1/analytics/regions/" + n.id)));
+    const artists = await Promise.all(artistNodes.nodes.map(n => j("/v1/analytics/artists/" + n.id)));
+    regions.sort((a, b) => b.demand_supply_ratio - a.demand_supply_ratio || b.demand_signals - a.demand_signals);
+    artists.sort((a, b) => b.demand_score - a.demand_score);
+    render({ stats, regions, artists });
+    setStatus("live", `<span class="dot"></span>Live — ${regions.length} regions, ${artists.length} artists from the graph.`);
+  } catch (err) {
+    render(SAMPLE);
+    setStatus("sample", `Gateway not reachable (${esc(err.message)}) — showing the <b>bundled sample</b> (real captured output). Set the gateway URL and Refresh.`);
+  }
+}
+
+$("note").innerHTML = `<b>How this works.</b> Region and artist readouts come from <code>analytics-service</code>,
+  which computes deterministic scores over the graph — the integrated view where demand and supply meet on shared
+  nodes. On <b>Refresh</b> this fetches <code>/v1/graph/nodes</code> then <code>/v1/analytics/*</code> through the
+  gateway and renders the live JSON; with no backend it shows a bundled real capture. Scores are reproducible
+  (no AI), and each carries its components and an explanation from the service.`;
+
+$("refresh").addEventListener("click", loadLive);
+render(SAMPLE);
+setStatus("sample", "Showing bundled sample (real captured output). Press <b>Refresh</b> to fetch live from your gateway.");
+loadLive();
+</script>
