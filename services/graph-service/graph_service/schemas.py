@@ -16,6 +16,18 @@ class EdgeUpsert(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+class GraphBatch(BaseModel):
+    """A projection: a set of nodes and edges upserted together (idempotent)."""
+
+    nodes: list[NodeUpsert] = Field(default_factory=list)
+    edges: list[EdgeUpsert] = Field(default_factory=list)
+
+
+class BatchResult(BaseModel):
+    nodes: int
+    edges: int
+
+
 class NodeRead(BaseModel):
     id: str
     type: str

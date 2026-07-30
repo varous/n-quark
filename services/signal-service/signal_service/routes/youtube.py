@@ -8,8 +8,10 @@ from signal_service.adapters.musicbrainz import (
 from signal_service.adapters.youtube import YouTubeClient
 from signal_service.classification import classification_observation, classify_channel
 from signal_service.clients.entity_client import EntityServiceClient
+from signal_service.clients.graph_client import GraphServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
+from signal_service.graph_projection import project_entity_graph
 from signal_service.schemas import YouTubeChannelSignals
 
 router = APIRouter(prefix="/v1/signals/youtube", tags=["youtube"])
@@ -101,6 +103,24 @@ async def ingest_youtube_channel(
     except Exception:  # noqa: BLE001 — resolution is best-effort
         resolution = None
 
+    # Graph projection: fold the resolved entity + its enrichment observations into the
+    # knowledge graph (best-effort — a graph outage must not fail append-only ingestion).
+    # Keyed by the canonical id when resolution succeeded, else the source handle so the
+    # projection still lands and unifies later once the handle folds into the entity.
+    canonical_id = resolution.get("canonical_id") if resolution else None
+    graph_node_id = str(canonical_id or signals.entity)
+    projection = project_entity_graph(
+        node_id=graph_node_id,
+        entity_type=classification.entity_type,
+        display_name=signals.name,
+        observations=outbound,
+    )
+    graph_result: dict[str, int] | None = None
+    try:
+        graph_result = await GraphServiceClient().upsert_projection(projection)
+    except Exception:  # noqa: BLE001 — graph projection is best-effort
+        graph_result = None
+
     result: dict[str, object] = {
         "channel_id": signals.channel_id,
         "source_entity": signals.entity,
@@ -113,7 +133,8 @@ async def ingest_youtube_channel(
             "needs_review": classification.needs_review,
             "reasons": classification.reasons,
         },
-        "canonical_id": resolution.get("canonical_id") if resolution else None,
+        "canonical_id": canonical_id,
+        "graph": graph_result,
         "observation_service": settings.observation_service_url,
         "observations_created": len(persisted),
         "observations": persisted,
@@ -166,6 +187,21 @@ async def ingest_youtube_channel(
                 "added": [
                     "canonical_id of the classified type",
                     "alias link (source handle -> canonical entity)",
+                ],
+            },
+            {
+                "stage": "graph",
+                "service": "graph-service",
+                "input": {"node_id": graph_node_id, "observations_in": len(outbound)},
+                "output": (
+                    projection.to_payload()
+                    if graph_result is not None
+                    else {"skipped": "graph-service unreachable"}
+                ),
+                "added": [
+                    "canonical entity node (identity + popularity as properties)",
+                    "STRONG_IN edges to region nodes (from geographic demand)",
+                    "idempotent projection (no timestamps -> converges on re-ingest)",
                 ],
             },
         ]

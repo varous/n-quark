@@ -159,7 +159,7 @@ def test_numeric_stats_are_coerced_to_int() -> None:
 
 @pytest.fixture()
 def _offline_pipeline(monkeypatch: pytest.MonkeyPatch):
-    """Run classification + resolution offline: MusicBrainz mock + stubbed entity-service."""
+    """Run the pipeline offline: MusicBrainz mock + stubbed entity- and graph-service."""
     monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
     MusicBrainzClient._cache.clear()
 
@@ -167,8 +167,14 @@ def _offline_pipeline(monkeypatch: pytest.MonkeyPatch):
         etype = kwargs["entity_type"]
         return {"canonical_id": f"{etype}:t-series", "created": True, "alias_linked": True}
 
+    async def fake_projection(self, projection):
+        return {"nodes": len(projection.nodes), "edges": len(projection.edges)}
+
     monkeypatch.setattr(
         "signal_service.routes.youtube.EntityServiceClient.resolve", fake_resolve
+    )
+    monkeypatch.setattr(
+        "signal_service.routes.youtube.GraphServiceClient.upsert_projection", fake_projection
     )
 
 
@@ -217,7 +223,7 @@ def test_ingest_classifies_tseries_as_label(
     assert any(o.attribute == "candidate_entity_type" for o in sent)
 
 
-def test_ingest_with_trace_returns_four_stage_pipeline(
+def test_ingest_with_trace_returns_five_stage_pipeline(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     _offline_pipeline: None,
@@ -241,6 +247,7 @@ def test_ingest_with_trace_returns_four_stage_pipeline(
         "classification",
         "observation",
         "entity",
+        "graph",
     ]
     assert "provenance" in trace[0]["output"][0]["metadata"]
     # classification stage names the inferred type
@@ -248,6 +255,10 @@ def test_ingest_with_trace_returns_four_stage_pipeline(
     assert trace[1]["output"]["value"] == "label"
     # entity stage resolves to the classified (label) type
     assert trace[3]["output"]["canonical_id"] == "label:t-series"
+    # graph stage projects a node keyed by the canonical id
+    graph_out = trace[4]["output"]
+    assert graph_out["nodes"][0]["id"] == "label:t-series"
+    assert graph_out["nodes"][0]["type"] == "label"
 
 
 def test_ingest_without_trace_omits_trace(

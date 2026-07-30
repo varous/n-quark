@@ -94,6 +94,14 @@ def test_preview_google_trends_mock(client: TestClient, monkeypatch: pytest.Monk
 
 def test_ingest_with_trace(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "google_trends_provider", "mock")
+
+    async def fake_projection(self, projection):
+        return {"nodes": len(projection.nodes), "edges": len(projection.edges)}
+
+    monkeypatch.setattr(
+        "signal_service.routes.google_trends.GraphServiceClient.upsert_projection",
+        fake_projection,
+    )
     stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(4)]
     with patch(
         "signal_service.routes.google_trends.ObservationServiceClient.append_observations",
@@ -106,7 +114,12 @@ def test_ingest_with_trace(client: TestClient, monkeypatch: pytest.MonkeyPatch) 
     assert response.status_code == 200
     body = response.json()
     assert body["entity"] == "google:query:arijit-singh"
-    assert [r["stage"] for r in body["trace"]] == ["ingestion", "observation"]
+    assert [r["stage"] for r in body["trace"]] == ["ingestion", "observation", "graph"]
+    # graph stage projects a search_topic node keyed by the query handle, with region edges
+    graph_out = body["trace"][2]["output"]
+    assert graph_out["nodes"][0]["id"] == "google:query:arijit-singh"
+    assert graph_out["nodes"][0]["type"] == "search_topic"
+    assert any(e["relationship"] == "STRONG_IN" for e in graph_out["edges"])
 
 
 def test_health_reports_trends_provider(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

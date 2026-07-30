@@ -101,6 +101,43 @@ def test_edge_upsert_is_idempotent(client: TestClient) -> None:
     assert client.get("/v1/graph/stats").json()["edges"] == 1
 
 
+def test_batch_upserts_nodes_then_edges(client: TestClient) -> None:
+    resp = client.post(
+        "/v1/graph/batch",
+        json={
+            "nodes": [
+                {"id": "artist:diljit-dosanjh", "type": "artist", "properties": {"mbid": "x"}},
+                {"id": "region:punjab", "type": "region"},
+            ],
+            "edges": [
+                {
+                    "source": "artist:diljit-dosanjh",
+                    "relationship": "strong_in",
+                    "target": "region:punjab",
+                    "properties": {"rank": 1},
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"nodes": 2, "edges": 1}
+    assert client.get("/v1/graph/stats").json() == {"nodes": 2, "edges": 1}
+    out = client.get("/v1/graph/nodes/artist:diljit-dosanjh/neighbors?direction=out").json()
+    assert out["neighbors"][0]["relationship"] == "STRONG_IN"
+    assert out["neighbors"][0]["node"]["id"] == "region:punjab"
+
+
+def test_batch_is_idempotent(client: TestClient) -> None:
+    body = {
+        "nodes": [{"id": "artist:x", "type": "artist"}],
+        "edges": [{"source": "artist:x", "relationship": "strong_in", "target": "region:y"}],
+    }
+    client.post("/v1/graph/batch", json=body)
+    client.post("/v1/graph/batch", json=body)
+    # region:y auto-created by the edge; re-running converges (no duplicates)
+    assert client.get("/v1/graph/stats").json() == {"nodes": 2, "edges": 1}
+
+
 def test_health_reports_backend(client: TestClient) -> None:
     # default backend from settings (neo4j); the store is overridden to in-memory for tests
     assert client.get("/health").json()["service"] == "graph-service"

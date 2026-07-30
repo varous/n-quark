@@ -26,6 +26,12 @@ def default_entity_service_url() -> str:
     return "http://localhost:8005"
 
 
+def default_graph_service_url() -> str:
+    if detect_network_mode() == "docker":
+        return "http://graph-service:8006"
+    return "http://localhost:8006"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NQUARK_", env_file=".env", extra="ignore")
 
@@ -35,6 +41,7 @@ class Settings(BaseSettings):
     network_mode: str = Field(default_factory=detect_network_mode)
     observation_service_url: str = Field(default_factory=default_observation_service_url)
     entity_service_url: str = Field(default_factory=default_entity_service_url)
+    graph_service_url: str = Field(default_factory=default_graph_service_url)
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     spotify_api_base: str = "https://api.spotify.com/v1"

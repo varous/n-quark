@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from graph_service.deps import get_store
 from graph_service.schemas import (
+    BatchResult,
     EdgeRead,
     EdgeUpsert,
+    GraphBatch,
     GraphStats,
     NeighborRead,
     NeighborsResponse,
@@ -34,6 +36,20 @@ def upsert_edge(payload: EdgeUpsert, store: GraphStore = Depends(get_store)) -> 
         target=edge.target,
         properties=edge.properties,
     )
+
+
+@router.post("/batch", response_model=BatchResult, summary="Upsert a projection (nodes + edges)")
+def upsert_batch(payload: GraphBatch, store: GraphStore = Depends(get_store)) -> BatchResult:
+    """Upsert a whole projection in one call. Nodes first so edges never dangle.
+
+    The pipeline projects a resolved entity and its relationships as one batch; doing it in a
+    single request keeps the projection atomic from the caller's view and avoids N round-trips.
+    """
+    for node in payload.nodes:
+        store.upsert_node(Node(node.id, node.type, node.properties))
+    for edge in payload.edges:
+        store.upsert_edge(Edge(edge.source, edge.relationship, edge.target, edge.properties))
+    return BatchResult(nodes=len(payload.nodes), edges=len(payload.edges))
 
 
 @router.get("/stats", response_model=GraphStats, summary="Node and edge counts")
