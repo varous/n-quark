@@ -18,7 +18,8 @@ services:
   neo4j:
     image: neo4j:5-community
     environment:
-      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/nquark}
+      # Neo4j 5 requires a password of at least 8 characters.
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-nquarkdev}
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -135,6 +136,11 @@ services:
     build: ./services/graph-service
     ports:
       - "8006:8006"
+    environment:
+      NQUARK_GRAPH_BACKEND: ${GRAPH_BACKEND:-neo4j}
+      NQUARK_NEO4J_URL: bolt://neo4j:7687
+      NQUARK_NEO4J_USER: neo4j
+      NQUARK_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nquarkdev}
     depends_on:
       neo4j:
         condition: service_healthy

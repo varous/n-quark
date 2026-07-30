@@ -7,11 +7,12 @@ class Settings(BaseSettings):
     service_name: str = "graph-service"
     port: int = 8006
     log_level: str = "info"
+    graph_backend: str = "neo4j"  # "neo4j" (prod) or "memory" (tests / offline)
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "nquark"
+    neo4j_password: str = "nquarkdev"  # Neo4j 5 requires >= 8 chars
     qdrant_url: str = "http://qdrant:6333"
     minio_endpoint: str = "minio:9000"
     minio_access_key: str = "nquark"

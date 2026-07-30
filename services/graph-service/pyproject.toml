@@ -9,6 +9,7 @@ dependencies = [
     "sqlalchemy>=2.0.36",
     "pydantic-settings>=2.6.0",
     "httpx>=0.28.0",
+    "neo4j>=5.24.0",
 ]
 
 [project.optional-dependencies]
