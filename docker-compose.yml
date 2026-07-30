@@ -153,9 +153,14 @@ services:
     build: ./services/analytics-service
     ports:
       - "8007:8007"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+      NQUARK_GRAPH_SERVICE_URL: http://graph-service:8006
     depends_on:
       postgres:
         condition: service_healthy
+      graph-service:
+        condition: service_started
 
   feature-service:
     build: ./services/feature-service
