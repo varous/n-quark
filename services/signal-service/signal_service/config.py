@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     dataforseo_api_base: str = "https://api.dataforseo.com/v3"
     serpapi_key: str = ""
     serpapi_api_base: str = "https://serpapi.com/search.json"
+    # Ticketing has no single canonical API, so the provider is pluggable.
+    # "mock" (default, seeded with real Boshow data), "boshow" (public_scrape), or
+    # "bookmyshow" (partner-feed scaffold — raises until a data partnership exists).
+    ticketing_provider: str = "mock"
+    boshow_api_base: str = "https://www.boshow.in/api"
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"

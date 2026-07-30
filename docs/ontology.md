@@ -149,6 +149,25 @@ Features
 
 ---
 
+# Ticketing & demand ground truth
+
+Ticketing sources supply real events and the strongest available demand signal: the
+**fill ratio** (`tickets_sold / capacity`) — a transacted count, not a search proxy.
+
+- The dominant hub (BookMyShow) is bot-walled with no public API → `partner_feed` only.
+- Regional players are open: **Boshow** exposes an unauthenticated JSON API with per-show
+  `tickets_sold` + capacity (browser-scrapable; its API resists naive server replay, so a
+  live fetch needs a captured session or headless browser). District / Skillbox publish
+  event + artist sitemaps (`public_scrape`).
+
+One event is multi-entity — it emits an **Event**, a **Venue**, and a lineup of **Artists**,
+and is the first adapter to populate structural edges: `occurs_at` (Event→Venue),
+`features` (Event→Artist), `in_region` (Event→Region). Lineup artists resolve by name into
+the same canonical entities the YouTube/Trends pipelines produce, so **supply (events) and
+demand (search interest) converge on shared Artist and Region nodes.**
+
+---
+
 # Observation Schema
 
 Observation

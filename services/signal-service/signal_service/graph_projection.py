@@ -121,6 +121,12 @@ def project_entity_graph(
 
     projection = GraphProjection(nodes=[GraphNode(node_id, entity_type, properties)])
 
+    return _with_regions(projection, node_id, observations)
+
+
+def _with_regions(
+    projection: GraphProjection, node_id: str, observations: list[NormalizedObservation]
+) -> GraphProjection:
     # Geographic demand -> STRONG_IN edges to region nodes (ranked, deterministic).
     top_regions = _obs_value(observations, "search_top_regions")
     if isinstance(top_regions, list):
@@ -132,5 +138,42 @@ def project_entity_graph(
             projection.edges.append(
                 GraphEdge(node_id, "STRONG_IN", region_id, {"rank": rank})
             )
+
+    return projection
+
+
+def project_ticketing_graph(
+    *,
+    event_id: str,
+    event_properties: dict[str, Any],
+    venue_id: str | None,
+    venue_name: str | None,
+    artists: list[tuple[str, str]],
+    region: str | None,
+) -> GraphProjection:
+    """Project a ticketing event as structural relationships — the first non-demand edges.
+
+    ``artists`` is a list of (canonical_or_handle_id, display_name). Edges:
+    event -OCCURS_AT-> venue, event -FEATURES-> artist(s), event -IN_REGION-> region.
+    Idempotent (no timestamps); endpoints are created as thin nodes if absent.
+    """
+    projection = GraphProjection(nodes=[GraphNode(event_id, "event", event_properties)])
+
+    if venue_id:
+        projection.nodes.append(
+            GraphNode(venue_id, "venue", {"display_name": venue_name} if venue_name else {})
+        )
+        projection.edges.append(GraphEdge(event_id, "OCCURS_AT", venue_id))
+
+    for artist_id, artist_name in artists:
+        if not artist_id:
+            continue
+        projection.nodes.append(GraphNode(artist_id, "artist", {"display_name": artist_name}))
+        projection.edges.append(GraphEdge(event_id, "FEATURES", artist_id))
+
+    if region and region.strip():
+        region_id = f"region:{_slug(region)}"
+        projection.nodes.append(GraphNode(region_id, "region", {"display_name": region}))
+        projection.edges.append(GraphEdge(event_id, "IN_REGION", region_id))
 
     return projection
