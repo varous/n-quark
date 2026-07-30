@@ -79,7 +79,7 @@ _MOCK_CATALOG: dict[str, TrendsRaw] = {
         },
         timeseries=[62, 60, 65, 63, 70, 72, 78, 85],
         related_rising=["arijit singh live 2026", "arijit singh concert tickets", "arijit singh tour"],
-        kg_mid="/m/0j_gp3",
+        kg_mid="/m/08hr72",  # real Google Knowledge Graph id for Arijit Singh
     ),
     "diljit dosanjh": TrendsRaw(
         query="Diljit Dosanjh",
@@ -218,7 +218,37 @@ class SerpApiProvider:
                 for r in ((related.get("related_queries") or {}).get("rising") or [])
                 if r.get("query")
             ]
+            topics = await self._get(client, query, region, "RELATED_TOPICS")
+            raw.kg_mid = self._extract_mid(topics, query)
         return raw
+
+    # Knowledge Graph entity types that mark a topic as the artist itself (not a related song).
+    _ARTIST_TYPES = (
+        "singer", "musician", "composer", "artist", "band",
+        "rapper", "songwriter", "playback", "dj", "producer",
+    )
+
+    def _extract_mid(self, payload: dict[str, Any], query: str) -> str | None:
+        """The RELATED_TOPICS `top` list leads with the queried entity; return its mID.
+
+        Prefer an exact title match whose type looks like a performer, so we grab the artist
+        entity (e.g. /m/08hr72) rather than a same-named song or a generic topic.
+        """
+        top = (payload.get("related_topics") or {}).get("top") or []
+        query_lower = query.strip().lower()
+        fallback: str | None = None
+        for item in top:
+            topic = item.get("topic") or {}
+            value = topic.get("value")
+            if not value:
+                continue
+            title = (topic.get("title") or "").strip().lower()
+            topic_type = (topic.get("type") or "").lower()
+            if title == query_lower:
+                if any(a in topic_type for a in self._ARTIST_TYPES):
+                    return value
+                fallback = fallback or value
+        return fallback
 
 
 def get_provider() -> GoogleTrendsProvider:

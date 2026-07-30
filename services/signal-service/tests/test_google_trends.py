@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from signal_service.adapters.google_trends import (
     MockGoogleTrendsProvider,
+    SerpApiProvider,
     TrendsRaw,
     derive_momentum,
     entity_id_for_query,
@@ -52,6 +53,24 @@ async def test_normalize_emits_geographic_and_identity_signals() -> None:
 
     top = next(o for o in signals.observations if o.attribute == "search_top_regions")
     assert top.value[0] == "West Bengal"  # geographic distribution is the crown-jewel signal
+
+
+def test_serpapi_extracts_kg_mid_from_related_topics() -> None:
+    # RELATED_TOPICS.top leads with the queried entity; pick the artist-typed exact match.
+    payload = {
+        "related_topics": {
+            "top": [
+                {"topic": {"value": "/m/08hr72", "title": "Arijit Singh", "type": "Indian singer and composer"}},
+                {"topic": {"value": "/m/074ft", "title": "Song", "type": "Composition type"}},
+            ]
+        }
+    }
+    assert SerpApiProvider()._extract_mid(payload, "Arijit Singh") == "/m/08hr72"
+
+
+def test_serpapi_mid_none_when_no_entity_match() -> None:
+    payload = {"related_topics": {"top": [{"topic": {"value": "/m/074ft", "title": "Song", "type": "Composition type"}}]}}
+    assert SerpApiProvider()._extract_mid(payload, "Arijit Singh") is None
 
 
 def test_by_region_observation_carries_aggregator_provenance() -> None:
