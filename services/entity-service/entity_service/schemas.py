@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,6 +19,17 @@ class EntityResolveRequest(BaseModel):
     source: str = Field(default="unknown", max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
     create_if_missing: bool = True
+
+
+class AliasLinkRequest(BaseModel):
+    """Fold external identity cross-references (MBID, Google KG mID) in as aliases.
+
+    Keys should be namespaced by scheme (e.g. ``mbid:...``, ``kgmid:/m/...``) so an opaque
+    external id never collides with a source handle or another scheme's id.
+    """
+
+    aliases: list[str] = Field(min_length=1)
+    source: str = Field(default="identity-crossref", max_length=128)
 
 
 class EntityAliasRead(BaseModel):

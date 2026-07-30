@@ -6,6 +6,7 @@ from entity_service.db import get_db
 from entity_service.repository import (
     EntityNotFoundError,
     EntityResolutionError,
+    add_aliases,
     create_artist,
     get_entity,
     get_entity_by_alias,
@@ -13,6 +14,7 @@ from entity_service.repository import (
     resolve_spotify_artist,
 )
 from entity_service.schemas import (
+    AliasLinkRequest,
     ArtistCreate,
     EntityRead,
     EntityResolveRequest,
@@ -73,6 +75,24 @@ def resolve_spotify(
         return resolve_spotify_artist(db, spotify_id, payload.display_name)
     except EntityResolutionError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{canonical_id:path}/aliases",
+    response_model=EntityRead,
+    summary="Fold external identity ids (MBID, KG mID) in as aliases",
+)
+def link_entity_aliases(
+    canonical_id: str,
+    payload: AliasLinkRequest,
+    db: Session = Depends(get_db),
+) -> EntityRead:
+    try:
+        return add_aliases(db, canonical_id, payload.aliases, payload.source)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EntityResolutionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get(

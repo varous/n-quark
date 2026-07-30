@@ -115,6 +115,25 @@ def create_artist(db: Session, payload: ArtistCreate) -> tuple[EntityRead, bool]
     )
 
 
+def add_aliases(
+    db: Session,
+    canonical_id: str,
+    aliases: list[str],
+    source: str = "identity-crossref",
+) -> EntityRead:
+    """Fold extra aliases (e.g. external identity ids) onto an existing canonical entity.
+
+    Idempotent: re-linking the same alias is a no-op. Raises if the alias is already claimed
+    by a *different* canonical entity (that would silently merge two identities).
+    """
+    record = db.get(EntityRecord, canonical_id)
+    if record is None:
+        raise EntityNotFoundError(canonical_id)
+    _link_aliases(db, canonical_id, aliases, source, datetime.now(UTC))
+    db.commit()
+    return get_entity(db, canonical_id)
+
+
 def get_entity(db: Session, canonical_id: str) -> EntityRead:
     stmt = (
         select(EntityRecord)

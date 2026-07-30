@@ -92,6 +92,60 @@ def test_resolve_non_artist_entity_type(client: TestClient) -> None:
     assert body["entity"]["entity_type"] == "venue"
 
 
+def test_fold_external_ids_as_aliases(client: TestClient) -> None:
+    """External identity ids (MBID, KG mID) fold in as aliases -> the cross-source backbone."""
+    client.post(
+        "/v1/entities/resolve",
+        json={
+            "alias": "youtube:channel:UCxyz",
+            "entity_type": "label",
+            "display_name": "T-Series",
+            "source": "youtube",
+        },
+    )
+    resp = client.post(
+        "/v1/entities/label:t-series/aliases",
+        json={"aliases": ["mbid:d8067fa7", "kgmid:/m/0abc"], "source": "musicbrainz"},
+    )
+    assert resp.status_code == 200
+    alias_keys = {a["alias_key"] for a in resp.json()["aliases"]}
+    assert {"mbid:d8067fa7", "kgmid:/m/0abc"} <= alias_keys
+
+    # the entity is now reachable by its external ids
+    by_mbid = client.get("/v1/entities/by-alias/mbid:d8067fa7")
+    assert by_mbid.status_code == 200
+    assert by_mbid.json()["id"] == "label:t-series"
+
+
+def test_fold_alias_is_idempotent(client: TestClient) -> None:
+    client.post(
+        "/v1/entities/resolve",
+        json={"alias": "src:1", "entity_type": "artist", "display_name": "Aud", "source": "s"},
+    )
+    body = {"aliases": ["mbid:abc"], "source": "musicbrainz"}
+    client.post("/v1/entities/artist:aud/aliases", json=body)
+    resp = client.post("/v1/entities/artist:aud/aliases", json=body)
+    assert resp.status_code == 200
+    assert sum(a["alias_key"] == "mbid:abc" for a in resp.json()["aliases"]) == 1
+
+
+def test_fold_alias_conflict_returns_409(client: TestClient) -> None:
+    for name, etype in (("One", "artist"), ("Two", "artist")):
+        client.post(
+            "/v1/entities/resolve",
+            json={"alias": f"src:{name}", "entity_type": etype, "display_name": name, "source": "s"},
+        )
+    client.post("/v1/entities/artist:one/aliases", json={"aliases": ["mbid:shared"]})
+    # same external id can't silently re-point to a different canonical entity
+    resp = client.post("/v1/entities/artist:two/aliases", json={"aliases": ["mbid:shared"]})
+    assert resp.status_code == 409
+
+
+def test_fold_alias_missing_entity_returns_404(client: TestClient) -> None:
+    resp = client.post("/v1/entities/artist:nobody/aliases", json={"aliases": ["mbid:x"]})
+    assert resp.status_code == 404
+
+
 def test_resolve_without_display_name_returns_404(client: TestClient) -> None:
     response = client.post(
         "/v1/entities/resolve",

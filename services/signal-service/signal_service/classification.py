@@ -174,15 +174,17 @@ def decide_from_musicbrainz(
         match = label if winner == "label" else artist
         return Classification(winner, 0.72, "musicbrainz+tiebreak", reasons, needs_review=True, mbid=match.mbid)
 
-    # No corroborating signal — surface the ambiguity rather than guessing.
-    best = label if label.score >= artist.score else artist
+    # No corroborating signal — default to artist. Performers vastly outnumber labels, so a
+    # same-name label tying an artist (e.g. a self-named imprint) is almost always the
+    # coincidence. This is only a prior: flag for review rather than trusting it. Note the
+    # aggregator vote above already catches the genuine label case (high video count).
     return Classification(
-        best.entity_type,
+        "artist",
         0.6,
         "musicbrainz+tiebreak",
-        [*reasons, "no corroborating signal; review required"],
+        [*reasons, "no corroborating signal; defaulting to artist (performer prior), review required"],
         needs_review=True,
-        mbid=best.mbid,
+        mbid=artist.mbid,
     )
 
 

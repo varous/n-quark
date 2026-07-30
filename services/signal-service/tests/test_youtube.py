@@ -50,6 +50,20 @@ async def test_classify_tseries_resolves_label_via_tiebreak(
     assert c.mbid == "c9f5b9c5-0000-4000-8000-t-series0001"
 
 
+def test_uncorroborated_name_tie_defaults_to_artist() -> None:
+    # A label and an artist both match the name exactly at score 100 and there is no
+    # aggregator signal (raw=None, as in the Trends path). The performer prior must win —
+    # defaulting to label here mistyped Diljit Dosanjh as a label (caught live by the tracer).
+    lookup = MusicBrainzLookup(
+        label=MusicBrainzMatch("label", "label-mbid", 100, "Diljit Dosanjh"),
+        artist=MusicBrainzMatch("artist", "artist-mbid", 100, "Diljit Dosanjh"),
+    )
+    decision = decide_from_musicbrainz(lookup, "Diljit Dosanjh", None)
+    assert decision.entity_type == "artist"
+    assert decision.mbid == "artist-mbid"
+    assert decision.needs_review is True
+
+
 async def test_classify_arijit_is_clean_artist_no_tiebreak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -167,11 +181,17 @@ def _offline_pipeline(monkeypatch: pytest.MonkeyPatch):
         etype = kwargs["entity_type"]
         return {"canonical_id": f"{etype}:t-series", "created": True, "alias_linked": True}
 
+    async def fake_link(self, **kwargs):
+        return {"id": kwargs["canonical_id"], "aliases": kwargs["aliases"]}
+
     async def fake_projection(self, projection):
         return {"nodes": len(projection.nodes), "edges": len(projection.edges)}
 
     monkeypatch.setattr(
         "signal_service.routes.youtube.EntityServiceClient.resolve", fake_resolve
+    )
+    monkeypatch.setattr(
+        "signal_service.routes.youtube.EntityServiceClient.link_aliases", fake_link
     )
     monkeypatch.setattr(
         "signal_service.routes.youtube.GraphServiceClient.upsert_projection", fake_projection
@@ -221,6 +241,8 @@ def test_ingest_classifies_tseries_as_label(
     assert sent[0].entity.startswith("youtube:channel:")
     # a candidate_entity_type observation is appended alongside the signals
     assert any(o.attribute == "candidate_entity_type" for o in sent)
+    # the MusicBrainz MBID is folded in as an alias on the canonical entity — the backbone
+    assert any(a.startswith("mbid:") for a in body["aliases_linked"])
 
 
 def test_ingest_with_trace_returns_five_stage_pipeline(

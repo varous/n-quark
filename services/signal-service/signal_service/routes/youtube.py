@@ -12,6 +12,7 @@ from signal_service.clients.graph_client import GraphServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
 from signal_service.graph_projection import project_entity_graph
+from signal_service.identity import mbid_alias
 from signal_service.schemas import YouTubeChannelSignals
 
 router = APIRouter(prefix="/v1/signals/youtube", tags=["youtube"])
@@ -103,11 +104,26 @@ async def ingest_youtube_channel(
     except Exception:  # noqa: BLE001 — resolution is best-effort
         resolution = None
 
+    canonical_id = resolution.get("canonical_id") if resolution else None
+
+    # Fold the identity cross-reference (MusicBrainz MBID) in as an alias on the canonical
+    # entity, so the act is reachable by its MBID and later unifies with other pipelines
+    # (best-effort — the backbone link must not fail append-only ingestion).
+    linked_aliases: list[str] = []
+    if canonical_id and classification.mbid:
+        aliases = [mbid_alias(classification.mbid)]
+        try:
+            await EntityServiceClient().link_aliases(
+                canonical_id=str(canonical_id), aliases=aliases, source="musicbrainz"
+            )
+            linked_aliases = aliases
+        except Exception:  # noqa: BLE001 — alias folding is best-effort
+            linked_aliases = []
+
     # Graph projection: fold the resolved entity + its enrichment observations into the
     # knowledge graph (best-effort — a graph outage must not fail append-only ingestion).
     # Keyed by the canonical id when resolution succeeded, else the source handle so the
     # projection still lands and unifies later once the handle folds into the entity.
-    canonical_id = resolution.get("canonical_id") if resolution else None
     graph_node_id = str(canonical_id or signals.entity)
     projection = project_entity_graph(
         node_id=graph_node_id,
@@ -134,6 +150,7 @@ async def ingest_youtube_channel(
             "reasons": classification.reasons,
         },
         "canonical_id": canonical_id,
+        "aliases_linked": linked_aliases,
         "graph": graph_result,
         "observation_service": settings.observation_service_url,
         "observations_created": len(persisted),
@@ -183,10 +200,14 @@ async def ingest_youtube_channel(
                     "entity_type": classification.entity_type,
                     "display_name": signals.name,
                 },
-                "output": resolution or {"skipped": "entity-service unreachable"},
+                "output": {
+                    **(resolution or {"skipped": "entity-service unreachable"}),
+                    "aliases_linked": linked_aliases,
+                },
                 "added": [
                     "canonical_id of the classified type",
                     "alias link (source handle -> canonical entity)",
+                    "external id folded in as alias (mbid:*) — the cross-source backbone",
                 ],
             },
             {

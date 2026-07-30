@@ -12,6 +12,7 @@ from signal_service.adapters.google_trends import (
     get_provider,
     normalize_trends,
 )
+from signal_service.adapters.musicbrainz import MusicBrainzClient
 from signal_service.config import settings
 from signal_service.main import app
 from signal_service.schemas import NormalizedObservation
@@ -20,6 +21,35 @@ from signal_service.schemas import NormalizedObservation
 @pytest.fixture()
 def client() -> TestClient:
     return TestClient(app)
+
+
+@pytest.fixture()
+def _offline_trends_pipeline(monkeypatch: pytest.MonkeyPatch):
+    """Run Trends classify->resolve->fold->graph offline with stubbed downstream services."""
+    monkeypatch.setattr(settings, "google_trends_provider", "mock")
+    monkeypatch.setattr(settings, "musicbrainz_mock_mode", True)
+    MusicBrainzClient._cache.clear()
+
+    async def fake_resolve(self, **kwargs):
+        etype = kwargs["entity_type"]
+        slug = kwargs["display_name"].lower().replace(" ", "-")
+        return {"canonical_id": f"{etype}:{slug}", "created": True, "alias_linked": True}
+
+    async def fake_link(self, **kwargs):
+        return {"id": kwargs["canonical_id"], "aliases": kwargs["aliases"]}
+
+    async def fake_projection(self, projection):
+        return {"nodes": len(projection.nodes), "edges": len(projection.edges)}
+
+    monkeypatch.setattr(
+        "signal_service.routes.google_trends.EntityServiceClient.resolve", fake_resolve
+    )
+    monkeypatch.setattr(
+        "signal_service.routes.google_trends.EntityServiceClient.link_aliases", fake_link
+    )
+    monkeypatch.setattr(
+        "signal_service.routes.google_trends.GraphServiceClient.upsert_projection", fake_projection
+    )
 
 
 def test_entity_id_is_type_neutral() -> None:
@@ -92,17 +122,10 @@ def test_preview_google_trends_mock(client: TestClient, monkeypatch: pytest.Monk
     assert body["mock"] is True
 
 
-def test_ingest_with_trace(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "google_trends_provider", "mock")
-
-    async def fake_projection(self, projection):
-        return {"nodes": len(projection.nodes), "edges": len(projection.edges)}
-
-    monkeypatch.setattr(
-        "signal_service.routes.google_trends.GraphServiceClient.upsert_projection",
-        fake_projection,
-    )
-    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(4)]
+def test_ingest_with_trace(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _offline_trends_pipeline: None
+) -> None:
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(6)]
     with patch(
         "signal_service.routes.google_trends.ObservationServiceClient.append_observations",
         new_callable=AsyncMock,
@@ -114,12 +137,22 @@ def test_ingest_with_trace(client: TestClient, monkeypatch: pytest.MonkeyPatch) 
     assert response.status_code == 200
     body = response.json()
     assert body["entity"] == "google:query:arijit-singh"
-    assert [r["stage"] for r in body["trace"]] == ["ingestion", "observation", "graph"]
-    # graph stage projects a search_topic node keyed by the query handle, with region edges
-    graph_out = body["trace"][2]["output"]
-    assert graph_out["nodes"][0]["id"] == "google:query:arijit-singh"
-    assert graph_out["nodes"][0]["type"] == "search_topic"
+    # Trends is now a full classify->resolve->fold->graph pipeline, mirroring YouTube.
+    assert [r["stage"] for r in body["trace"]] == [
+        "ingestion",
+        "classification",
+        "observation",
+        "entity",
+        "graph",
+    ]
+    # the query resolves to a canonical artist and demand edges attach to it (not the handle)
+    assert body["canonical_id"] == "artist:arijit-singh"
+    graph_out = body["trace"][4]["output"]
+    assert graph_out["nodes"][0]["id"] == "artist:arijit-singh"
+    assert graph_out["nodes"][0]["type"] == "artist"
     assert any(e["relationship"] == "STRONG_IN" for e in graph_out["edges"])
+    # the KG mID folds in as an alias — the cross-source backbone
+    assert any(a.startswith("kgmid:") for a in body["aliases_linked"])
 
 
 def test_health_reports_trends_provider(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,9 +162,8 @@ def test_health_reports_trends_provider(client: TestClient, monkeypatch: pytest.
 
 
 def test_sent_observations_key_on_source_handle(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _offline_trends_pipeline: None
 ) -> None:
-    monkeypatch.setattr(settings, "google_trends_provider", "mock")
     with patch(
         "signal_service.routes.google_trends.ObservationServiceClient.append_observations",
         new_callable=AsyncMock,
@@ -139,4 +171,6 @@ def test_sent_observations_key_on_source_handle(
     ) as append_mock:
         client.post("/v1/signals/google-trends/artists/Diljit Dosanjh/ingest")
     sent: list[NormalizedObservation] = append_mock.await_args.args[0]
+    # signals + the appended classification observation all key on the type-neutral handle
     assert all(o.entity == "google:query:diljit-dosanjh" for o in sent)
+    assert any(o.attribute == "candidate_entity_type" for o in sent)
