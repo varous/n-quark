@@ -1,0 +1,21 @@
+# Fly.io — entity-service (private; canonical entity resolution + alias folding, on Postgres).
+# Reachable as nquark-entity-service.flycast. Deploy:  cd services/entity-service && fly deploy
+app = "nquark-entity-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8005"
+  # NQUARK_POSTGRES_URL is a secret. entrypoint runs `alembic upgrade head` before boot.
+
+[http_service]
+  internal_port = 8005
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

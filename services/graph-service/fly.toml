@@ -1,0 +1,28 @@
+# Fly.io — graph-service (private; serves /v1/graph and the /v1/events feed).
+# Reachable only over the private network as nquark-graph-service.flycast (no public IP).
+# Deploy:  cd services/graph-service && fly deploy
+app = "nquark-graph-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8006"
+  NQUARK_GRAPH_BACKEND = "postgres"
+  # NQUARK_POSTGRES_URL is a secret (fly secrets set) — see deploy/fly/README.md.
+  # entrypoint runs `alembic upgrade head` before boot because the backend is postgres.
+
+[http_service]
+  internal_port = 8006
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 150
+    hard_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

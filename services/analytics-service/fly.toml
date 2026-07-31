@@ -1,0 +1,21 @@
+# Fly.io — analytics-service (private; demand/supply scoring over the graph). Reads graph via HTTP.
+# Reachable as nquark-analytics-service.flycast. Deploy:  cd services/analytics-service && fly deploy
+app = "nquark-analytics-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8007"
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+
+[http_service]
+  internal_port = 8007
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

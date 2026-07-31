@@ -1,0 +1,30 @@
+# Fly.io — signal-service (private; adapters + ingestion pipeline). Stateless — no Postgres.
+# Reachable as nquark-signal-service.flycast. Deploy:  cd services/signal-service && fly deploy
+app = "nquark-signal-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8003"
+  NQUARK_OBSERVATION_SERVICE_URL = "http://nquark-observation-service.flycast"
+  NQUARK_ENTITY_SERVICE_URL = "http://nquark-entity-service.flycast"
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+  # Dev defaults: deterministic mock adapters. Flip to live per adapter once keys are set as
+  # secrets (fly secrets set NQUARK_SERPAPI_KEY=... etc.) — never commit keys.
+  NQUARK_TICKETING_PROVIDER = "mock"
+  NQUARK_SPOTIFY_MOCK_MODE = "true"
+  NQUARK_YOUTUBE_MOCK_MODE = "true"
+  NQUARK_MUSICBRAINZ_MOCK_MODE = "true"
+  NQUARK_GOOGLE_TRENDS_PROVIDER = "mock"
+
+[http_service]
+  internal_port = 8003
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

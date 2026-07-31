@@ -59,11 +59,41 @@ class Settings(BaseSettings):
     minio_access_key: str = "nquark"
     minio_secret_key: str = "nquark"
 
+    # Per-service upstream overrides. Unset -> the compose/local maps below are used unchanged.
+    # Set these to deploy where service discovery differs from Docker Compose — e.g. on Fly:
+    # NQUARK_GRAPH_SERVICE_URL=http://graph-service.flycast
+    crawl_service_url: str | None = None
+    media_service_url: str | None = None
+    signal_service_url: str | None = None
+    observation_service_url: str | None = None
+    entity_service_url: str | None = None
+    graph_service_url: str | None = None
+    analytics_service_url: str | None = None
+    feature_service_url: str | None = None
+    intelligence_service_url: str | None = None
+
     @property
     def downstream_services(self) -> dict[str, str]:
-        if self.network_mode == "docker":
-            return DOCKER_DOWNSTREAM_SERVICES
-        return LOCAL_DOWNSTREAM_SERVICES
+        base = dict(
+            DOCKER_DOWNSTREAM_SERVICES
+            if self.network_mode == "docker"
+            else LOCAL_DOWNSTREAM_SERVICES
+        )
+        overrides = {
+            "crawl": self.crawl_service_url,
+            "media": self.media_service_url,
+            "signal": self.signal_service_url,
+            "observation": self.observation_service_url,
+            "entity": self.entity_service_url,
+            "graph": self.graph_service_url,
+            "analytics": self.analytics_service_url,
+            "feature": self.feature_service_url,
+            "intelligence": self.intelligence_service_url,
+        }
+        for key, url in overrides.items():
+            if url:
+                base[key] = url.rstrip("/")
+        return base
 
 
 @lru_cache

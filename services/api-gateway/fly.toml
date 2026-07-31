@@ -1,0 +1,33 @@
+# Fly.io — api-gateway (the ONLY public app; crawl-space hits this).
+# Deploy from this directory:  cd services/api-gateway && fly deploy
+# App names are GLOBALLY unique on Fly — if "nquark-api-gateway" is taken, rename here and
+# update the matching *.flycast URLs in the other services' fly.toml + this file.
+app = "nquark-api-gateway"
+primary_region = "sin"  # Singapore — nearest Fly region to India (no India region exists)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8000"
+  NQUARK_NETWORK_MODE = "docker"  # base map; the *_SERVICE_URL overrides below win per service
+  NQUARK_SIGNAL_SERVICE_URL = "http://nquark-signal-service.flycast"
+  NQUARK_OBSERVATION_SERVICE_URL = "http://nquark-observation-service.flycast"
+  NQUARK_ENTITY_SERVICE_URL = "http://nquark-entity-service.flycast"
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+  NQUARK_ANALYTICS_SERVICE_URL = "http://nquark-analytics-service.flycast"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 150
+    hard_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
