@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector superset of postgres:16 — same data dir, adds the `vector` extension the
+    # consolidated architecture uses (graph store now, feature-service embeddings later).
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nquark}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nquark}
@@ -17,6 +19,10 @@ services:
 
   neo4j:
     image: neo4j:5-community
+    # Opt-in: the graph store now defaults to Postgres. Bring Neo4j back with
+    # `docker compose --profile neo4j up` (and set GRAPH_BACKEND=neo4j) if you want the
+    # graph-native backend for deep-traversal work.
+    profiles: ["neo4j"]
     environment:
       # Neo4j 5 requires a password of at least 8 characters.
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-nquarkdev}
@@ -141,12 +147,14 @@ services:
     ports:
       - "8006:8006"
     environment:
-      NQUARK_GRAPH_BACKEND: ${GRAPH_BACKEND:-neo4j}
+      NQUARK_GRAPH_BACKEND: ${GRAPH_BACKEND:-postgres}
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      # Only used when GRAPH_BACKEND=neo4j (docker compose --profile neo4j up).
       NQUARK_NEO4J_URL: bolt://neo4j:7687
       NQUARK_NEO4J_USER: neo4j
       NQUARK_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-nquarkdev}
     depends_on:
-      neo4j:
+      postgres:
         condition: service_healthy
 
   analytics-service:

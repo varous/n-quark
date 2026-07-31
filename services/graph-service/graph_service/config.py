@@ -1,4 +1,13 @@
+from pathlib import Path
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def default_postgres_url() -> str:
+    if Path("/.dockerenv").exists():
+        return "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+    return "postgresql+psycopg://nquark:nquark@localhost:5432/nquark"
 
 
 class Settings(BaseSettings):
@@ -7,8 +16,8 @@ class Settings(BaseSettings):
     service_name: str = "graph-service"
     port: int = 8006
     log_level: str = "info"
-    graph_backend: str = "neo4j"  # "neo4j" (prod) or "memory" (tests / offline)
-    postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+    graph_backend: str = "postgres"  # "postgres" (consolidated) | "neo4j" | "memory" (tests)
+    postgres_url: str = Field(default_factory=default_postgres_url)
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"
