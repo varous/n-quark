@@ -71,7 +71,7 @@ async def test_normalize_emits_demand_and_relationship_observations() -> None:
     event = await MockTicketingProvider().extract("free-folk-nite-01082026")
     obs = normalize_event(event)
     attrs = {o.attribute for o in obs}
-    assert {"fill_ratio", "occurs_at_venue", "lineup", "in_region", "source_event_id"} <= attrs
+    assert {"fill_ratio", "occurs_at_venue", "lineup", "in_region", "source_event_id", "image_url"} <= attrs
     # everything keys on the type-neutral event handle
     assert all(o.entity == "boshow:show:a7ed0638-ef5e-4f98-801b-ad46e3a75a6d" for o in obs)
     fill = next(o for o in obs if o.attribute == "fill_ratio")
@@ -145,6 +145,26 @@ def test_skillbox_event_from_details() -> None:
     assert ev.city == "Goa" and ev.venue_name == "DPedro"
     assert ev.price_min == 1999.0 and ev.currency == "INR"
     assert ev.starts_at is not None and ev.fill_ratio is None
+
+
+def test_image_url_captured_across_sources() -> None:
+    # Boshow: relative show_image_link -> absolute URL.
+    b = event_from_boshow({
+        "slug": "x", "display_name": "X", "city": "Kolkata-West Bengal-India",
+        "show_image_link": "show_images/abc.jpg",
+    })
+    assert b.image_url == "https://www.boshow.in/show_images/abc.jpg"
+    # JSON-LD (District/AllEvents/Luma/Meetup): schema.org `image` as a list.
+    j = event_from_jsonld(
+        {"name": "E", "image": ["https://img.example/1.jpg", "https://img.example/2.jpg"]},
+        "https://www.district.in/events/e", source="district", source_event_id="e",
+    )
+    assert j.image_url == "https://img.example/1.jpg"
+    # Skillbox: cover_image.
+    s = event_from_skillbox({"event_slug": "e", "event_display_name": "E", "cover_image": "https://cdn/s.jpg"})
+    assert s.image_url == "https://cdn/s.jpg"
+    # absent image -> None (no observation emitted)
+    assert event_from_skillbox({"event_slug": "e", "event_display_name": "E"}).image_url is None
 
 
 # --- Townscript (reverse-engineered summary-page-data JSON; captured live) -----------------

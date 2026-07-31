@@ -187,6 +187,7 @@ def _event_summary(event: TicketingEvent) -> dict[str, object]:
         "tickets_sold": event.tickets_sold,
         "capacity": event.capacity,
         "fill_ratio": event.fill_ratio,
+        "image_url": event.image_url,
         "provider": settings.ticketing_provider,
     }
 
@@ -206,5 +207,7 @@ def _graph_event_props(event: TicketingEvent) -> dict[str, object]:
         props["fill_ratio"] = event.fill_ratio
         props["tickets_sold"] = event.tickets_sold
         props["capacity"] = event.capacity
+    if event.image_url:
+        props["image_url"] = event.image_url
     props["verified"] = event.verified
     return props

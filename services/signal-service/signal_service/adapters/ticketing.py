@@ -166,6 +166,7 @@ def event_from_boshow(item: dict[str, Any], *, fetched_at: datetime | None = Non
         capacity=item.get("gc") if isinstance(item.get("gc"), int) else None,
         tickets_sold=item.get("tickets_sold") if isinstance(item.get("tickets_sold"), int) else None,
         verified=bool(item.get("verified")),
+        image_url=(f"https://www.boshow.in/{item['show_image_link']}" if item.get("show_image_link") else None),
         fetched_at=fetched_at or datetime.now(UTC),
     )
 
@@ -228,6 +229,21 @@ def _jsonld_price(offers: Any) -> tuple[float | None, str]:
     return (min(prices) if prices else None), (currency or "INR").upper()
 
 
+def _jsonld_image(value: Any) -> str | None:
+    """First usable image URL from a schema.org ``image`` (string, list, or ImageObject)."""
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, list):
+        for item in value:
+            url = _jsonld_image(item)
+            if url:
+                return url
+        return None
+    if isinstance(value, dict):
+        return value.get("url") or None
+    return None
+
+
 def event_from_jsonld(
     node: dict[str, Any], url: str, *, source: str, source_event_id: str,
     country: str = "India", fetched_at: datetime | None = None,
@@ -262,9 +278,6 @@ def event_from_jsonld(
     if isinstance(org, list):
         org = org[0] if org else {}
     keywords = node.get("keywords")
-    image = node.get("image")
-    if isinstance(image, list):
-        image = image[0] if image else None
     return TicketingEvent(
         source=source, source_event_id=source_event_id, event_slug=source_event_id,
         event_name=(node.get("name") or "").strip(), event_url=url,
@@ -275,7 +288,7 @@ def event_from_jsonld(
         language="", currency=currency, price_min=price,
         is_free=(price == 0.0), starts_at=_parse_dt(node.get("startDate")),
         capacity=None, tickets_sold=None, verified=True,
-        image_url=image if isinstance(image, str) else None,
+        image_url=_jsonld_image(node.get("image")),
         fetched_at=fetched_at or datetime.now(UTC),
     )
 
@@ -301,7 +314,8 @@ def event_from_skillbox(data: dict[str, Any], *, fetched_at: datetime | None = N
         venue_name=(data.get("venue_name") or "").strip(), artists=[], curator=None,
         category="Event", language="", currency="INR", price_min=price,
         is_free=(price == 0.0), starts_at=starts_dt, capacity=None, tickets_sold=None,
-        verified=bool(data.get("status")), fetched_at=fetched_at or datetime.now(UTC),
+        verified=bool(data.get("status")), image_url=(data.get("cover_image") or None),
+        fetched_at=fetched_at or datetime.now(UTC),
     )
 
 
@@ -430,6 +444,7 @@ _MOCK_BOSHOW: dict[str, dict[str, Any]] = {
         "show_id": ["619b9dbb-b708-439a-b756-5dcacd325884"],
         "slug": "jamsteady-with-cherry-mrong-31072026",
         "share_url": "https://www.boshow.in/api/shows/share/jamsteady-with-cherry-mrong-31072026",
+        "show_image_link": "show_images/163f830d-6367-4bc0-9071-d531edd2d6ae.jpg",
     },
     "free-folk-nite-01082026": {
         "display_name": "Free Folk Nite", "show_type": "Music",
@@ -440,6 +455,7 @@ _MOCK_BOSHOW: dict[str, dict[str, Any]] = {
         "real_show_date": "2026-08-01T20:00:00.000Z", "gc": 50, "tickets_sold": 10, "verified": 1,
         "show_id": ["a7ed0638-ef5e-4f98-801b-ad46e3a75a6d"], "slug": "free-folk-nite-01082026",
         "share_url": "https://www.boshow.in/api/shows/share/free-folk-nite-01082026",
+        "show_image_link": "show_images/8584b00b-c274-4913-bcb8-222461f0a844.jpg",
     },
     "atsp-viii-cotton-stainers-31072026": {
         "display_name": "ATSP VIII - Be.long.ing - Cotton Stainers by Gram Art Project",
@@ -453,6 +469,7 @@ _MOCK_BOSHOW: dict[str, dict[str, Any]] = {
         "show_id": ["256f6c6e-0549-4425-9b2e-12dd6c4c9ff7"],
         "slug": "atsp-viii-cotton-stainers-31072026",
         "share_url": "https://www.boshow.in/api/shows/share/atsp-viii-cotton-stainers-31072026",
+        "show_image_link": "show_images/bedeba8c-6916-4536-96a4-789f6b221071.jpg",
     },
 }
 
@@ -870,6 +887,8 @@ def normalize_event(event: TicketingEvent) -> list[NormalizedObservation]:
         out.append(obs("starts_at", event.starts_at.isoformat(), 0.9))
     if event.price_min is not None:
         out.append(obs("price_min", event.price_min, 0.85, {"currency": event.currency, "is_free": event.is_free}))
+    if event.image_url:
+        out.append(obs("image_url", event.image_url, 0.8))
     if event.capacity is not None and event.tickets_sold is not None:
         # The demand ground truth. Higher confidence — it is a transacted count, not a proxy.
         out.append(obs(
