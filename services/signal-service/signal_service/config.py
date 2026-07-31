@@ -63,9 +63,12 @@ class Settings(BaseSettings):
     dataforseo_api_base: str = "https://api.dataforseo.com/v3"
     serpapi_key: str = ""
     serpapi_api_base: str = "https://serpapi.com/search.json"
-    # Ticketing has no single canonical API, so the provider is pluggable.
-    # "mock" (default, seeded with real Boshow data), "boshow" (public_scrape), or
-    # "bookmyshow" (partner-feed scaffold — raises until a data partnership exists).
+    # Ticketing has no single canonical API, so the provider is pluggable. Accepted values:
+    #   "mock" (default, seeded with real Boshow data), "boshow" (public_scrape),
+    #   "district" / "skillbox" / "townscript" / "allevents" / "luma" / "meetup" / "knowafest"
+    #   (all public_scrape; townscript replays a public anonymous client token, allevents is an
+    #   aggregator used mainly for discovery/dedup), or "bookmyshow" (partner-feed scaffold —
+    #   raises until a data partnership exists).
     ticketing_provider: str = "mock"
     boshow_api_base: str = "https://www.boshow.in/api"
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"

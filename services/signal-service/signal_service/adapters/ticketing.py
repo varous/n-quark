@@ -9,8 +9,15 @@ unauthenticated form-encoded search API that uniquely returns ``tickets_sold`` a
 No single canonical API exists, so the provider is pluggable (like Google Trends):
   - ``mock``     — default; seeded with real Boshow-shaped records, so tests are faithful.
   - ``boshow``   — real, public_scrape of the unauthenticated /api/search JSON.
-  - ``district`` / ``skillbox`` — sitemap-driven (next); same interface.
+  - ``district`` / ``skillbox`` — sitemap-driven; same interface.
+  - ``townscript`` — BMS-owned DIY ticketing (SPA); extracts via the app's JSON API, which
+    needs the *static, anonymous* ROLE_CLIENT token that ships in the public JS bundle.
+  - ``allevents`` — event *aggregator* (schema.org JSON-LD); mainly a discovery/dedup source.
+  - ``luma`` / ``meetup`` — community/grassroots platforms; sitemap + SSR schema.org JSON-LD.
+  - ``knowafest`` — college-fest listings; static SSR HTML (no JSON-LD), og:title-driven.
   - ``bookmyshow`` — partner_feed scaffold; raises until a data partnership exists.
+
+The JSON-LD providers (District, AllEvents, Luma, Meetup) all share ``event_from_jsonld``.
 
 Every provider yields a provider-neutral ``TicketingEvent``. One event is inherently
 multi-entity — an event, a venue, and a lineup of artists — so this adapter is the first to
@@ -20,6 +27,7 @@ resolve by name into the same canonical entities the YouTube/Trends pipelines pr
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from dataclasses import dataclass, field
@@ -35,6 +43,13 @@ ADAPTER_VERSION = "ticketing-v1"
 
 DISTRICT_BASE = "https://www.district.in"
 SKILLBOX_BASE = "https://www.skillboxes.com"
+TOWNSCRIPT_BASE = "https://www.townscript.com"
+ALLEVENTS_BASE = "https://allevents.in"
+LUMA_BASE = "https://luma.com"
+LUMA_SITEMAP_INDEX = "https://sitemap.luma.com/sitemap.xml"
+MEETUP_BASE = "https://www.meetup.com"
+MEETUP_EVENTS_SITEMAP = "https://www.meetup.com/events-index-sitemap.xml"
+KNOWAFEST_BASE = "https://www.knowafest.com"
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -71,6 +86,7 @@ class TicketingEvent:
     verified: bool
     artist_source_id: str | None = None
     curator: str | None = None
+    image_url: str | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -192,8 +208,37 @@ def _jsonld_events(html: str) -> list[dict[str, Any]]:
     return events
 
 
-def event_from_district(node: dict[str, Any], url: str, *, fetched_at: datetime | None = None) -> TicketingEvent:
-    """Map a District schema.org Event (JSON-LD) to the canonical TicketingEvent."""
+def _jsonld_price(offers: Any) -> tuple[float | None, str]:
+    """Lowest price + currency from a schema.org ``offers`` value (scalar, list, or AggregateOffer).
+
+    Handles string prices (``"1299.00"``) and both ``lowPrice`` (AggregateOffer) and ``price``.
+    """
+    items = offers if isinstance(offers, list) else ([offers] if isinstance(offers, dict) else [])
+    prices: list[float] = []
+    currency = ""
+    for offer in items:
+        if not isinstance(offer, dict):
+            continue
+        currency = currency or (offer.get("priceCurrency") or "")
+        price = _to_float(offer.get("lowPrice"))
+        if price is None:
+            price = _to_float(offer.get("price"))
+        if price is not None:
+            prices.append(price)
+    return (min(prices) if prices else None), (currency or "INR").upper()
+
+
+def event_from_jsonld(
+    node: dict[str, Any], url: str, *, source: str, source_event_id: str,
+    country: str = "India", fetched_at: datetime | None = None,
+) -> TicketingEvent:
+    """Map a schema.org Event (JSON-LD) node to the canonical TicketingEvent.
+
+    Shared by every SSR/JSON-LD provider (District, AllEvents, Luma, Meetup). Handles a
+    ``Place`` or ``VirtualLocation``, a ``PostalAddress`` dict or a flat address string
+    (Indian PIN heuristic), list-or-scalar offers/performers/organizer, and string prices.
+    ``country`` is the fallback when the address carries no ``addressCountry``.
+    """
     loc = node.get("location") or {}
     if isinstance(loc, list):
         loc = loc[0] if loc else {}
@@ -201,32 +246,44 @@ def event_from_district(node: dict[str, Any], url: str, *, fetched_at: datetime 
     addr = loc.get("address", "") if isinstance(loc, dict) else ""
     if isinstance(addr, dict):
         city, region = addr.get("addressLocality", ""), addr.get("addressRegion", "")
+        addr_country = addr.get("addressCountry")
+        if isinstance(addr_country, dict):
+            addr_country = addr_country.get("name")
+        country = addr_country or country
     else:
         city, region = _india_city_region(addr)
 
-    offers = node.get("offers") or {}
-    if isinstance(offers, list):
-        offers = offers[0] if offers else {}
-    price = _to_float(offers.get("lowPrice") or offers.get("price")) if isinstance(offers, dict) else None
-    currency = offers.get("priceCurrency", "INR") if isinstance(offers, dict) else "INR"
-
+    price, currency = _jsonld_price(node.get("offers"))
     perf = node.get("performer") or []
     if isinstance(perf, dict):
         perf = [perf]
     artists = [p["name"].strip() for p in perf if isinstance(p, dict) and p.get("name")]
     org = node.get("organizer") or {}
+    if isinstance(org, list):
+        org = org[0] if org else {}
     keywords = node.get("keywords")
-    slug = url.rstrip("/").split("/events/")[-1]
+    image = node.get("image")
+    if isinstance(image, list):
+        image = image[0] if image else None
     return TicketingEvent(
-        source="district", source_event_id=slug, event_slug=slug,
+        source=source, source_event_id=source_event_id, event_slug=source_event_id,
         event_name=(node.get("name") or "").strip(), event_url=url,
-        city=city, region=region, country="India", venue_name=(venue or "").strip(),
-        artists=artists, curator=org.get("name") if isinstance(org, dict) else None,
+        city=(city or "").strip(), region=(region or "").strip(), country=(country or "").strip(),
+        venue_name=(venue or "").strip(), artists=artists,
+        curator=org.get("name") if isinstance(org, dict) else None,
         category=(keywords.split(",")[0].strip() if isinstance(keywords, str) and keywords else "Event"),
-        language="", currency=currency or "INR", price_min=price,
+        language="", currency=currency, price_min=price,
         is_free=(price == 0.0), starts_at=_parse_dt(node.get("startDate")),
-        capacity=None, tickets_sold=None, verified=True, fetched_at=fetched_at or datetime.now(UTC),
+        capacity=None, tickets_sold=None, verified=True,
+        image_url=image if isinstance(image, str) else None,
+        fetched_at=fetched_at or datetime.now(UTC),
     )
+
+
+def event_from_district(node: dict[str, Any], url: str, *, fetched_at: datetime | None = None) -> TicketingEvent:
+    """Map a District schema.org Event (JSON-LD) to the canonical TicketingEvent."""
+    slug = url.rstrip("/").split("/events/")[-1]
+    return event_from_jsonld(node, url, source="district", source_event_id=slug, country="India", fetched_at=fetched_at)
 
 
 def event_from_skillbox(data: dict[str, Any], *, fetched_at: datetime | None = None) -> TicketingEvent:
@@ -245,6 +302,110 @@ def event_from_skillbox(data: dict[str, Any], *, fetched_at: datetime | None = N
         category="Event", language="", currency="INR", price_min=price,
         is_free=(price == 0.0), starts_at=starts_dt, capacity=None, tickets_sold=None,
         verified=bool(data.get("status")), fetched_at=fetched_at or datetime.now(UTC),
+    )
+
+
+def event_from_townscript(payload: dict[str, Any], *, fetched_at: datetime | None = None) -> TicketingEvent:
+    """Map a Townscript ``summary-page-data`` record (its inner ``data`` object) to TicketingEvent.
+
+    The summary endpoint omits ticket price (only a ``freeEventFlag``), so ``price_min`` is None
+    like the other sitemap providers. ``verified`` folds in Townscript's own spam signal — the
+    platform is DIY, so it carries listing spam (fake pharma/"training" events) with a spamScore.
+    """
+    event = payload.get("event") or {}
+    user = payload.get("user") or {}
+    topics = payload.get("topics") or []
+    slug = event.get("shortName") or ""
+    topic = topics[0].get("topicName") if topics and isinstance(topics[0], dict) else None
+    category = topic or (event.get("eventTopic") or "Event").replace("_", " ").title()
+    return TicketingEvent(
+        source="townscript",
+        source_event_id=str(event.get("id") or slug),
+        event_slug=slug,
+        event_name=(event.get("name") or "").strip(),
+        event_url=f"{TOWNSCRIPT_BASE}/e/{slug}",
+        city=(event.get("city") or "").strip(),
+        region=(event.get("venueState") or "").strip(),
+        country=(event.get("country") or "").strip(),
+        venue_name=(event.get("venueLocation") or "").strip(),
+        artists=[],
+        curator=(user.get("name") or event.get("organizerName") or None),
+        category=category,
+        language="",
+        currency=(user.get("currencyCode") or "INR").upper(),
+        price_min=None,
+        is_free=bool(event.get("freeEventFlag")),
+        starts_at=_parse_dt(event.get("startTime")),
+        capacity=None,
+        tickets_sold=None,
+        verified=bool(event.get("live") and not event.get("draft") and float(event.get("spamScore") or 0) == 0),
+        image_url=(event.get("absoluteBannerImageUrl") or event.get("absoluteMobileImageUrl") or None),
+        fetched_at=fetched_at or datetime.now(UTC),
+    )
+
+
+# Indian states/UTs — Knowafest tags each fest with its state via a /category/<State> link,
+# which is how we recover the region from an otherwise unstructured college-fest page.
+_INDIA_STATES = frozenset({
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat",
+    "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala", "Madhya Pradesh",
+    "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan",
+    "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Puducherry", "Chandigarh",
+    "Andaman and Nicobar Islands", "Dadra and Nagar Haveli", "Daman and Diu", "Lakshadweep",
+})
+
+
+def _knowafest_region(html: str) -> str:
+    """Recover the state from the first ``/category/<State>`` link whose text is an Indian state."""
+    for text in re.findall(r'/category/[A-Za-z_]+"[^>]*>\s*([^<]+?)\s*</a>', html):
+        cleaned = text.strip()
+        if cleaned in _INDIA_STATES:
+            return cleaned
+    return ""
+
+
+def event_from_knowafest(html: str, event_ref: str, *, fetched_at: datetime | None = None) -> TicketingEvent:
+    """Parse a Knowafest college-fest page (static SSR HTML, no JSON-LD) into a TicketingEvent.
+
+    The stable signal is ``og:title`` = ``"Name, College, Category, City"``. State, fee, and
+    date are best-effort from labeled HTML; the value here is long-tail student-event discovery,
+    not price/demand truth.
+    """
+    og = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    title = (og.group(1) if og else "").strip()
+    if not title:
+        fallback = re.search(r"<title>([^<]+)</title>", html, re.IGNORECASE)
+        title = (fallback.group(1) if fallback else "").strip()
+    parts = [p.strip() for p in title.split(",") if p.strip()]
+    city = parts[-1] if parts else ""
+    category = parts[-2] if len(parts) >= 2 else "Fest"
+    college = parts[-3] if len(parts) >= 3 else ""
+    name = ", ".join(parts[:-3]).strip() if len(parts) > 3 else (parts[0] if parts else "")
+
+    price = None
+    fee = re.search(r"Registration Fee[s]?:?\s*(?:<[^>]+>\s*)*₹\s*([\d,]+)", html)
+    if fee:
+        price = _to_float(fee.group(1).replace(",", ""))
+
+    starts = None
+    dates = re.search(r"Event Dates?:\s*(\d{2})\.(\d{2})\.(\d{4})", html)
+    if dates:
+        day, month, year = dates.groups()
+        starts = _parse_dt(f"{year}-{month}-{day}T00:00:00")
+
+    img = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    slug = event_ref.rstrip("/").split("/explore/events/")[-1]
+    return TicketingEvent(
+        source="knowafest", source_event_id=slug, event_slug=slug,
+        event_name=name, event_url=f"{KNOWAFEST_BASE}/explore/events/{slug}",
+        city=city, region=_knowafest_region(html), country="India",
+        venue_name=college, artists=[], curator=college or None,
+        category=category or "Fest", language="", currency="INR",
+        price_min=price, is_free=bool(price is not None and price == 0.0),
+        starts_at=starts, capacity=None, tickets_sold=None,
+        verified=bool(name), image_url=(img.group(1) if img else None),
+        fetched_at=fetched_at or datetime.now(UTC),
     )
 
 
@@ -375,10 +536,20 @@ class BoshowProvider:
         raise ValueError(f"boshow: event not found for ref {event_ref!r}")
 
 
-def _sitemap_slugs(xml: str, limit: int) -> list[str]:
-    locs = re.findall(r"<loc>([^<]+)</loc>", xml)
-    slugs = [loc.rstrip("/").split("/events/")[-1] for loc in locs if "/events/" in loc]
+def _sitemap_locs(xml: str) -> list[str]:
+    return re.findall(r"<loc>([^<]+)</loc>", xml)
+
+
+def _sitemap_slugs(xml: str, limit: int, sep: str = "/events/") -> list[str]:
+    slugs = [loc.rstrip("/").split(sep)[-1] for loc in _sitemap_locs(xml) if sep in loc]
     return slugs[:limit]
+
+
+def _maybe_gunzip(content: bytes, url: str) -> str:
+    """Decode a sitemap body, transparently gunzipping ``.xml.gz`` children (Meetup ships these)."""
+    if url.endswith(".gz") or content[:2] == b"\x1f\x8b":
+        content = gzip.decompress(content)
+    return content.decode("utf-8", "replace")
 
 
 class DistrictProvider:
@@ -429,6 +600,176 @@ class SkillboxProvider:
         return event_from_skillbox(payload["data"])
 
 
+class TownscriptProvider:
+    """public_scrape of Townscript (BMS-owned DIY ticketing). robots.txt is wide-open for ``*``.
+
+    The event page is an Angular SPA (server HTML is just a loader shell), so extraction uses the
+    app's own JSON API ``/api/eventdata/summary-page-data?eventCode=<slug>``. That endpoint 401s
+    unless the request carries an ``Authorization`` header holding Townscript's *static, anonymous*
+    ROLE_CLIENT token (``sub: api@townscript.com``) — a public API key the app ships in cleartext
+    inside its JS bundle, identical for every logged-out visitor. The provider reads that public
+    token from the bundle and replays it: no user login, no per-session credential, robots
+    respected. Discovery is the open ``upcoming-event-pages`` sitemap. Plain httpx.
+    """
+
+    name = "townscript"
+    _token: ClassVar[str | None] = None  # cached public client token (per process)
+
+    async def _client_token(self, client: httpx.AsyncClient) -> str:
+        if TownscriptProvider._token:
+            return TownscriptProvider._token
+        shell = (await client.get(f"{TOWNSCRIPT_BASE}/")).text
+        match = re.search(r"(main-es2015\.[0-9a-f]+\.js)", shell) or re.search(r"(main[.\-][0-9a-f]+\.js)", shell)
+        if not match:
+            raise ValueError("townscript: could not locate app bundle for client token")
+        bundle = (await client.get(f"{TOWNSCRIPT_BASE}/{match.group(1)}")).text
+        token = re.search(r'getToken\(\)\{return"([A-Za-z0-9_.\-]+)"', bundle)
+        if not token:
+            raise ValueError("townscript: anonymous client token not found in bundle")
+        TownscriptProvider._token = token.group(1)
+        return TownscriptProvider._token
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        url = f"{TOWNSCRIPT_BASE}/sitemap/upcoming-event-pages.xml"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return _sitemap_slugs(r.text, limit, sep="/e/")
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        slug = event_ref.rstrip("/").split("/e/")[-1] if "/e/" in event_ref else event_ref
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            token = await self._client_token(c)
+            r = await c.get(
+                f"{TOWNSCRIPT_BASE}/api/eventdata/summary-page-data",
+                params={"eventCode": slug},
+                headers={"Authorization": token, "X-Requested-With": "XMLHttpRequest"},
+            )
+            r.raise_for_status()
+            outer = r.json()
+        raw = outer.get("data")
+        if not raw:
+            raise ValueError(f"townscript: no data for eventCode {slug!r}")
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+        return event_from_townscript(payload)
+
+
+class AllEventsProvider:
+    """public_scrape of AllEvents.in — an event *aggregator*, so primarily a discovery/dedup source.
+
+    robots.txt sets ``Crawl-delay: 10`` and respects ClaudeBot; each discover/extract makes a single
+    request, so we stay well within it. Discovery pulls event links off a city page; extraction reads
+    each event page's schema.org Event JSON-LD (shared ``event_from_jsonld``). Plain httpx.
+    """
+
+    name = "allevents"
+    _EVENT_HREF = re.compile(r'https://allevents\.in/[^/"\s]+/[^"\s]+?-tickets/\d+')
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        # AllEvents city slugs are quirky (pune-in, bhopal, ...); pass the caller's city through,
+        # defaulting to the global "online" listing when none is given.
+        slug = (city or "online").strip().lower().replace(" ", "-")
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(f"{ALLEVENTS_BASE}/{slug}")
+            r.raise_for_status()
+            return list(dict.fromkeys(self._EVENT_HREF.findall(r.text)))[:limit]
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        url = event_ref if event_ref.startswith("http") else f"{ALLEVENTS_BASE}/{event_ref.lstrip('/')}"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            events = _jsonld_events(r.text)
+        if not events:
+            raise ValueError(f"allevents: no Event JSON-LD at {url}")
+        eid = url.rstrip("/").split("-tickets/")[-1]
+        return event_from_jsonld(events[0], url, source="allevents", source_event_id=eid, country="")
+
+
+class LumaProvider:
+    """public_scrape of Luma (lu.ma -> luma.com). Server HTML embeds schema.org Event JSON-LD, so
+    plain httpx suffices; discovery walks the sitemap index (flat ``luma.com/<slug>`` URLs). Global,
+    community/grassroots events (often virtual meetups)."""
+
+    name = "luma"
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            idx = await c.get(LUMA_SITEMAP_INDEX)
+            idx.raise_for_status()
+            children = _sitemap_locs(idx.text)
+            if not children:
+                return []
+            child = await c.get(children[0])
+            child.raise_for_status()
+            return [loc.rstrip("/").rsplit("/", 1)[-1] for loc in _sitemap_locs(child.text)][:limit]
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        slug = event_ref.rstrip("/").rsplit("/", 1)[-1]
+        url = f"{LUMA_BASE}/{slug}"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            events = _jsonld_events(r.text)
+        if not events:
+            raise ValueError(f"luma: no Event JSON-LD at {url}")
+        return event_from_jsonld(events[0], url, source="luma", source_event_id=slug, country="")
+
+
+class MeetupProvider:
+    """public_scrape of Meetup. Event detail pages are robots-allowed and SSR schema.org Event
+    JSON-LD; discovery walks the events sitemap index (children are gzipped ``.xml.gz``). The
+    GraphQL/``/api`` paths are robots-disallowed, so this never touches them. Plain httpx."""
+
+    name = "meetup"
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        async with httpx.AsyncClient(timeout=45.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            idx = await c.get(MEETUP_EVENTS_SITEMAP)
+            idx.raise_for_status()
+            children = _sitemap_locs(idx.text)
+            if not children:
+                return []
+            raw = await c.get(children[0])
+            raw.raise_for_status()
+            xml = _maybe_gunzip(raw.content, children[0])
+            return [u for u in _sitemap_locs(xml) if "/events/" in u][:limit]
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        url = event_ref if event_ref.startswith("http") else f"{MEETUP_BASE}/{event_ref.lstrip('/')}"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            events = _jsonld_events(r.text)
+        if not events:
+            raise ValueError(f"meetup: no Event JSON-LD at {url}")
+        eid = url.rstrip("/").split("/events/")[-1] if "/events/" in url else url.rstrip("/").rsplit("/", 1)[-1]
+        return event_from_jsonld(events[0], url, source="meetup", source_event_id=eid, country="")
+
+
+class KnowafestProvider:
+    """public_scrape of Knowafest (college-fest listings). robots.txt is wide-open with a single
+    sitemap. Pages are static SSR HTML (no JSON-LD), so extraction parses the stable og:title plus
+    labeled fee/date fields (``event_from_knowafest``). Plain httpx."""
+
+    name = "knowafest"
+
+    async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(f"{KNOWAFEST_BASE}/sitemap.xml")
+            r.raise_for_status()
+            return _sitemap_slugs(r.text, limit, sep="/explore/events/")
+
+    async def extract(self, event_ref: str) -> TicketingEvent:
+        slug = event_ref.rstrip("/").split("/explore/events/")[-1]
+        url = f"{KNOWAFEST_BASE}/explore/events/{slug}"
+        async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            html = r.text
+        return event_from_knowafest(html, event_ref)
+
+
 class PartnerFeedProvider:
     """Placeholder for platforms that are not compliantly scrapable (e.g. BookMyShow).
 
@@ -455,6 +796,16 @@ def get_provider() -> TicketingProvider:
         return DistrictProvider()
     if provider == "skillbox":
         return SkillboxProvider()
+    if provider == "townscript":
+        return TownscriptProvider()
+    if provider == "allevents":
+        return AllEventsProvider()
+    if provider == "luma":
+        return LumaProvider()
+    if provider == "meetup":
+        return MeetupProvider()
+    if provider == "knowafest":
+        return KnowafestProvider()
     if provider in ("bookmyshow", "bms"):
         return PartnerFeedProvider("bookmyshow")
     return MockTicketingProvider()

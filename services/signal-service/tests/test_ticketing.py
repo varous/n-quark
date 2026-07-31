@@ -4,12 +4,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 from signal_service.adapters.ticketing import (
+    AllEventsProvider,
+    KnowafestProvider,
+    LumaProvider,
+    MeetupProvider,
     MockTicketingProvider,
+    TownscriptProvider,
     _india_city_region,
     _jsonld_events,
+    _jsonld_price,
+    _maybe_gunzip,
+    _sitemap_slugs,
     event_from_boshow,
     event_from_district,
+    event_from_jsonld,
+    event_from_knowafest,
     event_from_skillbox,
+    event_from_townscript,
+    get_provider,
     normalize_event,
     split_lineup,
     split_location,
@@ -133,6 +145,162 @@ def test_skillbox_event_from_details() -> None:
     assert ev.city == "Goa" and ev.venue_name == "DPedro"
     assert ev.price_min == 1999.0 and ev.currency == "INR"
     assert ev.starts_at is not None and ev.fill_ratio is None
+
+
+# --- Townscript (reverse-engineered summary-page-data JSON; captured live) -----------------
+_TOWNSCRIPT_SAMPLE = {
+    "event": {
+        "id": 61839, "name": "TIBCO BusinessWorks BW 6.X Online Training",
+        "shortName": "tibco-businessworks-bw-6x-online-training-204343",
+        "venueLocation": "London", "city": "London", "venueState": "England",
+        "country": "United Kingdom", "startTime": "2018-02-27T23:30:00.000+0000",
+        "freeEventFlag": False, "eventTopic": "BUSINESS", "soldOutFlag": True,
+        "live": True, "draft": False, "spamScore": 0.00,
+    },
+    "user": {"name": "virtualnuggetsradha", "currencyCode": "INR"},
+    "topics": [{"topicName": "Education"}, {"topicName": "Business"}],
+}
+
+
+def test_townscript_event_from_summary() -> None:
+    ev = event_from_townscript(_TOWNSCRIPT_SAMPLE)
+    assert ev.source == "townscript" and ev.source_event_id == "61839"
+    assert ev.event_name == "TIBCO BusinessWorks BW 6.X Online Training"
+    assert ev.city == "London" and ev.region == "England" and ev.country == "United Kingdom"
+    assert ev.venue_name == "London" and ev.curator == "virtualnuggetsradha"
+    assert ev.category == "Education"  # topics[0] wins over the raw eventTopic
+    assert ev.currency == "INR" and ev.price_min is None  # summary API omits price
+    assert ev.artists == [] and ev.fill_ratio is None
+    assert ev.starts_at is not None  # proves fromisoformat handles the '+0000' offset
+    assert ev.verified is True
+    assert ev.event_url.endswith("/e/tibco-businessworks-bw-6x-online-training-204343")
+
+
+def test_townscript_spam_score_flips_verified() -> None:
+    spammy = {**_TOWNSCRIPT_SAMPLE, "event": {**_TOWNSCRIPT_SAMPLE["event"], "spamScore": 0.9}}
+    assert event_from_townscript(spammy).verified is False
+    draft = {**_TOWNSCRIPT_SAMPLE, "event": {**_TOWNSCRIPT_SAMPLE["event"], "draft": True}}
+    assert event_from_townscript(draft).verified is False
+
+
+# --- AllEvents (aggregator; schema.org JSON-LD with PostalAddress + AggregateOffer) --------
+_ALLEVENTS_JSONLD = {
+    "@type": "Event", "name": "The Edge Of Nutrition 2026",
+    "startDate": "2026-08-08T09:00:00+05:30",
+    "location": {"@type": "Place", "name": "The Chancery Pavilion", "address": {
+        "@type": "PostalAddress", "streetAddress": "135, Residency Rd, Bengaluru, Karnataka 560025, India",
+        "postalCode": "560025", "addressLocality": "Bangalore", "addressRegion": "KA", "addressCountry": "IN"}},
+    "offers": [
+        {"@type": "AggregateOffer", "priceCurrency": "INR", "lowPrice": "1299.00", "highPrice": "1899.00", "price": "1299.00"},
+        {"@type": "Offer", "priceCurrency": "INR", "price": "1899.00"},
+    ],
+}
+
+
+def test_allevents_event_from_jsonld() -> None:
+    ev = event_from_jsonld(_ALLEVENTS_JSONLD, "https://allevents.in/bangalore/x-tickets/80003694098114",
+                           source="allevents", source_event_id="80003694098114", country="")
+    assert ev.source == "allevents" and ev.source_event_id == "80003694098114"
+    assert ev.event_name == "The Edge Of Nutrition 2026"
+    assert ev.city == "Bangalore" and ev.region == "KA" and ev.country == "IN"
+    assert ev.venue_name == "The Chancery Pavilion"
+    assert ev.price_min == 1299.0 and ev.currency == "INR"  # lowest across offers
+    assert ev.is_free is False and ev.artists == [] and ev.fill_ratio is None
+
+
+# --- Luma (SSR JSON-LD; VirtualLocation + free USD offer) ---------------------------------
+_LUMA_JSONLD = {
+    "@type": "Event", "name": "Artizen LIVE #84",
+    "location": {"@type": "VirtualLocation", "name": "Online Event", "url": "https://luma.com/artizen-live-84"},
+    "startDate": "2026-07-30T10:00:00.000-07:00",
+    "organizer": [{"@type": "Organization", "name": "Artizen"}, {"@type": "Person", "name": "Artizen"}],
+    "offers": [{"@type": "Offer", "name": "General Admission", "price": 0, "priceCurrency": "usd"}],
+}
+
+
+def test_luma_event_from_jsonld() -> None:
+    ev = event_from_jsonld(_LUMA_JSONLD, "https://luma.com/artizen-live-84",
+                           source="luma", source_event_id="artizen-live-84", country="")
+    assert ev.source == "luma" and ev.event_name == "Artizen LIVE #84"
+    assert ev.venue_name == "Online Event" and ev.city == "" and ev.country == ""
+    assert ev.currency == "USD" and ev.price_min == 0.0 and ev.is_free is True
+    assert ev.curator == "Artizen" and ev.starts_at is not None
+
+
+# --- Meetup (SSR JSON-LD; null offers/performer, org name with comma) ---------------------
+_MEETUP_JSONLD = {
+    "@type": "Event", "name": "THE ABUNDANCE CLUB: Empower Your Life ",
+    "startDate": "2026-07-29T19:30:00+01:00",
+    "location": {"@type": "VirtualLocation", "url": "https://www.meetup.com/x/events/315775795/"},
+    "offers": None, "performer": None,
+    "organizer": {"@type": "Organization", "name": "The Law of Attraction Centre, London"},
+}
+
+
+def test_meetup_event_from_jsonld() -> None:
+    ev = event_from_jsonld(_MEETUP_JSONLD, "https://www.meetup.com/x/events/315775795/",
+                           source="meetup", source_event_id="315775795", country="")
+    assert ev.source == "meetup" and ev.event_name == "THE ABUNDANCE CLUB: Empower Your Life"
+    assert ev.price_min is None and ev.currency == "INR"  # null offers -> no price, default ccy
+    assert ev.curator == "The Law of Attraction Centre, London"
+    assert ev.venue_name == "" and ev.artists == [] and ev.fill_ratio is None
+
+
+def test_jsonld_price_picks_lowest_and_uppercases_currency() -> None:
+    assert _jsonld_price([{"price": "300", "priceCurrency": "inr"}, {"lowPrice": 150}]) == (150.0, "INR")
+    assert _jsonld_price(None) == (None, "INR")
+
+
+# --- Knowafest (static SSR HTML; og:title + state link + labeled fee/date) ----------------
+_KNOWAFEST_HTML = """
+<html><head>
+<meta property="og:title"
+ content="AVANZARE V19.0 - Hackathon Phase II, Kongu Engineering College, Hackathon, Erode" />
+</head><body>
+<a href="/category/Hackathon" target="_blank">Hackathon</a>
+<a href="/category/Tamil_Nadu" target="_blank" >Tamil Nadu </a>
+<h5>Registration Fees</h5><p>Registration Fee: &#8377;420 Per Member</p>
+<span>Event Dates: 07.08.2026 &#8211; 08.08.2026</span>
+</body></html>
+""".replace("&#8377;", "₹")
+
+
+def test_knowafest_event_from_html() -> None:
+    ref = "https://www.knowafest.com/explore/events/2026/07/2904-avanzare-v19-0-hackathon-phase-ii"
+    ev = event_from_knowafest(_KNOWAFEST_HTML, ref)
+    assert ev.source == "knowafest"
+    assert ev.event_name == "AVANZARE V19.0 - Hackathon Phase II"
+    assert ev.venue_name == "Kongu Engineering College" and ev.curator == "Kongu Engineering College"
+    assert ev.category == "Hackathon" and ev.city == "Erode" and ev.region == "Tamil Nadu"
+    assert ev.price_min == 420.0 and ev.currency == "INR"
+    assert ev.starts_at is not None and ev.starts_at.year == 2026 and ev.starts_at.month == 8
+    assert ev.source_event_id == "2026/07/2904-avanzare-v19-0-hackathon-phase-ii"
+
+
+# --- shared plumbing -----------------------------------------------------------------------
+def test_sitemap_slugs_respects_custom_separator() -> None:
+    xml = ("<urlset><url><loc>https://x.com/e/alpha-101/</loc></url>"
+           "<url><loc>https://x.com/e/beta-202</loc></url>"
+           "<url><loc>https://x.com/about</loc></url></urlset>")
+    assert _sitemap_slugs(xml, 10, sep="/e/") == ["alpha-101", "beta-202"]
+
+
+def test_maybe_gunzip_transparently_decompresses() -> None:
+    import gzip as _gz
+    payload = b"<urlset><url><loc>https://www.meetup.com/g/events/1/</loc></url></urlset>"
+    assert _maybe_gunzip(_gz.compress(payload), "https://www.meetup.com/sw_events_1.xml.gz") == payload.decode()
+    assert _maybe_gunzip(payload, "https://www.meetup.com/plain.xml") == payload.decode()
+
+
+def test_get_provider_resolves_new_enum_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    cases = {
+        "townscript": TownscriptProvider, "allevents": AllEventsProvider,
+        "luma": LumaProvider, "meetup": MeetupProvider, "knowafest": KnowafestProvider,
+    }
+    for value, cls in cases.items():
+        monkeypatch.setattr(settings, "ticketing_provider", value)
+        provider = get_provider()
+        assert isinstance(provider, cls) and provider.name == value
 
 
 @pytest.fixture()
