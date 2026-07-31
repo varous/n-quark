@@ -61,3 +61,30 @@ class NodeListResponse(BaseModel):
 class GraphStats(BaseModel):
     nodes: int
     edges: int
+
+
+class EventFeedItem(BaseModel):
+    id: str
+    name: str | None = None
+    category: str | None = None
+    city: str | None = None
+    region: str | None = None
+    venue: str | None = None
+    artists: list[str] = Field(default_factory=list)
+    starts_at: str | None = None
+    price_min: float | None = None
+    currency: str | None = None
+    is_free: bool = False
+    fill_ratio: float | None = None
+    image_url: str | None = None
+    source: str | None = None
+    source_url: str | None = None
+    redistribution_tier: str = "open"
+    updated_at: str | None = None
+
+
+class EventFeedResponse(BaseModel):
+    count: int
+    limit: int
+    offset: int
+    events: list[EventFeedItem]

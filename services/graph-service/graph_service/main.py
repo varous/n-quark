@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 
 from graph_service.config import settings
+from graph_service.routes.events import router as events_router
 from graph_service.routes.graph import router as graph_router
 
 app = FastAPI(
@@ -12,6 +13,7 @@ app = FastAPI(
 )
 
 app.include_router(graph_router)
+app.include_router(events_router)
 
 
 @app.get("/health")

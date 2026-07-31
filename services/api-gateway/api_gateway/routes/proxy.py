@@ -60,3 +60,10 @@ async def proxy_graph(request: Request, path: str = "") -> object:
 @router.api_route("/v1/analytics/{path:path}", methods=["GET"])
 async def proxy_analytics(request: Request, path: str = "") -> object:
     return await forward_request(_target("analytics", "/v1/analytics", path), request)
+
+
+@router.api_route("/v1/events", methods=["GET"])
+@router.api_route("/v1/events/{path:path}", methods=["GET"])
+async def proxy_events(request: Request, path: str = "") -> object:
+    # The consumer events feed (crawl-space sync) is served by graph-service.
+    return await forward_request(_target("graph", "/v1/events", path), request)

@@ -11,6 +11,7 @@ can be inlined into Cypher safely.
 
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Literal, Protocol
 
 _REL_RE = re.compile(r"[^A-Z0-9_]")
@@ -64,13 +65,15 @@ class InMemoryGraphStore:
         self._edges: list[Edge] = []
 
     def upsert_node(self, node: Node) -> Node:
+        now = datetime.now(UTC).isoformat()  # store-managed last-write, for incremental sync
         existing = self._nodes.get(node.id)
         if existing is not None:
             if node.type and node.type != "unknown":
                 existing.type = node.type
             existing.properties.update(node.properties)
+            existing.properties["updated_at"] = now
             return existing
-        created = Node(node.id, node.type or "unknown", dict(node.properties))
+        created = Node(node.id, node.type or "unknown", {**node.properties, "updated_at": now})
         self._nodes[node.id] = created
         return created
 
@@ -134,12 +137,14 @@ class Neo4jGraphStore:
             )
 
     def upsert_node(self, node: Node) -> Node:
+        now = datetime.now(UTC).isoformat()  # store-managed last-write, for incremental sync
         with self._driver.session() as session:
             session.run(
-                "MERGE (n:Entity {id: $id}) SET n.type = $type, n += $props",
+                "MERGE (n:Entity {id: $id}) SET n.type = $type, n += $props, n.updated_at = $now",
                 id=node.id,
                 type=node.type,
                 props=node.properties,
+                now=now,
             )
         return node
 
