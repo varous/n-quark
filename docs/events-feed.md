@@ -36,7 +36,9 @@ Served by graph-service, exposed through the api-gateway (CORS enabled there). R
 |---|---|
 | `id` | canonical event id (`event:<slug>`) — dedup key across sources |
 | `name`, `category`, `city`, `region`, `venue` | display fields |
-| `artists` | lineup (canonical artist display names) |
+| `venue_id`, `region_id` | **canonical, deduped ids** (`venue:<slug>`, `region:<slug>`) — key communities on these, not on the display strings |
+| `organizer` | organizer/curator name (not a canonical entity yet — name only) |
+| `artists`, `artist_ids` | lineup display names + their canonical `artist:<slug>` ids |
 | `starts_at`, `price_min`, `currency`, `is_free` | when / cost |
 | `fill_ratio` | tickets sold ÷ capacity, where the platform exposes it (Boshow); else null |
 | `image_url` | platform-hosted poster (hotlink; not re-hosted) |

@@ -69,8 +69,12 @@ class EventFeedItem(BaseModel):
     category: str | None = None
     city: str | None = None
     region: str | None = None
+    region_id: str | None = None
     venue: str | None = None
+    venue_id: str | None = None
+    organizer: str | None = None
     artists: list[str] = Field(default_factory=list)
+    artist_ids: list[str] = Field(default_factory=list)
     starts_at: str | None = None
     price_min: float | None = None
     currency: str | None = None

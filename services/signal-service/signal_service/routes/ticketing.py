@@ -200,6 +200,8 @@ def _graph_event_props(event: TicketingEvent) -> dict[str, object]:
         "source": event.source,  # canonical id is event:{slug}; carry source for the feed's tier
         "source_url": event.event_url,  # crawl-space link-out target for link_only events
     }
+    if event.curator:
+        props["organizer"] = event.curator  # name only — organizers aren't canonical entities yet
     if event.starts_at is not None:
         props["starts_at"] = event.starts_at.isoformat()
     if event.price_min is not None:

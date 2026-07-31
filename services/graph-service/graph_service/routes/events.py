@@ -28,22 +28,26 @@ def _feed_item(node, store: GraphStore) -> EventFeedItem:
     source = p.get("source") or _source_of(node.id)
     price = p.get("price_min")
     verified = bool(p.get("verified", False))
-    venue = region = None
+    # Canonical, deduped ids from the neighbours — the keys crawl-space resolves communities on.
+    venue = venue_id = region = region_id = None
     artists: list[str] = []
+    artist_ids: list[str] = []
     for nb in store.neighbors(node.id, direction="out"):
         label = nb.node.properties.get("display_name") or nb.node.id
         if nb.relationship == "OCCURS_AT":
-            venue = label
+            venue, venue_id = label, nb.node.id
         elif nb.relationship == "IN_REGION":
-            region = label
+            region, region_id = label, nb.node.id
         elif nb.relationship == "FEATURES":
             artists.append(label)
+            artist_ids.append(nb.node.id)
     return EventFeedItem(
         id=node.id, name=p.get("display_name"), category=p.get("category"), city=p.get("city"),
-        region=region, venue=venue, artists=artists, starts_at=p.get("starts_at"),
-        price_min=price, currency=p.get("currency"), is_free=(price == 0),
-        fill_ratio=p.get("fill_ratio"), image_url=p.get("image_url"), source=source,
-        source_url=p.get("source_url"),
+        region=region, region_id=region_id, venue=venue, venue_id=venue_id,
+        organizer=p.get("organizer"), artists=artists, artist_ids=artist_ids,
+        starts_at=p.get("starts_at"), price_min=price, currency=p.get("currency"),
+        is_free=(price == 0), fill_ratio=p.get("fill_ratio"), image_url=p.get("image_url"),
+        source=source, source_url=p.get("source_url"),
         redistribution_tier=redistribution_tier(source, price, verified),
         updated_at=p.get("updated_at"),
     )

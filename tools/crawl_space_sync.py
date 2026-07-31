@@ -39,9 +39,10 @@ def ensure_schema(db: sqlite3.Connection) -> None:
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS events (
-            id TEXT PRIMARY KEY, name TEXT, category TEXT, city TEXT, region TEXT, venue TEXT,
-            artists TEXT, starts_at TEXT, price_min REAL, currency TEXT, is_free INTEGER,
-            fill_ratio REAL, image_url TEXT, source TEXT, source_url TEXT,
+            id TEXT PRIMARY KEY, name TEXT, category TEXT, city TEXT,
+            region TEXT, region_id TEXT, venue TEXT, venue_id TEXT, organizer TEXT,
+            artists TEXT, artist_ids TEXT, starts_at TEXT, price_min REAL, currency TEXT,
+            is_free INTEGER, fill_ratio REAL, image_url TEXT, source TEXT, source_url TEXT,
             redistribution_tier TEXT, updated_at TEXT
         )
         """
@@ -67,21 +68,27 @@ def set_cursor(db: sqlite3.Connection, value: str) -> None:
 def upsert_event(db: sqlite3.Connection, e: dict) -> None:
     db.execute(
         """
-        INSERT INTO events (id, name, category, city, region, venue, artists, starts_at,
-            price_min, currency, is_free, fill_ratio, image_url, source, source_url,
-            redistribution_tier, updated_at)
-        VALUES (:id, :name, :category, :city, :region, :venue, :artists, :starts_at,
-            :price_min, :currency, :is_free, :fill_ratio, :image_url, :source, :source_url,
-            :redistribution_tier, :updated_at)
+        INSERT INTO events (id, name, category, city, region, region_id, venue, venue_id,
+            organizer, artists, artist_ids, starts_at, price_min, currency, is_free, fill_ratio,
+            image_url, source, source_url, redistribution_tier, updated_at)
+        VALUES (:id, :name, :category, :city, :region, :region_id, :venue, :venue_id,
+            :organizer, :artists, :artist_ids, :starts_at, :price_min, :currency, :is_free,
+            :fill_ratio, :image_url, :source, :source_url, :redistribution_tier, :updated_at)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, category=excluded.category, city=excluded.city,
-            region=excluded.region, venue=excluded.venue, artists=excluded.artists,
-            starts_at=excluded.starts_at, price_min=excluded.price_min, currency=excluded.currency,
-            is_free=excluded.is_free, fill_ratio=excluded.fill_ratio, image_url=excluded.image_url,
-            source=excluded.source, source_url=excluded.source_url,
+            region=excluded.region, region_id=excluded.region_id, venue=excluded.venue,
+            venue_id=excluded.venue_id, organizer=excluded.organizer, artists=excluded.artists,
+            artist_ids=excluded.artist_ids, starts_at=excluded.starts_at, price_min=excluded.price_min,
+            currency=excluded.currency, is_free=excluded.is_free, fill_ratio=excluded.fill_ratio,
+            image_url=excluded.image_url, source=excluded.source, source_url=excluded.source_url,
             redistribution_tier=excluded.redistribution_tier, updated_at=excluded.updated_at
         """,
-        {**e, "artists": json.dumps(e.get("artists") or []), "is_free": int(bool(e.get("is_free")))},
+        {
+            **e,
+            "artists": json.dumps(e.get("artists") or []),
+            "artist_ids": json.dumps(e.get("artist_ids") or []),
+            "is_free": int(bool(e.get("is_free"))),
+        },
     )
 
 

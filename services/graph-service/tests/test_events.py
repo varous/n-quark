@@ -59,9 +59,9 @@ def test_feed_excludes_spam_by_default(seeded: TestClient) -> None:
 def test_feed_assembles_relationships_and_tier(seeded: TestClient) -> None:
     ev = next(e for e in seeded.get("/v1/events").json()["events"] if e["id"] == "boshow:show:1")
     assert ev["redistribution_tier"] == "open"
-    assert ev["venue"] == "Skinny Mos"
-    assert ev["region"] == "West Bengal"
-    assert ev["artists"] == ["Skinny Mos"]
+    assert ev["venue"] == "Skinny Mos" and ev["venue_id"] == "boshow:venue:skinny-mos"
+    assert ev["region"] == "West Bengal" and ev["region_id"] == "region:west-bengal"
+    assert ev["artists"] == ["Skinny Mos"] and ev["artist_ids"] == ["artist:skinny-mos"]
     assert ev["is_free"] is False and ev["image_url"] == "https://img/1.jpg"
 
 
