@@ -4,6 +4,7 @@ from signal_service.adapters.ticketing import (
     TicketingClient,
     TicketingEvent,
     artist_handle,
+    commercial_state,
     event_handle,
     normalize_event,
     venue_handle,
@@ -11,6 +12,7 @@ from signal_service.adapters.ticketing import (
 from signal_service.clients.entity_client import EntityServiceClient
 from signal_service.clients.graph_client import GraphServiceClient
 from signal_service.clients.observation_client import ObservationServiceClient
+from signal_service.clients.shadow_client import ShadowLedgerClient
 from signal_service.config import settings
 from signal_service.graph_projection import project_ticketing_graph
 
@@ -112,6 +114,26 @@ async def ingest_event(
     except Exception:  # noqa: BLE001 — graph projection is best-effort
         graph_result = None
 
+    # Shadow Ledger (Phase 1): record the event's public commercial state so repeated ingests accrue
+    # a transition history. Best-effort + feature-flagged; OFF by default so ingest behaviour is
+    # unchanged unless explicitly enabled, and a failure here never breaks ingestion.
+    shadow_attempted = (
+        settings.shadow_ledger_enabled and event.source in settings.shadow_ledger_source_set
+    )
+    shadow_result: dict[str, object] | None = None
+    if shadow_attempted:
+        try:
+            shadow_result = await ShadowLedgerClient().observe(
+                canonical_event_id=event_cid,
+                source_id=event.source,
+                commercial_state=commercial_state(event),
+                source_record_id=event.source_event_id,
+                provenance={"source_url": event.event_url},
+                epistemic_status="observed_public_state",
+            )
+        except Exception:  # noqa: BLE001 — shadow ledger is best-effort, must not break ingest
+            shadow_result = None
+
     result: dict[str, object] = {
         **_event_summary(event),
         "resolved": resolved,
@@ -120,6 +142,8 @@ async def ingest_event(
         "observations_created": len(persisted),
         "observations": persisted,
     }
+    if shadow_attempted:
+        result["shadow_ledger"] = shadow_result
 
     if trace:
         result["trace"] = [
@@ -167,6 +191,31 @@ async def ingest_event(
                 ],
             },
         ]
+        # Additive stage — only present when the Shadow Ledger is enabled for this source, so the
+        # default trace shape (ingestion/observation/entity/graph) is preserved.
+        if shadow_attempted:
+            transitions = (shadow_result or {}).get("transitions") or []
+            result["trace"].append(  # type: ignore[union-attr]
+                {
+                    "stage": "shadow_ledger",
+                    "service": "graph-service / shadow-ledger (internal)",
+                    "input": {"event_id": event_cid, "commercial_state": commercial_state(event)},
+                    "output": (
+                        {
+                            "noop": (shadow_result or {}).get("noop"),
+                            "transitions": [t.get("transition_type") for t in transitions],
+                            "state_id": ((shadow_result or {}).get("state") or {}).get("id"),
+                        }
+                        if shadow_result is not None
+                        else {"skipped": "shadow-ledger unreachable"}
+                    ),
+                    "added": [
+                        "public commercial state captured as an immutable snapshot",
+                        "deterministic transition detection vs previous state",
+                        "fill_ratio tagged observed_public_state (never verified sell-through)",
+                    ],
+                }
+            )
 
     return result
 

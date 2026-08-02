@@ -92,3 +92,49 @@ class EventFeedResponse(BaseModel):
     limit: int
     offset: int
     events: list[EventFeedItem]
+
+
+# --------------------------------------------------------------------------- Shadow Ledger (internal)
+class ShadowObserveRequest(BaseModel):
+    """Record one observed public commercial state of an event (Phase 1, internal surface)."""
+
+    source_id: str = Field(min_length=1, max_length=128)
+    source_record_id: str | None = Field(default=None, max_length=512)
+    observation_id: str | None = Field(default=None, max_length=64)
+    observed_at: str | None = Field(default=None, description="ISO 8601; defaults to now")
+    # Raw public commercial fields — normalized server-side (deterministic).
+    price_min: float | None = None
+    currency: str | None = None
+    capacity: int | None = None
+    tickets_sold: int | None = None
+    fill_ratio: float | None = None
+    availability: str | None = None
+    starts_at: str | None = None
+    venue: str | None = None
+    status: str | None = None
+    # Presence / disappearance handling.
+    present: bool = True
+    absence_reason: str | None = Field(
+        default=None,
+        description="capture_failure|source_unavailable|parser_failure|record_absent|not_found|explicitly_removed",
+    )
+    epistemic_status: str = "observed_public_state"
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShadowObserveResponse(BaseModel):
+    canonical_event_id: str
+    noop: bool
+    state: dict[str, Any]
+    transitions: list[dict[str, Any]]
+    trace: dict[str, Any] | None = None
+
+
+class ShadowLedgerResponse(BaseModel):
+    canonical_event_id: str
+    source: str | None = None
+    detector_version: str
+    current_state: dict[str, Any] | None = None
+    states: list[dict[str, Any]] = Field(default_factory=list)
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+    trace: dict[str, Any] | None = None

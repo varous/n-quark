@@ -869,11 +869,17 @@ def normalize_event(event: TicketingEvent) -> list[NormalizedObservation]:
     when = event.fetched_at
     meta = {"adapter": ADAPTER_VERSION, "source": event.source, "provenance": _provenance(event)}
 
-    def obs(attribute: str, value: Any, confidence: float, evidence: dict[str, Any] | None = None) -> NormalizedObservation:
+    def obs(
+        attribute: str, value: Any, confidence: float,
+        evidence: dict[str, Any] | None = None, epistemic_status: str | None = None,
+    ) -> NormalizedObservation:
+        # epistemic_status qualifies how the value should be read (ADR-0003): public ticket state is
+        # an observed_public_state, never verified sell-through. Carried in metadata (backward-compatible).
+        observation_meta = {**meta, "epistemic_status": epistemic_status} if epistemic_status else meta
         return NormalizedObservation(
             entity=handle, attribute=attribute, value=value, source=event.source,
             timestamp=when, confidence=confidence,
-            evidence={"event": event.event_name, **(evidence or {})}, metadata=meta,
+            evidence={"event": event.event_name, **(evidence or {})}, metadata=observation_meta,
         )
 
     out: list[NormalizedObservation] = [
@@ -890,13 +896,34 @@ def normalize_event(event: TicketingEvent) -> list[NormalizedObservation]:
     if event.image_url:
         out.append(obs("image_url", event.image_url, 0.8))
     if event.capacity is not None and event.tickets_sold is not None:
-        # The demand ground truth. Higher confidence — it is a transacted count, not a proxy.
+        # The demand ground truth. Higher confidence — it is a transacted count, not a proxy — but
+        # it is a publicly DISPLAYED figure, so it is tagged observed_public_state, not verified sales.
         out.append(obs(
             "fill_ratio", event.fill_ratio, 0.9,
             {"tickets_sold": event.tickets_sold, "capacity": event.capacity},
+            epistemic_status="observed_public_state",
         ))
     out.append(obs("source_event_id", event.source_event_id, 0.99, {"id_scheme": f"{event.source}_show_id"}))
     return out
+
+
+def commercial_state(event: TicketingEvent) -> dict[str, Any]:
+    """The mutable *public commercial state* of an event — the Shadow Ledger's observation unit.
+
+    Only fields the source actually exposes; unexposed ones stay None (Boshow has no explicit
+    availability/status enum). fill_ratio is an observed public state, never verified sell-through.
+    """
+    return {
+        "price_min": event.price_min,
+        "currency": event.currency,
+        "capacity": event.capacity,
+        "tickets_sold": event.tickets_sold,
+        "fill_ratio": event.fill_ratio,
+        "availability": None,
+        "starts_at": event.starts_at.isoformat() if event.starts_at else None,
+        "venue": event.venue_name or None,
+        "status": None,
+    }
 
 
 class TicketingClient:

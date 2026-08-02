@@ -9,6 +9,7 @@ from graph_service.store import (
 )
 
 _store: GraphStore | None = None
+_shadow_store = None
 
 
 def get_store() -> GraphStore:
@@ -23,3 +24,13 @@ def get_store() -> GraphStore:
         else:
             _store = InMemoryGraphStore()
     return _store
+
+
+def get_shadow_store():
+    """Shadow Ledger store (Phase 1). Always Postgres-backed (SQLite in tests via override)."""
+    global _shadow_store
+    if _shadow_store is None:
+        from graph_service.shadow_store import ShadowStore
+
+        _shadow_store = ShadowStore(settings.postgres_url)
+    return _shadow_store

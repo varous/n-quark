@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     #   raises until a data partnership exists).
     ticketing_provider: str = "mock"
     boshow_api_base: str = "https://www.boshow.in/api"
+    # Shadow Ledger (Phase 1) — OFF by default so ingestion behaviour is byte-identical unless
+    # explicitly enabled. When on, each ticketing ingest also records the event's public commercial
+    # state to graph-service's internal Shadow Ledger (best-effort; never blocks ingest).
+    shadow_ledger_enabled: bool = False
+    shadow_ledger_sources: str = "boshow,mock,district,skillbox,townscript,allevents,luma,meetup,knowafest"
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -97,6 +102,10 @@ class Settings(BaseSettings):
     def use_musicbrainz_mock(self) -> bool:
         # MusicBrainz needs no API key — it is open — so mock only when explicitly set.
         return self.musicbrainz_mock_mode
+
+    @property
+    def shadow_ledger_source_set(self) -> frozenset[str]:
+        return frozenset(s.strip() for s in self.shadow_ledger_sources.split(",") if s.strip())
 
     @property
     def resolved_trends_provider(self) -> str:

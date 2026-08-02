@@ -378,3 +378,85 @@ def test_ingest_with_trace_is_multi_entity(client: TestClient, _offline_ticketin
 def test_health_reports_ticketing_provider(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "ticketing_provider", "mock")
     assert client.get("/health").json()["ticketing_provider"] == "mock"
+
+
+# --------------------------------------------------------------------------- Shadow Ledger (Phase 1)
+async def test_fill_ratio_observation_tagged_observed_public_state() -> None:
+    from signal_service.adapters.ticketing import commercial_state
+
+    event = await MockTicketingProvider().extract("free-folk-nite-01082026")
+    obs = normalize_event(event)
+    fill = next(o for o in obs if o.attribute == "fill_ratio")
+    # ADR-0003: displayed fill_ratio is an observed public state, never verified sell-through.
+    assert fill.metadata["epistemic_status"] == "observed_public_state"
+    # targeted: a non-commercial observation does not carry the tag
+    name = next(o for o in obs if o.attribute == "event_name")
+    assert "epistemic_status" not in name.metadata
+    # the commercial-state mapper exposes the mutable public fields the ledger tracks
+    cs = commercial_state(event)
+    assert cs["fill_ratio"] == event.fill_ratio and cs["venue"] == event.venue_name
+
+
+def test_ingest_shadow_ledger_off_by_default_keeps_trace_shape(
+    client: TestClient, _offline_ticketing: None
+) -> None:
+    # Default: shadow ledger disabled -> ingest response + trace are byte-identical to before.
+    assert settings.shadow_ledger_enabled is False
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(9)]
+    with patch(
+        "signal_service.routes.ticketing.ObservationServiceClient.append_observations",
+        new_callable=AsyncMock, return_value=stored,
+    ):
+        body = client.post(
+            "/v1/signals/ticketing/events/free-folk-nite-01082026/ingest?trace=true"
+        ).json()
+    assert [r["stage"] for r in body["trace"]] == ["ingestion", "observation", "entity", "graph"]
+    assert "shadow_ledger" not in body
+
+
+def test_ingest_emits_shadow_stage_when_enabled(
+    client: TestClient, _offline_ticketing: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "shadow_ledger_enabled", True)
+    fake = {
+        "canonical_event_id": "event:free-folk-nite", "noop": False,
+        "state": {"id": "state-1"},
+        "transitions": [{"transition_type": "EVENT_FIRST_SEEN"}],
+    }
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(9)]
+    with patch(
+        "signal_service.routes.ticketing.ObservationServiceClient.append_observations",
+        new_callable=AsyncMock, return_value=stored,
+    ), patch(
+        "signal_service.routes.ticketing.ShadowLedgerClient.observe",
+        new_callable=AsyncMock, return_value=fake,
+    ):
+        body = client.post(
+            "/v1/signals/ticketing/events/free-folk-nite-01082026/ingest?trace=true"
+        ).json()
+    assert [r["stage"] for r in body["trace"]] == [
+        "ingestion", "observation", "entity", "graph", "shadow_ledger",
+    ]
+    assert body["shadow_ledger"]["transitions"][0]["transition_type"] == "EVENT_FIRST_SEEN"
+    shadow_stage = body["trace"][4]
+    assert shadow_stage["output"]["transitions"] == ["EVENT_FIRST_SEEN"]
+
+
+def test_ingest_survives_shadow_ledger_failure(
+    client: TestClient, _offline_ticketing: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "shadow_ledger_enabled", True)
+    stored = [{"id": f"00000000-0000-0000-0000-00000000000{i}"} for i in range(9)]
+    with patch(
+        "signal_service.routes.ticketing.ObservationServiceClient.append_observations",
+        new_callable=AsyncMock, return_value=stored,
+    ), patch(
+        "signal_service.routes.ticketing.ShadowLedgerClient.observe",
+        new_callable=AsyncMock, side_effect=RuntimeError("graph down"),
+    ):
+        resp = client.post("/v1/signals/ticketing/events/free-folk-nite-01082026/ingest?trace=true")
+    # best-effort: ingest still succeeds; shadow stage reports it was skipped
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["shadow_ledger"] is None
+    assert body["trace"][4]["output"] == {"skipped": "shadow-ledger unreachable"}

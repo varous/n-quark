@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     log_level: str = "info"
     graph_backend: str = "postgres"  # "postgres" (consolidated) | "neo4j" | "memory" (tests)
     postgres_url: str = Field(default_factory=default_postgres_url)
+    # Shadow Ledger (Phase 1). Disabling it makes the internal /v1/internal/... write path a no-op;
+    # the public /v1/graph and /v1/events contracts are unaffected either way.
+    shadow_ledger_enabled: bool = True
+    # Consecutive *authoritative* absences before EVENT_DISAPPEARED (never on a single failed crawl).
+    shadow_ledger_disappearance_threshold: int = 2
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"

@@ -110,6 +110,8 @@ services:
       NQUARK_DATAFORSEO_PASSWORD: ${DATAFORSEO_PASSWORD:-}
       NQUARK_SERPAPI_KEY: ${SERPAPI_KEY:-}
       NQUARK_TICKETING_PROVIDER: ${TICKETING_PROVIDER:-mock}
+      # Shadow Ledger (Phase 1) — OFF by default; enable to record commercial-state history.
+      NQUARK_SHADOW_LEDGER_ENABLED: ${SHADOW_LEDGER_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +151,9 @@ services:
     environment:
       NQUARK_GRAPH_BACKEND: ${GRAPH_BACKEND:-postgres}
       NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      # Shadow Ledger (Phase 1) — internal write path + disappearance threshold.
+      NQUARK_SHADOW_LEDGER_ENABLED: ${SHADOW_LEDGER_ENABLED:-true}
+      NQUARK_SHADOW_LEDGER_DISAPPEARANCE_THRESHOLD: ${SHADOW_LEDGER_DISAPPEARANCE_THRESHOLD:-2}
       # Only used when GRAPH_BACKEND=neo4j (docker compose --profile neo4j up).
       NQUARK_NEO4J_URL: bolt://neo4j:7687
       NQUARK_NEO4J_USER: neo4j
