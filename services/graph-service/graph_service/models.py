@@ -9,7 +9,7 @@ Postgres, plain JSON on SQLite (used by the unit tests), via the shared variant 
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, Index, PrimaryKeyConstraint, String
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, PrimaryKeyConstraint, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -80,6 +80,8 @@ class ShadowStateRecord(Base):
     source_record_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     observation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # state_hash == the effective-state hash (hash of the merged commercial state). Kept under the
+    # original column name for backward compatibility; capture_hash (below) is what THIS capture saw.
     state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_state: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False)
     epistemic_status: Mapped[str] = mapped_column(String(64), nullable=False, default="observed_public_state")
@@ -87,6 +89,13 @@ class ShadowStateRecord(Base):
     previous_state_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detector_version: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # --- Phase 1.1: capture completeness + integrity (all additive/nullable) ---
+    snapshot_completeness: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    capture_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    field_status: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False, default=dict)
+    capture_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    out_of_order: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    absence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class ShadowTransitionRecord(Base):

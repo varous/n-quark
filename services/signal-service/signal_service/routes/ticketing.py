@@ -126,7 +126,7 @@ async def ingest_event(
             shadow_result = await ShadowLedgerClient().observe(
                 canonical_event_id=event_cid,
                 source_id=event.source,
-                commercial_state=commercial_state(event),
+                capture=commercial_state(event),
                 source_record_id=event.source_event_id,
                 provenance={"source_url": event.event_url},
                 epistemic_status="observed_public_state",

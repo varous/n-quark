@@ -908,12 +908,16 @@ def normalize_event(event: TicketingEvent) -> list[NormalizedObservation]:
 
 
 def commercial_state(event: TicketingEvent) -> dict[str, Any]:
-    """The mutable *public commercial state* of an event — the Shadow Ledger's observation unit.
+    """The mutable *public commercial state* of an event — the Shadow Ledger's observation unit
+    (Phase 1.1 structured capture: values + per-field observation status + completeness).
 
-    Only fields the source actually exposes; unexposed ones stay None (Boshow has no explicit
-    availability/status enum). fill_ratio is an observed public state, never verified sell-through.
+    The adapter reports what it actually evaluated. Boshow returns a full show record, so this is a
+    COMPLETE capture; fields the source does not expose (availability/status) are NOT_SUPPORTED.
+    A field that is None is reported NOT_OBSERVED — a model default of None is NOT proof the source
+    represented the field as empty, so it must never be inferred as OBSERVED_NULL. fill_ratio is an
+    observed public state, never verified sell-through.
     """
-    return {
+    values = {
         "price_min": event.price_min,
         "currency": event.currency,
         "capacity": event.capacity,
@@ -923,6 +927,27 @@ def commercial_state(event: TicketingEvent) -> dict[str, Any]:
         "starts_at": event.starts_at.isoformat() if event.starts_at else None,
         "venue": event.venue_name or None,
         "status": None,
+    }
+
+    def _status(v: Any) -> str:
+        return "OBSERVED_VALUE" if v is not None else "NOT_OBSERVED"
+
+    field_status = {
+        "price_min": _status(event.price_min),
+        "currency": _status(event.currency),
+        "capacity": _status(event.capacity),
+        "tickets_sold": _status(event.tickets_sold),
+        "fill_ratio": _status(event.fill_ratio),
+        "starts_at": _status(values["starts_at"]),
+        "venue": _status(values["venue"]),
+        "availability": "NOT_SUPPORTED",  # Boshow exposes no availability enum
+        "status": "NOT_SUPPORTED",        # Boshow exposes no event-status/cancellation enum
+    }
+    return {
+        "values": values,
+        "field_status": field_status,
+        "snapshot_completeness": "COMPLETE",
+        "capture_status": "CAPTURE_SUCCESS_RECORD_PRESENT",
     }
 
 

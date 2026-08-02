@@ -16,7 +16,13 @@ from graph_service.schemas import (
     ShadowObserveRequest,
     ShadowObserveResponse,
 )
-from graph_service.shadow_ledger import DETECTOR_VERSION, FIELD_SPECS
+from graph_service.shadow_ledger import (
+    CAPTURE_STATUSES,
+    COMPLETENESS,
+    DETECTOR_VERSION,
+    FIELD_SPECS,
+    FIELD_STATUSES,
+)
 
 router = APIRouter(prefix="/v1/internal/events", tags=["shadow-ledger (internal)"])
 
@@ -40,6 +46,14 @@ def observe_state(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Shadow Ledger is disabled"
         )
+    # Validate the Phase 1.1 enums up front so a malformed capture is rejected, not misinterpreted.
+    if payload.snapshot_completeness is not None and payload.snapshot_completeness not in COMPLETENESS:
+        raise HTTPException(422, detail=f"invalid snapshot_completeness: {payload.snapshot_completeness}")
+    if payload.capture_status is not None and payload.capture_status not in CAPTURE_STATUSES:
+        raise HTTPException(422, detail=f"invalid capture_status: {payload.capture_status}")
+    bad = {f: s for f, s in payload.field_status.items() if s not in FIELD_STATUSES}
+    if bad:
+        raise HTTPException(422, detail=f"invalid field_status values: {bad}")
     observed_at = None
     if payload.observed_at:
         try:
@@ -58,6 +72,9 @@ def observe_state(
         observed_at=observed_at,
         provenance=payload.provenance,
         epistemic_status=payload.epistemic_status,
+        field_status=payload.field_status,
+        snapshot_completeness=payload.snapshot_completeness,
+        capture_status=payload.capture_status,
         present=payload.present,
         absence_reason=payload.absence_reason,
         raw_state=_raw_state(payload),
@@ -66,8 +83,13 @@ def observe_state(
     return ShadowObserveResponse(
         canonical_event_id=event_id,
         noop=result["noop"],
+        persisted=result["persisted"],
+        out_of_order=result["out_of_order"],
+        capture_status=result["capture_status"],
+        absence_count=result["absence_count"],
         state=result["state"],
         transitions=result["transitions"],
+        suppressed=result["suppressed"],
         trace=result["trace"] if trace else None,
     )
 
@@ -95,6 +117,8 @@ def get_shadow_ledger(
         for t in transitions:
             frm = by_id.get(t["from_state_id"]) if t["from_state_id"] else None
             to = by_id.get(t["to_state_id"])
+            field_status = (to or {}).get("field_status") or {}
+            carried = [f for f, st in field_status.items() if st not in ("OBSERVED_VALUE", "OBSERVED_NULL")]
             chain.append(
                 {
                     "step": t["transition_type"],
@@ -103,15 +127,20 @@ def get_shadow_ledger(
                     or (to or {}).get("source_record_id"),
                     "observation": (to or {}).get("observation_id"),
                     "canonical_event_id": event_id,
-                    "normalized_commercial_state": (to or {}).get("normalized_state"),
+                    "snapshot_completeness": (to or {}).get("snapshot_completeness"),
+                    "capture_status": (to or {}).get("capture_status"),
+                    "field_statuses": field_status,
+                    "carried_forward_fields": carried,
+                    "effective_state": (to or {}).get("effective_state"),
                     "previous_state_lookup": {
                         "previous_state_id": t["from_state_id"],
-                        "previous_state_hash": (frm or {}).get("state_hash"),
+                        "previous_effective_hash": (frm or {}).get("effective_state_hash"),
                     },
                     "comparison": {
                         "previous_value": t["previous_value"],
                         "current_value": t["current_value"],
-                        "new_state_hash": (to or {}).get("state_hash"),
+                        "capture_hash": (to or {}).get("capture_hash"),
+                        "effective_state_hash": (to or {}).get("effective_state_hash"),
                     },
                     "emitted_transition": {
                         "type": t["transition_type"],
@@ -120,7 +149,16 @@ def get_shadow_ledger(
                     },
                 }
             )
-        trace_payload = {"detector_version": DETECTOR_VERSION, "evidence_chain": chain}
+        trace_payload = {
+            "detector_version": DETECTOR_VERSION,
+            "pipeline": [
+                "capture received", "completeness evaluated", "field statuses validated",
+                "previous effective state loaded", "observed fields merged",
+                "unobserved fields carried forward", "hashes calculated (capture + effective)",
+                "temporal ordering checked", "transitions emitted or suppressed",
+            ],
+            "evidence_chain": chain,
+        }
 
     return ShadowLedgerResponse(
         canonical_event_id=event_id,

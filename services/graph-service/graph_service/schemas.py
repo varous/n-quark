@@ -112,7 +112,20 @@ class ShadowObserveRequest(BaseModel):
     starts_at: str | None = None
     venue: str | None = None
     status: str | None = None
-    # Presence / disappearance handling.
+    # Phase 1.1 capture integrity.
+    snapshot_completeness: str | None = Field(
+        default=None, description="COMPLETE | PARTIAL (default PARTIAL — conservative)"
+    )
+    field_status: dict[str, str] = Field(
+        default_factory=dict,
+        description="per-field: OBSERVED_VALUE|OBSERVED_NULL|NOT_OBSERVED|EXTRACTION_FAILED|NOT_SUPPORTED",
+    )
+    capture_status: str | None = Field(
+        default=None,
+        description="CAPTURE_SUCCESS_RECORD_PRESENT|CAPTURE_SUCCESS_RECORD_ABSENT|SOURCE_UNAVAILABLE|"
+        "CAPTURE_FAILED|PARSER_FAILED|NOT_CHECKED|EXPLICITLY_REMOVED",
+    )
+    # Phase 1 presence inputs (still accepted; mapped onto capture_status when it is not given).
     present: bool = True
     absence_reason: str | None = Field(
         default=None,
@@ -125,8 +138,13 @@ class ShadowObserveRequest(BaseModel):
 class ShadowObserveResponse(BaseModel):
     canonical_event_id: str
     noop: bool
-    state: dict[str, Any]
-    transitions: list[dict[str, Any]]
+    persisted: bool = True
+    out_of_order: bool = False
+    capture_status: str | None = None
+    absence_count: int = 0
+    state: dict[str, Any] | None = None
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+    suppressed: list[dict[str, Any]] = Field(default_factory=list)
     trace: dict[str, Any] | None = None
 
 

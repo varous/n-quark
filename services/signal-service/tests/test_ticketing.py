@@ -392,9 +392,12 @@ async def test_fill_ratio_observation_tagged_observed_public_state() -> None:
     # targeted: a non-commercial observation does not carry the tag
     name = next(o for o in obs if o.attribute == "event_name")
     assert "epistemic_status" not in name.metadata
-    # the commercial-state mapper exposes the mutable public fields the ledger tracks
+    # the commercial-state mapper returns a Phase 1.1 structured capture
     cs = commercial_state(event)
-    assert cs["fill_ratio"] == event.fill_ratio and cs["venue"] == event.venue_name
+    assert cs["values"]["fill_ratio"] == event.fill_ratio and cs["values"]["venue"] == event.venue_name
+    assert cs["field_status"]["fill_ratio"] == "OBSERVED_VALUE"
+    assert cs["field_status"]["availability"] == "NOT_SUPPORTED"  # Boshow doesn't expose it
+    assert cs["snapshot_completeness"] == "COMPLETE"
 
 
 def test_ingest_shadow_ledger_off_by_default_keeps_trace_shape(
