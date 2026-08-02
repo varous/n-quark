@@ -184,6 +184,12 @@ Observation
 
 Observations are immutable.
 
+> **Cross-reference (additive):** for *mutable-state* observations, a richer temporal structure and an
+> **evidence graph** (`HAS_OBSERVATION`, `HAS_ESTIMATE`, estimate lineage) plus event / ticket-class /
+> campaign **state machines** are proposed **additively** in
+> [product-spec.md → Independent Market Observation and Temporal Data Moat](product-spec.md#independent-market-observation-and-temporal-data-moat).
+> The schema above is unchanged; the new fields are optional and delivered via compatible migrations.
+
 ---
 
 # Feature Schema

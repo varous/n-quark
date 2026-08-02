@@ -4,6 +4,12 @@
 Version: 0.1
 Status: Planning spec — supersedes the "Signal Providers" section of [product-spec.md](product-spec.md) for build sequencing.
 
+> **Cross-reference (additive):** adapter *frequency* and *longitudinal* capture are now governed by
+> [product-spec.md → Independent Market Observation and Temporal Data Moat](product-spec.md#independent-market-observation-and-temporal-data-moat)
+> — see **Adaptive collection frequency**, **Shadow Market Ledger**, and **Source coverage and
+> confidence**. This roadmap's *what to build* is unchanged; the moat section adds *how often to
+> re-capture* and *what state transitions to persist*.
+
 ---
 
 ## 0. Purpose & strategic frame
