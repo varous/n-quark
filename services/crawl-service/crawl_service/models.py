@@ -123,6 +123,10 @@ class EnrichmentCandidate(Base):
     candidate_value: Mapped[Any] = mapped_column(_json_type(), nullable=True)
     normalized_value: Mapped[Any] = mapped_column(_json_type(), nullable=True)
     source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Phase 2.2 provenance: surface (finer than source_type), source family, independence group.
+    surface: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_family: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    independence_group: Mapped[str | None] = mapped_column(String(40), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     extraction_method: Mapped[str] = mapped_column(String(40), nullable=False)
     epistemic_status: Mapped[str] = mapped_column(String(40), nullable=False, default="observed_public_state")
@@ -161,3 +165,29 @@ class EventFieldResolution(Base):
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EnrichmentRun(Base):
+    """Audit of one live public-page enrichment pilot run (Phase 2.2). Immutable once completed."""
+
+    __tablename__ = "enrichment_run"
+    __table_args__ = (Index("ix_enrichment_run_started", "started_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    surface: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    events_selected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_attempted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_retrieved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidates_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resolutions_changed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conflicts_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parser_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    request_latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bytes_received: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metrics: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    config_snapshot: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

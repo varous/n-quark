@@ -17,6 +17,7 @@ from crawl_service.enrichment.registry import (
     FIELD_REGISTRY,
     TEMPORAL_OBSERVATION,
     Candidate,
+    surface_meta,
 )
 
 # reason codes
@@ -87,18 +88,24 @@ def resolve_field(field_name: str, candidates: list[Candidate], *, min_confidenc
     supporting = [c for c in usable if str(c.normalized_value) == str(value)]
     contradicting = [c for c in usable if str(c.normalized_value) != str(value)]
 
-    # Independent agreement across distinct source types raises confidence.
-    agreeing_types = {c.source_type for c in supporting}
+    # Confidence: only agreement across DIFFERENT independence groups is true consensus (Phase 2.2).
+    # Multiple same-family surfaces (e.g. Boshow API + its share page) are NOT independent — they
+    # get only a modest extraction bump, never RESOLVED_CONSENSUS.
+    independence_groups = {surface_meta(c.source_type)[2] for c in supporting}
+    surfaces = {c.source_type for c in supporting}
     confidence = max(c.confidence for c in supporting)
-    consensus = len(agreeing_types) > 1
-    if consensus:
+    independent = len(independence_groups) > 1
+    same_family_multi = (not independent) and len(surfaces) > 1
+    if independent:
         confidence = min(0.99, confidence + 0.1)
+    elif same_family_multi:
+        confidence = min(0.95, confidence + 0.03)  # modest same-family reconfirmation
 
     if top.source_type == CANONICAL_ENTITY_RELATIONSHIP:
         method, reason = CANONICAL_RELATIONSHIP, RESOLVED_RELATIONSHIP
     elif top.source_type == TEMPORAL_OBSERVATION:
         method, reason = TEMPORAL_INTERVAL, RESOLVED_TEMPORAL_INTERVAL
-    elif consensus:
+    elif independent:
         method, reason = STRUCTURED_SOURCE_CONSENSUS, RESOLVED_CONSENSUS
     else:
         method, reason = DIRECT_SOURCE, RESOLVED_DIRECT

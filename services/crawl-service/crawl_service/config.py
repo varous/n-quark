@@ -64,6 +64,22 @@ class Settings(BaseSettings):
     capture_enrichment_public_page_enabled: bool = False  # fetch the source public page for candidates
     capture_enrichment_min_confidence: float = 0.6        # min confidence to auto-resolve/update scheduler
 
+    # --- Phase 2.2: live public-page enrichment pilot (all OFF by default) ---
+    capture_enrichment_pilot_enabled: bool = False
+    capture_enrichment_pilot_max_events: int = 100
+    capture_enrichment_pilot_sample_seed: int = 1
+    capture_enrichment_pilot_priority_only: bool = False
+    capture_enrichment_pilot_min_tracked_age_hours: int = 0
+    capture_enrichment_pilot_max_requests_per_run: int = 100
+    capture_enrichment_public_page_timeout: float = 15.0
+    capture_enrichment_public_page_rate_limit_ms: int = 500   # min gap between page requests
+    boshow_share_base: str = "https://www.boshow.in/api/shows/share"
+    # Decision thresholds (deterministic; configurable).
+    pilot_min_retrieval_success: float = 0.7
+    pilot_min_incremental_gain_rate: float = 0.1
+    pilot_max_conflict_rate: float = 0.2
+    pilot_min_parser_success: float = 0.7
+
     # --- cadence bands (hours); overridable but sensible India-first defaults ---
     cadence_far_future_hours: int = 24     # not on sale / >30 days away
     cadence_mid_hours: int = 12            # 15-30 days away

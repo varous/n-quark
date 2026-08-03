@@ -39,6 +39,27 @@ TEMPORAL_INTERVAL = "TEMPORAL_INTERVAL"
 
 OBSERVED_PUBLIC_STATE = "observed_public_state"
 
+# --- source-family / independence semantics (Phase 2.2) ------------------------------------------
+# (surface, source_family, independence_group) per source type. Multiple Boshow-derived surfaces
+# (API, share page, JSON-LD, OG, visible text, and the graph projection built from the Boshow
+# ingest) share ONE independence group — they are NOT independent confirmation of each other.
+# Only a genuinely different independence group (e.g. n-quark's own temporal observation) counts
+# as independent consensus.
+_SURFACE_META: dict[str, tuple[str, str, str]] = {
+    SOURCE_API: ("api", "boshow", "boshow_origin"),
+    SOURCE_PUBLIC_PAGE: ("public_page", "boshow", "boshow_origin"),
+    JSON_LD: ("public_json_ld", "boshow", "boshow_origin"),
+    EMBEDDED_STATE: ("embedded_state", "boshow", "boshow_origin"),
+    OPEN_GRAPH: ("open_graph", "boshow", "boshow_origin"),
+    VISIBLE_TEXT: ("visible_text", "boshow", "boshow_origin"),
+    CANONICAL_ENTITY_RELATIONSHIP: ("venue_relationship", "n_quark_graph", "boshow_origin"),
+    TEMPORAL_OBSERVATION: ("temporal", "n_quark_observation", "nquark_temporal"),
+}
+
+
+def surface_meta(source_type: str) -> tuple[str, str, str]:
+    return _SURFACE_META.get(source_type, ("unknown", "unknown", "unknown"))
+
 
 # --- normalizers ---------------------------------------------------------------------------------
 def _norm_str(v: Any) -> str | None:
@@ -144,6 +165,18 @@ class Candidate:
         spec = FIELD_REGISTRY.get(self.field_name)
         self.normalized_value = spec.normalizer(self.candidate_value) if spec else _norm_str(self.candidate_value)
         return self
+
+    @property
+    def surface(self) -> str:
+        return surface_meta(self.source_type)[0]
+
+    @property
+    def source_family(self) -> str:
+        return surface_meta(self.source_type)[1]
+
+    @property
+    def independence_group(self) -> str:
+        return surface_meta(self.source_type)[2]
 
     @property
     def content_hash(self) -> str:

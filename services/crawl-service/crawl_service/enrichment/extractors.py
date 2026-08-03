@@ -183,6 +183,42 @@ def candidates_from_visible_text(
     return out
 
 
+# Boshow's public share card exposes only Open Graph. og:description carries date + venue as free
+# text, e.g. "Aug 01, 2026, 8:00 PM Skinny Mos" — the only structured metadata available.
+_BOSHOW_DESC_RE = re.compile(
+    r"^([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}),\s*(\d{1,2}:\d{2}\s*[AP]M)\s+(.+)$"
+)
+
+
+def candidates_from_boshow_share(
+    html: str, *, source_url: str | None, observed_at: datetime,
+) -> list[Candidate]:
+    """Extract candidates from a Boshow share card (Open Graph only). Deterministic; a description
+    that doesn't match the expected shape yields no candidate (never a guess)."""
+    og = {k.lower(): v for k, v in _OG_RE.findall(html or "")}
+    out: list[Candidate] = []
+    desc = og.get("description", "").strip()
+    m = _BOSHOW_DESC_RE.match(desc) if desc else None
+    if not m:
+        return out
+    try:
+        # Boshow shows local wall-clock time with no zone; keep it naive (compared by wall clock).
+        dt = datetime.strptime(f"{m.group(1)} {m.group(2).replace('  ', ' ')}", "%b %d, %Y %I:%M %p")  # noqa: DTZ007
+        out.append(Candidate(
+            field_name="starts_at", candidate_value=dt.isoformat(), source_type=OPEN_GRAPH,
+            extraction_method=PAGE_METADATA, confidence=0.55, observed_at=observed_at,
+            source_url=source_url).normalize())
+    except ValueError:
+        pass
+    venue = m.group(3).strip()
+    c = Candidate(field_name="venue_name", candidate_value=venue, source_type=OPEN_GRAPH,
+                  extraction_method=PAGE_METADATA, confidence=0.5, observed_at=observed_at,
+                  source_url=source_url).normalize()
+    if c.normalized_value is not None:
+        out.append(c)
+    return [c for c in out if c.normalized_value is not None]
+
+
 def candidates_from_embedded_state(
     html: str, *, source_url: str | None, observed_at: datetime,
 ) -> list[Candidate]:

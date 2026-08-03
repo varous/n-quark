@@ -148,6 +148,12 @@ class EnrichmentService:
             result["trace"] = {"resolver_version": RESOLVER_VERSION, "steps": steps}
         return result
 
+    def store_candidates(self, event_id, source, source_record_id, candidates, now=None) -> dict:
+        """Public persist for externally-produced candidates (e.g. the live pilot)."""
+        now = now or datetime.now(UTC)
+        valid = [c for c in candidates if valid_candidate(c)]
+        return self._persist_candidates(event_id, source, source_record_id, valid, now)
+
     # ---- persistence helpers --------------------------------------------------------------------
     def _prev_onsale(self, event_id: str) -> tuple[datetime | None, datetime | None]:
         with self._sf() as s:
@@ -198,11 +204,12 @@ class EnrichmentService:
                         id=_uuid(), canonical_event_id=event_id, source=source,
                         source_record_id=source_record_id, field_name=cand.field_name,
                         candidate_value=cand.candidate_value, normalized_value=cand.normalized_value,
-                        source_type=cand.source_type, source_url=cand.source_url,
-                        extraction_method=cand.extraction_method, epistemic_status=cand.epistemic_status,
-                        observed_at=cand.observed_at, source_published_at=cand.source_published_at,
-                        confidence=cand.confidence, content_hash=h, candidate_status="ACTIVE",
-                        created_at=now))
+                        source_type=cand.source_type, surface=cand.surface,
+                        source_family=cand.source_family, independence_group=cand.independence_group,
+                        source_url=cand.source_url, extraction_method=cand.extraction_method,
+                        epistemic_status=cand.epistemic_status, observed_at=cand.observed_at,
+                        source_published_at=cand.source_published_at, confidence=cand.confidence,
+                        content_hash=h, candidate_status="ACTIVE", created_at=now))
             s.flush()  # SessionLocal is autoflush=False; make new rows visible to the reload below
             # reload ACTIVE candidates for the event's touched fields
             fields = {c.field_name for c in cands}

@@ -195,6 +195,51 @@ manual-review UI.
 - Venue geography derives city/region from the event's canonical graph relationships; ambiguous venue
   names with no canonical relationship remain unresolved (never invented).
 
+## Phase 2.2 — Live Enrichment Validation & Incremental Source Value `[CURRENT]`
+
+Measures whether the Boshow public-page surface adds new, reliable fields beyond `Boshow API +
+canonical graph`, so continuous collection is justified by evidence — not assumption. Lives in
+crawl-service; additive migration `003`; default **off**. Full rationale + live findings in
+[ADR-0008](adr/0008-source-family-and-pilot.md).
+
+- **Source vs surface vs source-family vs independence-group.** Every candidate records a `surface`,
+  a `source_family`, and an `independence_group`. All Boshow-record-derived surfaces (API, share page,
+  JSON-LD, embedded state, OG, visible text, and the canonical-graph projection) share **one**
+  independence group (`boshow_origin`); only n-quark's own temporal observation is independent.
+- **Same-family agreement ≠ consensus.** The resolver grants `RESOLVED_CONSENSUS` + full boost only
+  across **≥2 independence groups**; multiple same-family surfaces get a modest bump and stay
+  `RESOLVED_DIRECT`. Higher-authority live API evidence still beats page metadata; date comparison is
+  by wall clock; a newer same-value reconfirmation of a mutable field is `FRESHNESS_GAIN` (tracked
+  separately, never consensus).
+- **Live pilot** (behind `CAPTURE_ENRICHMENT_PILOT_ENABLED` + `..._PUBLIC_PAGE_ENABLED`): deterministic
+  cohort sampling (seed), rate-limited timed fetch, response classification
+  (`SUCCESS_HTML`/`NOT_FOUND`/`RATE_LIMITED`/`TIMEOUT`/`INVALID_HTML`/`BLOCKED_OR_CHALLENGE`/…),
+  event-page validation (title/slug/markers; an error or challenge page never yields candidates),
+  per-field **incremental / duplicate / conflict / freshness** classification, and an auditable
+  `enrichment_run`. Measurement-only — it never mutates tracked_event or resolutions.
+- **Reports (internal):** `POST /v1/internal/enrichment/pilot/run?trace=true`,
+  `GET …/pilot/runs`, `GET …/source-value` (field-level coverage, incremental-gain rate, duplicate /
+  conflict / freshness, presence rates, latency/bytes), `GET …/venue-coverage` (how well *known* events
+  are grounded geographically — not market coverage). Each run ends with an evidence-driven
+  recommendation (`PROMOTE_TO_STANDARD_ENRICHMENT` / `KEEP_AS_FALLBACK` / `DISABLE_LOW_VALUE` /
+  `REQUIRES_SOURCE_FIX`) with components + reasons.
+
+### Live verdict (real Boshow, 2026-08-03)
+
+`…/shows.html?slug=` → 404; `…/api/shows/share/{slug}` → 200 but exposes **only Open Graph** (title,
+image, and `og:description = "Aug 01, 2026, 8:00 PM Skinny Mos"`) — **no JSON-LD, no embedded state**.
+Measured over a 3-event cohort: retrieval 1.0, OG presence 1.0, JSON-LD 0.0; **INCREMENTAL 0,
+DUPLICATE 2, FRESHNESS_GAIN 2, CONFLICT 0**. The page adds **no new fields** — only same-family OG
+duplicates of date/venue at low authority. Recommendation: **not promoted** — `DISABLE_LOW_VALUE` at
+the default confidence bar, `KEEP_AS_FALLBACK` (freshness only) at a relaxed bar. Kept behind flags.
+
+### Known limitations (Phase 2.2)
+
+- Boshow only; the share card is an OG-only social card, so incremental gain is structurally ~0.
+- Freshness gain depends on capture recency vs the current resolution's age.
+- The independence model is designed so a genuinely independent *second platform* (future) would
+  produce real consensus — no Boshow surface can.
+
 ## What is explicitly NOT in Phase 1 `[FUTURE]`
 
 Deferred to the roadmap (see the MCP section + its backlog): prediction / ML sell-through, crowd

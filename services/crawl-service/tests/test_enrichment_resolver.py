@@ -13,7 +13,7 @@ from crawl_service.enrichment.resolver import (
     CANONICAL_RELATIONSHIP,
     CONFLICT,
     DIRECT_SOURCE,
-    RESOLVED_CONSENSUS,
+    RESOLVED_DIRECT,
     REVIEW_CONFLICT,
     UNRESOLVED,
     resolve_field,
@@ -44,12 +44,13 @@ def test_lower_authority_conflict_does_not_override() -> None:
     assert r.resolved_value == "2026-09-10T19:00:00"
 
 
-def test_agreeing_independent_candidates_raise_confidence() -> None:
+def test_same_family_agreement_is_modest_not_consensus() -> None:
+    # JSON-LD + visible text agree, but both are the same Boshow family -> NOT consensus (Phase 2.2).
     r = resolve_field("starts_at", [
         _c("starts_at", "2026-09-10T19:00:00", JSON_LD, 0.8),
         _c("starts_at", "2026-09-10T19:00:00", VISIBLE_TEXT, 0.8),
     ])
-    assert r.reason_code == RESOLVED_CONSENSUS and r.confidence > 0.8
+    assert r.reason_code == RESOLVED_DIRECT and 0.8 < r.confidence <= 0.95
 
 
 def test_equal_authority_conflict_is_flagged() -> None:
