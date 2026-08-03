@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
 from signal_service.adapters.ticketing import (
+    EventNotFound,
     TicketingClient,
     TicketingEvent,
     artist_handle,
@@ -62,6 +63,10 @@ async def ingest_event(
 
     try:
         event = await ticketing.fetch_event(event_ref)
+    except EventNotFound as exc:
+        # Source reachable, record genuinely absent -> 404 so the scheduler records authoritative
+        # absence rather than a source failure.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Ticketing fetch failed: {exc}"

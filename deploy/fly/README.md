@@ -120,6 +120,38 @@ fly machine run . --app nquark-ingest-cron --region sin --rm \
   --env NQUARK_INGEST_TARGET=http://nquark-signal-service.flycast
 ```
 
+### 5a. Controlled scheduled capture (Phase 2 — Shadow Ledger histories)
+
+The `nquark-ingest-cron` above is a simple daily catalog refresh. **Phase 2** adds a smarter,
+lease-locked, idempotent scheduler in **crawl-service** that repeatedly captures tracked Boshow
+events at a per-event cadence so the Shadow Ledger accumulates real longitudinal histories. It calls
+signal-service over the private network; enable it by setting secrets/env on crawl-service:
+
+```bash
+fly secrets set --app nquark-crawl-service \
+  NQUARK_SCHEDULED_CAPTURE_ENABLED=true \
+  NQUARK_POSTGRES_URL="$PG" \
+  NQUARK_SIGNAL_SERVICE_URL=http://nquark-signal-service.flycast \
+  NQUARK_GRAPH_SERVICE_URL=http://nquark-graph-service.flycast
+cd services/crawl-service && fly deploy && cd ../..   # entrypoint runs migration 001 when enabled
+```
+
+Enroll events once, then run the worker on a schedule (idempotent — safe to over-invoke):
+
+```bash
+# one-time enrollment (discover + track Boshow events)
+curl -s -X POST "https://nquark-crawl-service.flycast/v1/internal/capture-schedule/sync?source=boshow&limit=50"
+
+# scheduled worker machine (hourly): recover locks -> generate due jobs -> claim -> capture
+fly machine run . --app nquark-crawl-service --region sin --schedule hourly \
+  --env NQUARK_SCHEDULED_CAPTURE_ENABLED=true \
+  --entrypoint "python -m crawl_service.worker"
+```
+
+Inspect operational coverage any time (internal):
+`GET https://nquark-crawl-service.flycast/v1/internal/capture-schedule`. Requires
+signal-service `NQUARK_SHADOW_LEDGER_ENABLED=true` so present captures reach the Shadow Ledger.
+
 To ingest **real** platforms instead of the mock, set the provider + keys as secrets on
 signal-service (never commit keys), e.g. `fly secrets set --app nquark-signal-service
 NQUARK_TICKETING_PROVIDER=boshow NQUARK_SERPAPI_KEY=…`, then redeploy signal-service.

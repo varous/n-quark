@@ -61,6 +61,14 @@ _BROWSER_HEADERS = {
 _LINEUP_SEP = re.compile(r"\s*[•|]\s*")
 
 
+class EventNotFound(Exception):
+    """Raised when the source request SUCCEEDED but the event record is genuinely absent.
+
+    Distinct from a failed request (network/timeout/parse) — the scheduler maps this to an
+    authoritative absence, never a source failure.
+    """
+
+
 @dataclass
 class TicketingEvent:
     """Provider-neutral normalized event — what every ticketing provider must return."""
@@ -483,7 +491,7 @@ class MockTicketingProvider:
     async def extract(self, event_ref: str) -> TicketingEvent:
         item = _MOCK_BOSHOW.get(event_ref)
         if item is None:
-            raise ValueError(f"unknown mock event: {event_ref}")
+            raise EventNotFound(f"unknown mock event: {event_ref}")
         return event_from_boshow(item)
 
 
@@ -550,7 +558,8 @@ class BoshowProvider:
             for item in items:
                 if item.get("slug") == event_ref:
                     return event_from_boshow(item)
-        raise ValueError(f"boshow: event not found for ref {event_ref!r}")
+        # The search succeeded but the slug is no longer listed -> authoritative absence.
+        raise EventNotFound(f"boshow: event not found for ref {event_ref!r}")
 
 
 def _sitemap_locs(xml: str) -> list[str]:

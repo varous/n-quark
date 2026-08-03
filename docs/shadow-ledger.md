@@ -91,6 +91,58 @@ analytics contracts are unchanged.
   missed — chosen deliberately to avoid false nulls.
 - Non-authoritative failure captures are logged/returned but not persisted as state rows.
 
+## Phase 2 — Controlled Scheduled Capture `[CURRENT]`
+
+Repeated Boshow captures run automatically so histories accumulate — the smallest production-safe
+scheduler around the *existing* ingest path. Full rationale in
+[ADR-0006](adr/0006-scheduled-capture.md). Lives in **crawl-service**; additive migration `001`
+(`alembic_version_crawl`); default **off**.
+
+**Architecture (service boundaries only):**
+`crawl-service scheduler → (HTTP) signal-service ingest → (HTTP) graph-service Shadow Ledger`.
+The scheduler never touches the detector; present captures go through signal-service (which submits
+the structured capture to the Shadow Ledger), and authoritative absence is posted to the Shadow
+Ledger `observe` endpoint.
+
+- **Lifecycle:** `sync` (discover + enroll Boshow events) → each run: recover expired locks →
+  generate due jobs → claim (lease lock) → capture via signal-service → classify → update coverage →
+  schedule next capture.
+- **Tables:** `tracked_event` (operational coverage) + `scheduled_capture_job` (lease-locked,
+  idempotent). Job identity = `source:source_record_id:capture_window` (unique) → duplicate cron /
+  concurrent generation is a no-op.
+- **Cadence** (deterministic, configurable): far-future/not-on-sale 24h · 15–30d 12h · final 14d 4h ·
+  on-sale first 48h 2h · event day 2h · post-event +1/+3/+7d then stop. Returns `(next_capture_at,
+  cadence_reason)`; falls back to event-date cadence when on-sale timing is unknown.
+- **Priority** (deterministic, explainable): urgency + on-sale burst + recent transition + priority
+  city − failure penalty; exposes score, dominant reason, and components.
+- **Locking:** compare-and-swap claim (`UPDATE ... WHERE status='PENDING'`) — only one worker wins;
+  expired leases are recovered to `PENDING` each run. A crash mid-capture is safe: the lease expires,
+  the job re-runs, and the Shadow Ledger no-ops unchanged state (no duplicate transitions).
+- **Retries / classification:** `SUCCESS_RECORD_PRESENT | SUCCESS_RECORD_ABSENT | SOURCE_UNAVAILABLE |
+  RATE_LIMITED | TIMEOUT | PARSER_FAILED | INVALID_RESPONSE | TERMINAL_EVENT`. Bounded exponential
+  backoff (honours `Retry-After`); parser failures → limited retries → `NEEDS_REVIEW`. **A failed
+  request is never recorded as absence** — absence requires a successful request that reports the
+  record gone (signal-service `EventNotFound` → HTTP 404).
+- **Operational coverage (internal API):**
+  `GET /v1/internal/capture-schedule[/{source}/{source_record_id}]` → next/last capture, last
+  success, capture status, consecutive failures/absences, capture/distinct-state/transition counts,
+  capture gap, cadence + priority reasons, lock status. `POST .../sync` and `POST .../run?trace=true`
+  are gated by the enabled flag.
+- **Worker:** `python -m crawl_service.worker` (run-to-completion; compatible with the Fly cron
+  pattern). Idempotent — safe to over-invoke.
+- **Feature flags:** `NQUARK_SCHEDULED_CAPTURE_ENABLED` (default `false`),
+  `NQUARK_SCHEDULED_CAPTURE_SOURCES` (default `boshow`), `NQUARK_SCHEDULED_CAPTURE_MAX_JOBS`,
+  `NQUARK_SCHEDULED_CAPTURE_LOCK_TTL_SECONDS`, `NQUARK_SCHEDULED_CAPTURE_CITY_ALLOWLIST`,
+  `NQUARK_SCHEDULED_CAPTURE_MAX_TRACKED`. Disabled → crawl-service behaves as before; migrations run
+  only when enabled.
+
+### Known limitations (Phase 2)
+
+- Boshow only. `starts_at`/`on_sale_at`/`city` are not back-filled from discovery, so newly enrolled
+  events use conservative `no_event_date`/date-based cadence until those fields are populated.
+- Out-of-order handling is Phase 1.1's conservative audit-only behaviour (no timeline reconciliation).
+- No breadth-first crawling, multi-source reconciliation, coverage scoring, or commercial analytics.
+
 ## What is explicitly NOT in Phase 1 `[FUTURE]`
 
 Deferred to the roadmap (see the MCP section + its backlog): prediction / ML sell-through, crowd

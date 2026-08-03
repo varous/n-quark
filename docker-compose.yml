@@ -72,6 +72,15 @@ services:
     build: ./services/crawl-service
     ports:
       - "8001:8001"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      NQUARK_SIGNAL_SERVICE_URL: http://signal-service:8003
+      NQUARK_GRAPH_SERVICE_URL: http://graph-service:8006
+      # Phase 2 scheduled capture — OFF by default.
+      NQUARK_SCHEDULED_CAPTURE_ENABLED: ${SCHEDULED_CAPTURE_ENABLED:-false}
+      NQUARK_SCHEDULED_CAPTURE_SOURCES: ${SCHEDULED_CAPTURE_SOURCES:-boshow}
+      NQUARK_SCHEDULED_CAPTURE_MAX_JOBS: ${SCHEDULED_CAPTURE_MAX_JOBS:-25}
     depends_on:
       postgres:
         condition: service_healthy
