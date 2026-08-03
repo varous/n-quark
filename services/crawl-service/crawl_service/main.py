@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from crawl_service.config import settings
 from crawl_service.routes.capture_schedule import router as capture_schedule_router
+from crawl_service.routes.enrichment import router as enrichment_router
 
 app = FastAPI(
     title="n-quark / crawl-service",
@@ -12,6 +13,7 @@ app = FastAPI(
 )
 
 app.include_router(capture_schedule_router)
+app.include_router(enrichment_router)
 
 
 @app.get("/health")
@@ -20,6 +22,7 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "service": settings.service_name,
         "scheduled_capture_enabled": settings.scheduled_capture_enabled,
+        "capture_enrichment_enabled": settings.capture_enrichment_enabled,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

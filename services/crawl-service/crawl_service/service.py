@@ -42,10 +42,12 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 
 class SchedulerService:
-    def __init__(self, session_factory, capturer: Capturer, config: Settings | None = None) -> None:
+    def __init__(self, session_factory, capturer: Capturer, config: Settings | None = None,
+                 enricher=None) -> None:
         self._sf = session_factory
         self._capturer = capturer
         self._cfg = config or settings
+        self._enricher = enricher  # optional EnrichmentService (Phase 2.1)
         self._cadence = CadenceConfig(
             far_future_hours=self._cfg.cadence_far_future_hours,
             mid_hours=self._cfg.cadence_mid_hours,
@@ -285,9 +287,10 @@ class SchedulerService:
             tracked.updated_at = now
             steps += ["health_record_updated", "next_capture_scheduled"]
 
+            canonical_after = tracked.canonical_event_id
             trace = {
                 "source": source, "source_record_id": sid,
-                "canonical_event_id": tracked.canonical_event_id,
+                "canonical_event_id": canonical_after,
                 "result_code": outcome.result_code, "job_status": job.status,
                 "attempt": attempt, "steps": steps,
                 "next_capture_at": _iso(next_at), "cadence_reason": cadence_reason,
@@ -299,7 +302,89 @@ class SchedulerService:
                 "consecutive_absences": tracked.consecutive_absences,
                 "consecutive_failures": tracked.consecutive_failures,
             }
+
+        # Enrichment runs AFTER the capture transaction commits (best-effort, never fails capture).
+        if (outcome.result_code == SUCCESS_RECORD_PRESENT and self._enricher is not None
+                and self._cfg.capture_enrichment_enabled and source in self._cfg.capture_enrichment_source_set
+                and canonical_after):
+            trace["enrichment"] = await self._run_enrichment(source, sid, canonical_after, now)
         return trace
+
+    async def _run_enrichment(self, source, sid, canonical_event_id, now) -> dict[str, Any]:
+        try:
+            result = await self._enricher.enrich(
+                canonical_event_id=canonical_event_id, source=source, source_record_id=sid,
+                now=now, trace=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — enrichment must never break the capture
+            return {"outcome": "ENRICHMENT_FAILED", "error": str(exc)}
+        applied = self._apply_enrichment(source, sid, result.get("resolved", {}), now)
+        return {"outcome": result.get("outcome"), "resolved": result.get("resolved", {}),
+                "applied": applied}
+
+    def _apply_enrichment(self, source, sid, resolved: dict[str, Any], now) -> dict[str, Any]:
+        """Update tracked_event ONLY from resolved fields; recalc cadence on a date/status change.
+        Partial enrichment never erases existing values; conflicts are absent from `resolved`."""
+        applied: dict[str, Any] = {}
+        if not resolved:
+            return applied
+        with self._sf() as s, s.begin():
+            te = s.execute(
+                select(TrackedEvent).where(
+                    TrackedEvent.source == source, TrackedEvent.source_record_id == sid)
+            ).scalar_one_or_none()
+            if te is None:
+                return applied
+
+            def _parse_dt(v):
+                try:
+                    return datetime.fromisoformat(str(v))
+                except (ValueError, TypeError):
+                    return None
+
+            date_changed = False
+            if "starts_at" in resolved:
+                new_dt = _parse_dt(resolved["starts_at"])
+                if new_dt and _aware(te.starts_at) != _aware(new_dt):
+                    te.starts_at = new_dt
+                    date_changed = True
+                    applied["starts_at"] = new_dt.isoformat()
+            if resolved.get("city"):
+                te.city = resolved["city"]
+                applied["city"] = resolved["city"]
+            if resolved.get("region_id"):
+                te.region_id = resolved["region_id"]
+                applied["region_id"] = resolved["region_id"]
+            if resolved.get("event_status"):
+                te.event_status = resolved["event_status"]
+                applied["event_status"] = resolved["event_status"]
+            if resolved.get("source_on_sale_at"):
+                te.source_on_sale_at = _parse_dt(resolved["source_on_sale_at"])
+                applied["source_on_sale_at"] = resolved["source_on_sale_at"]
+            if resolved.get("first_ticket_state_seen_at") and te.first_ticket_state_seen_at is None:
+                te.first_ticket_state_seen_at = _parse_dt(resolved["first_ticket_state_seen_at"])
+                applied["first_ticket_state_seen_at"] = resolved["first_ticket_state_seen_at"]
+
+            te.last_enriched_at = now
+            te.enrichment_status = "APPLIED"
+
+            # City allow-list eligibility recheck (only when an allow-list is configured).
+            allow = self._cfg.city_allowlist_set
+            if allow and te.city and te.city.lower() not in allow:
+                te.tracking_status = "STOPPED"
+                te.next_capture_at = None
+                te.cadence_reason = "city_not_in_allowlist"
+                applied["stopped"] = "city_not_in_allowlist"
+            elif date_changed and te.tracking_status in TRACKABLE:
+                nxt, reason = compute_cadence(
+                    now, starts_at=_aware(te.starts_at), on_sale_at=_aware(te.on_sale_at),
+                    tracking_status=te.tracking_status, config=self._cadence)
+                te.next_capture_at = nxt
+                te.cadence_reason = reason
+                applied["next_capture_at"] = _iso(nxt)
+                applied["cadence_reason"] = reason
+            te.updated_at = now
+        return applied
 
     async def run_once(self, worker_id: str, *, now: datetime | None = None,
                        limit: int | None = None, trace: bool = False) -> dict[str, Any]:

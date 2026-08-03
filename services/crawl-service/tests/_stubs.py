@@ -28,3 +28,26 @@ class StubCapturer:
             shadow_result={"noop": True, "persisted": False, "transitions": []},
             canonical_event_id=f"event:{source_record_id}",
         )
+
+
+@dataclass
+class StubGraphReader:
+    """Returns a fixed canonical event node + neighbors for enrichment tests."""
+
+    node: dict | None = None
+    neighbors: list = field(default_factory=list)
+
+    async def get_event(self, event_id: str):
+        return self.node, self.neighbors
+
+
+@dataclass
+class StubPageFetcher:
+    """Returns fixed (html, visible_text) for public-page enrichment tests; None simulates failure."""
+
+    html: str = ""
+    text: str = ""
+    fail: bool = False
+
+    async def fetch(self, url: str):
+        return None if self.fail else (self.html, self.text)

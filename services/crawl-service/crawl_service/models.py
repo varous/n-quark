@@ -11,8 +11,9 @@ Shadow Ledger remains the authority for commercial-state history.
 """
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -59,6 +60,14 @@ class TrackedEvent(Base):
     last_capture_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # --- Phase 2.1: enrichment-derived scheduling metadata (additive/nullable) ---
+    region_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    event_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_on_sale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_ticket_state_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrichment_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    enrichment_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class ScheduledCaptureJob(Base):
@@ -88,5 +97,67 @@ class ScheduledCaptureJob(Base):
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     detail: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# --------------------------------------------------------------------------- Phase 2.1 enrichment
+class EnrichmentCandidate(Base):
+    """A single field-value candidate extracted from one evidence surface, with full provenance.
+
+    Append-only per (event, field, content_hash): re-observing identical evidence is idempotent;
+    changed evidence yields a new ACTIVE candidate and supersedes the old one.
+    """
+
+    __tablename__ = "enrichment_candidate"
+    __table_args__ = (
+        Index("ix_enrichment_candidate_event_field", "canonical_event_id", "field_name"),
+        Index("uq_enrichment_candidate_hash", "canonical_event_id", "field_name", "content_hash", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_event_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_record_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_value: Mapped[Any] = mapped_column(_json_type(), nullable=True)
+    normalized_value: Mapped[Any] = mapped_column(_json_type(), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    extraction_method: Mapped[str] = mapped_column(String(40), nullable=False)
+    epistemic_status: Mapped[str] = mapped_column(String(40), nullable=False, default="observed_public_state")
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventFieldResolution(Base):
+    """The current + historical resolution of one canonical event field from its candidates.
+
+    Exactly one CURRENT row per (event, field); prior resolutions are preserved (is_current=False)
+    so reschedules and revisions stay auditable — earlier resolutions are never overwritten."""
+
+    __tablename__ = "event_field_resolution"
+    __table_args__ = (
+        Index("ix_event_field_resolution", "canonical_event_id", "field_name", "is_current"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_event_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    resolved_value: Mapped[Any] = mapped_column(_json_type(), nullable=True)
+    resolution_method: Mapped[str] = mapped_column(String(40), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    review_status: Mapped[str] = mapped_column(String(24), nullable=False, default="AUTO_RESOLVED")
+    reason_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    supporting_candidate_ids: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    contradicting_candidate_ids: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    resolver_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

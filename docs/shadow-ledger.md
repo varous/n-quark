@@ -143,6 +143,58 @@ Ledger `observe` endpoint.
 - Out-of-order handling is Phase 1.1's conservative audit-only behaviour (no timeline reconciliation).
 - No breadth-first crawling, multi-source reconciliation, coverage scoring, or commercial analytics.
 
+## Phase 2.1 — Evidence-Based Capture Enrichment `[CURRENT]`
+
+Enriches scheduled Boshow events with date/venue/city/region/on-sale timing so the Phase 2 cadence
+actually engages. Lives in **crawl-service**; additive migration `002`; default **off**. Full
+rationale in [ADR-0007](adr/0007-capture-enrichment.md).
+
+- **Candidate vs resolution:** evidence produces `enrichment_candidate` rows (one per field-value per
+  surface, full provenance: source_type, extraction_method, confidence, content_hash, observed_at);
+  a deterministic resolver produces one *current* `event_field_resolution` per field (versioned —
+  prior resolutions kept `is_current=False`). Weakly-inferred values are never written straight to
+  canonical/scheduling records.
+- **Two paths (this phase):** (1) **canonical graph relationship** — the event's graph node carries
+  `starts_at`/`city` and `OCCURS_AT`→venue / `IN_REGION`→region, so venue/city/region are *derived*
+  (`CANONICAL_RELATIONSHIP`), never asserted as a direct field; (2) **Boshow public-page structured
+  metadata** — JSON-LD (title-matched, not "first Event"), embedded state, Open Graph, labelled
+  visible text (flag-gated `NQUARK_CAPTURE_ENRICHMENT_PUBLIC_PAGE_ENABLED`).
+- **Source precedence** (field-specific registry): direct structured field → JSON-LD → embedded state
+  → Open Graph → visible text → canonical relationship → temporal; city/region/venue_id put canonical
+  relationship first.
+- **Deterministic resolver (no LLM):** higher authority wins; independent agreement raises confidence
+  (`RESOLVED_CONSENSUS`); equal-authority disagreement → `CONFLICT` (unresolved, flagged); stale/lower
+  never overrides newer/higher; below min-confidence → `NEEDS_REVIEW`; **no evidence → unresolved,
+  never guessed**. A missing/unparseable field yields **no candidate** (never a null).
+- **On-sale timing** is never an invented point: `source_on_sale_at` only from an explicit source
+  timestamp; not-on-sale→on-sale gives an interval (`estimated_on_sale_window_start/_end`); a
+  first-already-on-sale observation records only `first_ticket_state_seen_at`.
+- **Scheduler integration:** `tracked_event` is updated **only** from auto-resolved fields; partial
+  enrichment never erases values; conflicts never update scheduling; a date/status change recalculates
+  `next_capture_at`; the city allow-list is re-checked. Enrichment is **best-effort** and never fails
+  the capture.
+- **Internal API:** `GET /v1/internal/events/{event_id}/enrichment` (resolved fields + candidate
+  provenance) and `POST .../enrichment/resolve` (re-run for one event; flag-gated). `?trace=true`
+  shows the pipeline (page requested → blocks discovered → candidates extracted/normalized → canonical
+  venue resolution → resolver → conflicts → persisted → tracked_event updated → cadence recalculated),
+  with suppression reasons (`FIELD_NOT_PRESENT`, `PARSER_FAILED`, `LOW_CONFIDENCE`, `AMBIGUOUS_VENUE`,
+  `CONFLICTING_HIGH_AUTHORITY_VALUES`, `STALE_CANDIDATE`, `NO_CANONICAL_RELATIONSHIP`).
+- **Flags:** `NQUARK_CAPTURE_ENRICHMENT_ENABLED` (default `false`), `..._SOURCES`,
+  `..._PUBLIC_PAGE_ENABLED`, `..._MIN_CONFIDENCE`.
+
+### Deferred enrichment sources `[FUTURE]`
+
+Documented as future source types, **not built** in this phase: cross-platform event matching,
+poster OCR / vision, official social channels, search-engine enrichment, press extraction, and a
+manual-review UI.
+
+### Known limitations (Phase 2.1)
+
+- Boshow only. The canonical-graph path works live; the public-page path is Boshow-specific and
+  fixture-tested (live Boshow HTML is not fetched unless the public-page flag is on).
+- Venue geography derives city/region from the event's canonical graph relationships; ambiguous venue
+  names with no canonical relationship remain unresolved (never invented).
+
 ## What is explicitly NOT in Phase 1 `[FUTURE]`
 
 Deferred to the roadmap (see the MCP section + its backlog): prediction / ML sell-through, crowd

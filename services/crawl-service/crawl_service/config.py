@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     scheduled_capture_backoff_max_seconds: int = 21600  # 6h cap
     capture_http_timeout_seconds: float = 30.0
 
+    # --- Phase 2.1: evidence-based capture enrichment (all OFF by default) ---
+    capture_enrichment_enabled: bool = False
+    capture_enrichment_sources: str = "boshow"
+    capture_enrichment_public_page_enabled: bool = False  # fetch the source public page for candidates
+    capture_enrichment_min_confidence: float = 0.6        # min confidence to auto-resolve/update scheduler
+
     # --- cadence bands (hours); overridable but sensible India-first defaults ---
     cadence_far_future_hours: int = 24     # not on sale / >30 days away
     cadence_mid_hours: int = 12            # 15-30 days away
@@ -68,6 +74,10 @@ class Settings(BaseSettings):
     @property
     def scheduled_capture_source_set(self) -> frozenset[str]:
         return frozenset(s.strip() for s in self.scheduled_capture_sources.split(",") if s.strip())
+
+    @property
+    def capture_enrichment_source_set(self) -> frozenset[str]:
+        return frozenset(s.strip() for s in self.capture_enrichment_sources.split(",") if s.strip())
 
     @property
     def city_allowlist_set(self) -> frozenset[str]:
