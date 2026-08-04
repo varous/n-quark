@@ -80,7 +80,7 @@ class EnrichmentService:
             props = (node or {}).get("properties", {}) if node else {}
             title = props.get("display_name")
             source_url = source_url or props.get("source_url")  # public page for structured metadata
-            candidates += candidates_from_graph(node, neighbors, observed_at=now)
+            candidates += candidates_from_graph(node, neighbors, observed_at=now, origin_source=source)
             steps.append("canonical_relationship_resolved")
         except Exception:  # noqa: BLE001 — best-effort evidence
             suppressed.append({"source": "graph", "reason": "PARSER_FAILED"})
@@ -108,6 +108,13 @@ class EnrichmentService:
             observed_at=now, currently_on_sale=currently_on_sale,
             prev_first_ticket_state_seen_at=prev_first, prev_last_not_on_sale_at=prev_not)
         steps.append("candidates_extracted")
+
+        # Stamp the originating platform on page candidates (graph candidates already carry it;
+        # temporal candidates stay None -> nquark_temporal independence group).
+        from crawl_service.enrichment.registry import TEMPORAL_OBSERVATION
+        for c in candidates:
+            if c.origin_source is None and c.source_type != TEMPORAL_OBSERVATION:
+                c.origin_source = source
 
         valid = [c for c in candidates if valid_candidate(c)]
         for c in candidates:
@@ -147,6 +154,19 @@ class EnrichmentService:
         if trace:
             result["trace"] = {"resolver_version": RESOLVER_VERSION, "steps": steps}
         return result
+
+    def active_candidates(self, event_id: str) -> dict[str, list[Candidate]]:
+        """Active enrichment candidates for an event, grouped by field (for cross-source reconcile)."""
+        out: dict[str, list[Candidate]] = {}
+        with self._sf() as s:
+            rows = s.execute(
+                select(EnrichmentCandidate).where(
+                    EnrichmentCandidate.canonical_event_id == event_id,
+                    EnrichmentCandidate.candidate_status == "ACTIVE")
+            ).scalars().all()
+            for r in rows:
+                out.setdefault(r.field_name, []).append(self._row_to_candidate(r))
+        return out
 
     def store_candidates(self, event_id, source, source_record_id, candidates, now=None) -> dict:
         """Public persist for externally-produced candidates (e.g. the live pilot)."""
@@ -228,7 +248,7 @@ class EnrichmentService:
             field_name=r.field_name, candidate_value=r.candidate_value, source_type=r.source_type,
             extraction_method=r.extraction_method, confidence=r.confidence,
             observed_at=_aware(r.observed_at), source_url=r.source_url,
-            epistemic_status=r.epistemic_status)
+            epistemic_status=r.epistemic_status, origin_source=r.source)
         c.normalized_value = r.normalized_value
         return c
 

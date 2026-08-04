@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     capture_enrichment_public_page_timeout: float = 15.0
     capture_enrichment_public_page_rate_limit_ms: int = 500   # min gap between page requests
     boshow_share_base: str = "https://www.boshow.in/api/shows/share"
+
+    # --- Phase 3: independent second source + cross-platform reconciliation (all OFF by default) ---
+    second_source_capture_enabled: bool = False
+    second_source_name: str = "district"
+    reconciliation_enabled: bool = False
+    reconciliation_auto_match_threshold: float = 0.75
+    reconciliation_possible_match_threshold: float = 0.5
+    reconciliation_date_tolerance_hours: int = 36   # same day ±1 for tz/source-format slack
+    reconciliation_max_pairs_per_run: int = 500
     # Decision thresholds (deterministic; configurable).
     pilot_min_retrieval_success: float = 0.7
     pilot_min_incremental_gain_rate: float = 0.1
@@ -87,13 +96,20 @@ class Settings(BaseSettings):
     cadence_onsale_burst_hours: int = 2    # first 48h after on-sale (when known)
     cadence_event_day_hours: int = 2
 
+    def _with_second_source(self, base: frozenset[str]) -> frozenset[str]:
+        if self.second_source_capture_enabled and self.second_source_name:
+            return base | {self.second_source_name}
+        return base
+
     @property
     def scheduled_capture_source_set(self) -> frozenset[str]:
-        return frozenset(s.strip() for s in self.scheduled_capture_sources.split(",") if s.strip())
+        base = frozenset(s.strip() for s in self.scheduled_capture_sources.split(",") if s.strip())
+        return self._with_second_source(base)
 
     @property
     def capture_enrichment_source_set(self) -> frozenset[str]:
-        return frozenset(s.strip() for s in self.capture_enrichment_sources.split(",") if s.strip())
+        base = frozenset(s.strip() for s in self.capture_enrichment_sources.split(",") if s.strip())
+        return self._with_second_source(base)
 
     @property
     def city_allowlist_set(self) -> frozenset[str]:

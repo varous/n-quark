@@ -240,6 +240,46 @@ the default confidence bar, `KEEP_AS_FALLBACK` (freshness only) at a relaxed bar
 - The independence model is designed so a genuinely independent *second platform* (future) would
   produce real consensus — no Boshow surface can.
 
+## Phase 3 — Independent Second Source (District) + Cross-Platform Reconciliation `[CURRENT]`
+
+Adds one genuinely independent source (**District**, selected by a live probe — see
+[ADR-0009](adr/0009-second-source-and-reconciliation.md)) to scheduled capture, then reconciles
+overlapping Boshow/District listings into shared canonical events **without collapsing source truth**.
+Lives in crawl-service; additive migration `004`; default **off**.
+
+- **District capture parity:** signal-service's ticketing `discover`/`preview`/`ingest` accept a
+  per-request `source`, so the Phase 2 scheduler captures Boshow and District through one route (no
+  parallel scheduler). District gets its own source-specific Shadow Ledger history; `EventNotFound`
+  makes absence authoritative (a failed request never becomes absence). Flags:
+  `NQUARK_SECOND_SOURCE_CAPTURE_ENABLED`, `NQUARK_SECOND_SOURCE_NAME`.
+- **Per-origin independence:** a candidate's `independence_group` comes from its originating platform
+  (`boshow_origin` / `district_origin` / `nquark_temporal`), and graph projections inherit it. The
+  resolver grants `RESOLVED_CONSENSUS` only across **different** origins — so Boshow + District
+  agreement is real consensus, but any two Boshow surfaces are not.
+- **Bounded blocking + deterministic matcher:** candidates are generated only within blocks (date
+  tolerance, compatible city, shared title/performer/venue signal). The matcher scores
+  title/performer/venue/city/date/organizer and **refuses auto-match under a strong contradiction**
+  (different city, date beyond tolerance, non-overlapping performers) — title similarity never
+  overrides. Outcomes: `MATCHED` (≥ auto threshold, ≥2 agreeing dims, compatible date, different
+  sources) / `POSSIBLE_MATCH` / `CONFLICT` / `NOT_MATCHED`.
+- **Linkage without truth collapse:** an accepted match links both source listings via
+  `event_match_candidate` (`REPRESENTED_BY`); both source records, Shadow Ledger histories, enrichment
+  candidates and displayed prices/availability are preserved — canonical ids are never merged.
+- **Field reconciliation:** the resolver runs over both sources' candidates — independent agreement →
+  consensus; one source fills a field the other lacks; conflicts stay explicit; source-specific
+  price/availability are compared (`PLATFORM_DIFFERENCE` / `SAME` / `SINGLE_SOURCE`), not flattened.
+- **Internal endpoints:** `POST /v1/internal/reconciliation/{probe,run}`,
+  `GET /v1/internal/reconciliation/{matches,matches/{id},metrics}`,
+  `GET /v1/internal/events/{id}/source-records`. Flags:
+  `NQUARK_RECONCILIATION_ENABLED`, `..._AUTO_MATCH_THRESHOLD`, `..._POSSIBLE_MATCH_THRESHOLD`,
+  `..._DATE_TOLERANCE_HOURS`, `..._MAX_PAIRS_PER_RUN`.
+
+### Known limitations (Phase 3)
+
+- District only (one independent source, as mandated). Live Boshow↔District overlap is ~0 (grassroots
+  vs mainstream), so match/reconciliation mechanics are proven by fixture-backed tests, not a live
+  match. Accepted matches are recorded but canonical-id merging is deliberately not performed.
+
 ## What is explicitly NOT in Phase 1 `[FUTURE]`
 
 Deferred to the roadmap (see the MCP section + its backlog): prediction / ML sell-through, crowd

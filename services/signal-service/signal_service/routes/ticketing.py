@@ -24,22 +24,28 @@ router = APIRouter(prefix="/v1/signals/ticketing", tags=["ticketing"])
 async def discover_events(
     city: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
+    source: str | None = Query(default=None, description="Provider override (e.g. boshow|district)."),
 ) -> dict[str, object]:
-    """List event refs from the configured ticketing provider (discovery, no persistence)."""
+    """List event refs from the requested (or configured) ticketing provider (no persistence)."""
     try:
-        refs = await TicketingClient().discover(city=city, limit=limit)
+        refs = await TicketingClient(source).discover(city=city, limit=limit)
     except Exception as exc:  # noqa: BLE001 — surface provider errors to API consumer
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Ticketing discovery failed: {exc}"
         ) from exc
-    return {"provider": settings.ticketing_provider, "count": len(refs), "event_refs": refs}
+    return {"provider": source or settings.ticketing_provider, "count": len(refs), "event_refs": refs}
 
 
 @router.get("/events/{event_ref}/preview")
-async def preview_event(event_ref: str) -> dict[str, object]:
+async def preview_event(
+    event_ref: str,
+    source: str | None = Query(default=None, description="Provider override (e.g. boshow|district)."),
+) -> dict[str, object]:
     """Fetch and normalize one event without persisting."""
     try:
-        event = await TicketingClient().fetch_event(event_ref)
+        event = await TicketingClient(source).fetch_event(event_ref)
+    except EventNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Ticketing fetch failed: {exc}"
@@ -51,14 +57,17 @@ async def preview_event(event_ref: str) -> dict[str, object]:
 async def ingest_event(
     event_ref: str,
     trace: bool = Query(default=False, description="Return a per-stage PipelineTrace."),
+    source: str | None = Query(default=None, description="Provider override (e.g. boshow|district)."),
 ) -> dict[str, object]:
     """Ingest a ticketing event: observations + event/venue/artist entities + graph edges.
 
     This is the first multi-entity adapter — one event yields an event, a venue, and a lineup
     of artists, plus the fill_ratio demand ground truth. Artists resolve by name into the same
     canonical entities the YouTube/Trends pipelines produce, so supply meets demand on one node.
+    The optional ``source`` selects the provider per-request so the scheduler can capture Boshow
+    and a second source (District) through one route.
     """
-    ticketing = TicketingClient()
+    ticketing = TicketingClient(source)
     observation_client = ObservationServiceClient()
 
     try:

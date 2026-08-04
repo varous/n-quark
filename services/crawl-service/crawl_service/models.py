@@ -191,3 +191,35 @@ class EnrichmentRun(Base):
     metrics: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
     config_snapshot: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventMatchCandidate(Base):
+    """A cross-platform match candidate between two source listings (Phase 3).
+
+    Deduped on the unordered canonical-event pair. Accepting a match links source records to one
+    canonical event WITHOUT collapsing either source's records/history (truth preserved)."""
+
+    __tablename__ = "event_match_candidate"
+    __table_args__ = (
+        Index("uq_event_match_pair", "pair_key", unique=True),
+        Index("ix_event_match_status", "match_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pair_key: Mapped[str] = mapped_column(String(1050), nullable=False)
+    left_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    left_source_record_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    left_canonical_event_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    right_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    right_source_record_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    right_canonical_event_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    match_status: Mapped[str] = mapped_column(String(24), nullable=False)   # MATCHED|POSSIBLE_MATCH|CONFLICT|NOT_MATCHED
+    match_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    component_scores: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    supporting_signals: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    contradicting_signals: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    reason_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    matcher_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(24), nullable=False, default="AUTO")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

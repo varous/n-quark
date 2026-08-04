@@ -598,7 +598,8 @@ class DistrictProvider:
             r.raise_for_status()
             events = _jsonld_events(r.text)
         if not events:
-            raise ValueError(f"district: no Event JSON-LD at {url}")
+            # Reachable page with no Event JSON-LD -> treat as record absent (authoritative).
+            raise EventNotFound(f"district: no Event JSON-LD at {url}")
         return event_from_district(events[0], url)
 
 
@@ -814,8 +815,10 @@ class PartnerFeedProvider:
         raise RuntimeError(f"{self.name} requires a partner feed (no compliant public access)")
 
 
-def get_provider() -> TicketingProvider:
-    provider = settings.ticketing_provider.lower()
+def get_provider(name: str | None = None) -> TicketingProvider:
+    # Per-request override lets the scheduler capture multiple sources through one ingest route
+    # (Phase 3); falls back to the globally configured provider.
+    provider = (name or settings.ticketing_provider).lower()
     if provider == "boshow":
         return BoshowProvider()
     if provider == "district":
@@ -961,8 +964,11 @@ def commercial_state(event: TicketingEvent) -> dict[str, Any]:
 
 
 class TicketingClient:
+    def __init__(self, provider: str | None = None) -> None:
+        self._provider = provider  # per-request source override (Phase 3); None -> configured default
+
     async def fetch_event(self, event_ref: str) -> TicketingEvent:
-        return await get_provider().extract(event_ref)
+        return await get_provider(self._provider).extract(event_ref)
 
     async def discover(self, *, city: str | None = None, limit: int = 20) -> list[str]:
-        return await get_provider().discover(city=city, limit=limit)
+        return await get_provider(self._provider).discover(city=city, limit=limit)

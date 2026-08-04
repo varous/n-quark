@@ -17,7 +17,6 @@ from crawl_service.enrichment.registry import (
     FIELD_REGISTRY,
     TEMPORAL_OBSERVATION,
     Candidate,
-    surface_meta,
 )
 
 # reason codes
@@ -91,7 +90,7 @@ def resolve_field(field_name: str, candidates: list[Candidate], *, min_confidenc
     # Confidence: only agreement across DIFFERENT independence groups is true consensus (Phase 2.2).
     # Multiple same-family surfaces (e.g. Boshow API + its share page) are NOT independent — they
     # get only a modest extraction bump, never RESOLVED_CONSENSUS.
-    independence_groups = {surface_meta(c.source_type)[2] for c in supporting}
+    independence_groups = {c.independence_group for c in supporting}
     surfaces = {c.source_type for c in supporting}
     confidence = max(c.confidence for c in supporting)
     independent = len(independence_groups) > 1

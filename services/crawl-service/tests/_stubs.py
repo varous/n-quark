@@ -42,6 +42,16 @@ class StubGraphReader:
 
 
 @dataclass
+class MultiStubGraphReader:
+    """Returns a per-event (node, neighbors) from a mapping keyed by canonical_event_id."""
+
+    mapping: dict = field(default_factory=dict)  # event_id -> (node, neighbors)
+
+    async def get_event(self, event_id: str):
+        return self.mapping.get(event_id, (None, []))
+
+
+@dataclass
 class StubPageFetcher:
     """Returns fixed (html, visible_text) for public-page enrichment tests; None simulates failure."""
 

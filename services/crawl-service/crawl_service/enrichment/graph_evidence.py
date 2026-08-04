@@ -22,6 +22,7 @@ from crawl_service.enrichment.registry import (
 
 def candidates_from_graph(
     node: dict[str, Any] | None, neighbors: list[dict[str, Any]], *, observed_at: datetime,
+    origin_source: str = "boshow",
 ) -> list[Candidate]:
     if not node:
         return []
@@ -34,6 +35,7 @@ def candidates_from_graph(
         c = Candidate(
             field_name=field_name, candidate_value=value, source_type=source_type,
             extraction_method=method, confidence=conf, observed_at=observed_at,
+            origin_source=origin_source,
         ).normalize()
         if c.normalized_value is not None:
             out.append(c)

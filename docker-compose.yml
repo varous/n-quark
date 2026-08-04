@@ -87,6 +87,10 @@ services:
       # Phase 2.2 live public-page enrichment pilot — OFF by default.
       NQUARK_CAPTURE_ENRICHMENT_PILOT_ENABLED: ${CAPTURE_ENRICHMENT_PILOT_ENABLED:-false}
       NQUARK_CAPTURE_ENRICHMENT_MIN_CONFIDENCE: ${CAPTURE_ENRICHMENT_MIN_CONFIDENCE:-0.6}
+      # Phase 3 second source + reconciliation — OFF by default.
+      NQUARK_SECOND_SOURCE_CAPTURE_ENABLED: ${SECOND_SOURCE_CAPTURE_ENABLED:-false}
+      NQUARK_SECOND_SOURCE_NAME: ${SECOND_SOURCE_NAME:-district}
+      NQUARK_RECONCILIATION_ENABLED: ${RECONCILIATION_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy

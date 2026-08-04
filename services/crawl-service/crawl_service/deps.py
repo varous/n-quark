@@ -6,11 +6,15 @@ from crawl_service.db import SessionLocal
 from crawl_service.enrichment.clients import HttpGraphReader, HttpPageFetcher
 from crawl_service.enrichment.pilot.service import PilotService
 from crawl_service.enrichment.service import EnrichmentService
+from crawl_service.reconciliation.probe import ProbeService
+from crawl_service.reconciliation.service import ReconciliationService
 from crawl_service.service import SchedulerService
 
 _scheduler: SchedulerService | None = None
 _enricher: EnrichmentService | None = None
 _pilot: PilotService | None = None
+_reconciler: ReconciliationService | None = None
+_probe: ProbeService | None = None
 
 
 def get_enricher() -> EnrichmentService:
@@ -33,3 +37,17 @@ def get_pilot_service() -> PilotService:
     if _pilot is None:
         _pilot = PilotService(SessionLocal, HttpGraphReader(), get_enricher(), settings)
     return _pilot
+
+
+def get_reconciliation_service() -> ReconciliationService:
+    global _reconciler
+    if _reconciler is None:
+        _reconciler = ReconciliationService(SessionLocal, HttpGraphReader(), get_enricher(), settings)
+    return _reconciler
+
+
+def get_probe_service() -> ProbeService:
+    global _probe
+    if _probe is None:
+        _probe = ProbeService(settings.signal_service_url)
+    return _probe

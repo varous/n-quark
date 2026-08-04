@@ -160,6 +160,7 @@ class Candidate:
     source_url: str | None = None
     source_published_at: datetime | None = None
     epistemic_status: str = OBSERVED_PUBLIC_STATE
+    origin_source: str | None = None  # originating platform (boshow / district / …) — sets independence
 
     def normalize(self) -> Candidate:
         spec = FIELD_REGISTRY.get(self.field_name)
@@ -172,11 +173,20 @@ class Candidate:
 
     @property
     def source_family(self) -> str:
-        return surface_meta(self.source_type)[1]
+        # n-quark's own derivations are their own family; platform surfaces belong to their platform.
+        if self.source_type == TEMPORAL_OBSERVATION:
+            return "n_quark_observation"
+        if self.source_type == CANONICAL_ENTITY_RELATIONSHIP:
+            return "n_quark_graph"
+        return self.origin_source or surface_meta(self.source_type)[1]
 
     @property
     def independence_group(self) -> str:
-        return surface_meta(self.source_type)[2]
+        # Per-ORIGIN: two candidates are independent only if they come from different platforms.
+        # A graph projection inherits its originating source's group (not independent of that source).
+        if self.source_type == TEMPORAL_OBSERVATION:
+            return "nquark_temporal"
+        return f"{self.origin_source}_origin" if self.origin_source else surface_meta(self.source_type)[2]
 
     @property
     def content_hash(self) -> str:

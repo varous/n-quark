@@ -54,7 +54,7 @@ class HttpCapturer:
         url = f"{self.signal_url}/v1/signals/ticketing/events/{source_record_id}/ingest"
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(url)
+                resp = await client.post(url, params={"source": source})  # per-source provider (Phase 3)
         except httpx.TimeoutException as exc:
             return CaptureOutcome(TIMEOUT, error=str(exc))
         except httpx.HTTPError as exc:
