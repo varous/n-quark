@@ -96,7 +96,7 @@ async def sync_schedule(
     if not settings.scheduled_capture_enabled:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="scheduled capture disabled")
     url = f"{settings.signal_service_url}/v1/signals/ticketing/discover"
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {"limit": limit, "source": source}  # per-source provider (Phase 3)
     if city:
         params["city"] = city
     try:

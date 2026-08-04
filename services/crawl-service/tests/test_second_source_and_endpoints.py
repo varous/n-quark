@@ -50,4 +50,42 @@ def test_reconciliation_reads_available(client: TestClient) -> None:
 
 def test_second_source_defaults_off():
     assert settings.second_source_capture_enabled is False
+
+
+def test_sync_forwards_source_to_discover(client: TestClient, monkeypatch) -> None:
+    """Regression: /sync?source=district must discover FROM district, not the default provider."""
+    import crawl_service.routes.capture_schedule as cs
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"event_refs": ["district-ref-1", "district-ref-2"]}
+
+    class _Client:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            pass
+
+        async def get(self, url, params=None):
+            captured["url"] = url
+            captured["params"] = params
+            return _Resp()
+
+    monkeypatch.setattr(cs.settings, "scheduled_capture_enabled", True)
+    monkeypatch.setattr(cs.httpx, "AsyncClient", _Client)
+    r = client.post("/v1/internal/capture-schedule/sync", params={"source": "district", "limit": 5})
+    assert r.status_code == 200
+    assert captured["params"]["source"] == "district"  # source forwarded, not defaulted
+    assert r.json()["source"] == "district"
     assert settings.reconciliation_enabled is False
