@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "info"
     network_mode: NetworkMode = Field(default_factory=detect_network_mode)
+
+    # --- Admin Phase A: internal observability console (all OFF by default) ---
+    admin_api_enabled: bool = False           # gate the /admin/v1 BFF surface
+    admin_frontend_enabled: bool = False       # informational (frontend build gate)
+    admin_dev_auth_enabled: bool = False       # isolated dev login; NEVER a prod identity provider
+    admin_operational_actions_enabled: bool = False  # OPERATOR mutations (capture/enrich/resolve one event)
+    admin_session_secret: str = "dev-insecure-change-me"  # HMAC signing key for dev sessions
+    admin_session_ttl_seconds: int = 28800     # 8h dev session
+    admin_graph_max_nodes: int = 150           # hard cap on subgraph size
+    admin_graph_max_depth: int = 2             # hard cap on subgraph expansion depth
+    admin_audit_db_url: str | None = None      # defaults to postgres_url; SQLite in tests
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"

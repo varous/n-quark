@@ -26,6 +26,20 @@ async def run(
     return await svc.run(sources=src, limit=limit, trace=trace)
 
 
+@router.post("/resolve", summary="Re-run entity resolution for one event (internal)")
+async def resolve_one(
+    event_id: str = Query(...),
+    source: str = Query(...),
+    source_record_id: str = Query(...),
+    trace: bool = Query(default=False),
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    if not settings.entity_resolution_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="entity resolution disabled")
+    return await svc.resolve_event(canonical_event_id=event_id, source=source,
+                                   source_record_id=source_record_id, trace=trace)
+
+
 @router.get("/coverage", summary="Cross-source entity coverage metrics (internal)")
 def coverage(
     source: str | None = Query(default=None),
@@ -41,6 +55,33 @@ def cross_inventory(
     svc: EntityResolutionService = Depends(get_entity_resolution_service),
 ) -> dict[str, Any]:
     return svc.cross_inventory(entity_type=entity_type, limit=limit)
+
+
+@router.get("/entities", summary="List canonical entities with identity state (internal, paginated)")
+def entities(
+    entity_type: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    cross_source_only: bool = Query(default=False),
+    has_ambiguous: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    return svc.entities(entity_type=entity_type, source=source, status=status_filter,
+                        cross_source_only=cross_source_only, has_ambiguous=has_ambiguous,
+                        limit=limit, offset=offset)
+
+
+@router.get("/entities/{entity_type}/{entity_id}", summary="Canonical entity detail (internal)")
+def entity_detail(
+    entity_type: str, entity_id: str,
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    data = svc.entity_detail(entity_type, entity_id)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="entity not found")
+    return data
 
 
 @router.get("/unresolved", summary="Unresolved / ambiguous / possible entity queue (internal)")

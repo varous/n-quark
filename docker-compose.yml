@@ -223,16 +223,21 @@ services:
       - "8000:8000"
     environment:
       NQUARK_NETWORK_MODE: docker
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      # Admin Phase A — internal observability console BFF (all OFF by default).
+      NQUARK_ADMIN_API_ENABLED: ${ADMIN_API_ENABLED:-false}
+      NQUARK_ADMIN_DEV_AUTH_ENABLED: ${ADMIN_DEV_AUTH_ENABLED:-false}
+      NQUARK_ADMIN_OPERATIONAL_ACTIONS_ENABLED: ${ADMIN_OPERATIONAL_ACTIONS_ENABLED:-false}
+      NQUARK_ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-dev-insecure-change-me}
     depends_on:
-      - crawl-service
-      - media-service
-      - signal-service
-      - observation-service
-      - entity-service
-      - graph-service
-      - analytics-service
-      - feature-service
-      - intelligence-service
+      postgres:
+        condition: service_healthy
+      crawl-service:
+        condition: service_started
+      signal-service:
+        condition: service_started
+      graph-service:
+        condition: service_started
 
   frontend:
     build: ./frontend

@@ -86,6 +86,56 @@ def get_schedule(source: str, source_record_id: str) -> dict[str, Any]:
         return _coverage(te, now, job)
 
 
+def _job_dict(j: ScheduledCaptureJob) -> dict[str, Any]:
+    return {
+        "id": j.id, "source": j.source, "source_record_id": j.source_record_id,
+        "canonical_event_id": j.canonical_event_id, "status": j.status, "priority": j.priority,
+        "scheduled_at": _iso(_aware(j.scheduled_at)), "started_at": _iso(_aware(j.started_at)),
+        "completed_at": _iso(_aware(j.completed_at)), "next_capture_at": _iso(_aware(j.next_capture_at)),
+        "attempt_count": j.attempt_count, "consecutive_failures": j.consecutive_failures,
+        "worker_id": j.worker_id, "lock_expires_at": _iso(_aware(j.lock_expires_at)),
+        "result_code": j.result_code, "last_error_code": j.last_error_code,
+        "created_at": _iso(_aware(j.created_at)), "updated_at": _iso(_aware(j.updated_at)),
+    }
+
+
+@router.get("/jobs", summary="List scheduled capture jobs (internal, paginated)")
+def list_jobs(
+    status_filter: str | None = Query(default=None, alias="status"),
+    source: str | None = Query(default=None),
+    expired_lock: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    with SessionLocal() as s:
+        stmt = select(ScheduledCaptureJob)
+        if status_filter:
+            stmt = stmt.where(ScheduledCaptureJob.status == status_filter)
+        if source:
+            stmt = stmt.where(ScheduledCaptureJob.source == source)
+        total = len(s.execute(stmt).scalars().all())
+        stmt = stmt.order_by(ScheduledCaptureJob.created_at.desc()).offset(offset).limit(limit)
+        jobs = s.execute(stmt).scalars().all()
+    items = [_job_dict(j) for j in jobs]
+    if expired_lock:
+        items = [it for it in items
+                 if it["status"] == "RUNNING" and it["lock_expires_at"]
+                 and datetime.fromisoformat(it["lock_expires_at"]) < now]
+    return {"count": total, "limit": limit, "offset": offset, "jobs": items}
+
+
+@router.get("/jobs/{job_id}", summary="One scheduled capture job (internal)")
+def get_job(job_id: str) -> dict[str, Any]:
+    with SessionLocal() as s:
+        j = s.get(ScheduledCaptureJob, job_id)
+        if j is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="job not found")
+        data = _job_dict(j)
+        data["detail"] = j.detail
+        return data
+
+
 @router.post("/sync", summary="Discover + enroll Boshow events for tracking (internal)")
 async def sync_schedule(
     source: str = Query(default="boshow"),

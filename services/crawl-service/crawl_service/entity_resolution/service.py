@@ -431,6 +431,123 @@ class EntityResolutionService:
         rows.sort(key=lambda r: (-len(r["sources"]), -r["event_count"]))
         return {"entity_type": entity_type, "count": len(rows), "cross_source_entities": rows[:limit]}
 
+    # ---- canonical-entity listing (admin read layer) --------------------------------------------
+    def _identity_state(self, canonical_id: str, entity_type: str, statuses: set[str],
+                        all_canon_ids: set[str], source_count: int) -> str:
+        """Best-effort identity classification for the admin console (observe, don't migrate)."""
+        # A city-scoped venue (`venue:name--city`) whose non-scoped sibling `venue:name` also exists
+        # as a canonical is a possible legacy/naive-projection duplicate.
+        if entity_type == "VENUE" and "--" in canonical_id:
+            base = canonical_id.rsplit("--", 1)[0]
+            if base in all_canon_ids:
+                return "POSSIBLE_DUPLICATE"
+        if "RESOLVED" not in statuses:
+            return "UNRESOLVED"
+        if source_count > 1:
+            return "ALIAS_LINKED"
+        return "CANONICAL"
+
+    def entities(self, *, entity_type: str | None = None, source: str | None = None,
+                 status: str | None = None, cross_source_only: bool = False,
+                 has_ambiguous: bool = False, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        with self._sf() as s:
+            cands = s.execute(select(EntityResolutionCandidate)).scalars().all()
+            handles = s.execute(select(EntitySourceHandle)).scalars().all()
+        canon_handles: dict[str, list] = {}
+        for h in handles:
+            canon_handles.setdefault(h.canonical_entity_id, []).append(h)
+        all_canon_ids = {c.candidate_canonical_entity_id for c in cands if c.candidate_canonical_entity_id}
+        # ambiguous mentions per (entity_type, normalized_name)
+        ambiguous_by_name: dict[tuple, int] = {}
+        for c in cands:
+            if c.resolution_status == R.AMBIGUOUS:
+                k = (c.entity_type, c.normalized_name)
+                ambiguous_by_name[k] = ambiguous_by_name.get(k, 0) + 1
+
+        agg: dict[str, dict[str, Any]] = {}
+        for c in cands:
+            cid = c.candidate_canonical_entity_id
+            if not cid:
+                continue
+            a = agg.setdefault(cid, {"canonical_entity_id": cid, "entity_type": c.entity_type,
+                                     "canonical_name": c.raw_name, "sources": set(), "events": set(),
+                                     "statuses": set(), "normalized_name": c.normalized_name,
+                                     "last_observed": c.observed_at})
+            a["sources"].add(c.source)
+            a["statuses"].add(c.resolution_status)
+            if c.canonical_event_id:
+                a["events"].add(c.canonical_event_id)
+            if c.observed_at and (a["last_observed"] is None or c.observed_at > a["last_observed"]):
+                a["last_observed"] = c.observed_at
+
+        rows: list[dict[str, Any]] = []
+        for cid, a in agg.items():
+            hs = canon_handles.get(cid, [])
+            ambiguous_count = ambiguous_by_name.get((a["entity_type"], a["normalized_name"]), 0)
+            istate = self._identity_state(cid, a["entity_type"], a["statuses"], all_canon_ids, len(a["sources"]))
+            row = {
+                "canonical_entity_id": cid, "canonical_name": a["canonical_name"],
+                "entity_type": a["entity_type"], "source_handles": len(hs),
+                "sources": sorted(a["sources"]), "linked_event_count": len(a["events"]),
+                "linked_source_count": len(a["sources"]),
+                "resolution_status": "RESOLVED" if "RESOLVED" in a["statuses"] else sorted(a["statuses"])[0],
+                "ambiguous_candidate_count": ambiguous_count, "identity_state": istate,
+                "last_observed": _iso(_aware(a["last_observed"])),
+            }
+            rows.append(row)
+
+        if entity_type:
+            rows = [r for r in rows if r["entity_type"] == entity_type]
+        if source:
+            rows = [r for r in rows if source in r["sources"]]
+        if status:
+            rows = [r for r in rows if r["resolution_status"] == status]
+        if cross_source_only:
+            rows = [r for r in rows if r["linked_source_count"] > 1]
+        if has_ambiguous:
+            rows = [r for r in rows if r["ambiguous_candidate_count"] > 0]
+        rows.sort(key=lambda r: (-r["linked_source_count"], -r["linked_event_count"], r["canonical_entity_id"]))
+        total = len(rows)
+        return {"count": total, "limit": limit, "offset": offset,
+                "entities": rows[offset:offset + limit]}
+
+    def entity_detail(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
+        with self._sf() as s:
+            cands = s.execute(
+                select(EntityResolutionCandidate).where(
+                    EntityResolutionCandidate.candidate_canonical_entity_id == entity_id)
+            ).scalars().all()
+            handles = s.execute(
+                select(EntitySourceHandle).where(
+                    EntitySourceHandle.canonical_entity_id == entity_id)
+            ).scalars().all()
+            all_canon = {c.candidate_canonical_entity_id for c in
+                         s.execute(select(EntityResolutionCandidate)).scalars().all()
+                         if c.candidate_canonical_entity_id}
+        if not cands and not handles:
+            return None
+        sources = sorted({c.source for c in cands})
+        statuses = {c.resolution_status for c in cands}
+        events = sorted({c.canonical_event_id for c in cands if c.canonical_event_id})
+        name = cands[0].raw_name if cands else entity_id
+        istate = self._identity_state(entity_id, entity_type, statuses, all_canon, len(sources))
+        legacy = None
+        if entity_type == "VENUE" and "--" in entity_id:
+            base = entity_id.rsplit("--", 1)[0]
+            if base in all_canon:
+                legacy = base
+        return {
+            "canonical_entity_id": entity_id, "canonical_name": name, "entity_type": entity_type,
+            "identity_state": istate, "legacy_projection_id": legacy,
+            "sources": sources, "linked_events": events, "linked_event_count": len(events),
+            "linked_source_count": len(sources),
+            "source_handles": [{"source": h.source, "handle": h.source_entity_handle,
+                                "confidence": h.confidence, "method": h.resolution_method,
+                                "first_seen": _iso(_aware(h.first_seen)),
+                                "last_seen": _iso(_aware(h.last_seen))} for h in handles],
+            "candidates": [self._row_summary(c) for c in cands],
+        }
+
     @staticmethod
     def _row_summary(r: EntityResolutionCandidate) -> dict[str, Any]:
         return {"id": r.id, "entity_type": r.entity_type, "source": r.source,

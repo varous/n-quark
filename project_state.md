@@ -20,6 +20,7 @@ append-only MCP — never overwrite it).
 | 2.2 — Source-family / pilot | surface/source_family/independence_group; proved Boshow public page adds no new fields (OG-only, same family) → not promoted | ADR-0008 |
 | 3 — Second source + reconciliation | Independent source **District** (schema.org JSON-LD); per-origin independence; bounded blocking + deterministic matcher; linkage without truth collapse; field reconciliation across independence groups | crawl-service `reconciliation/`, ADR-0009 |
 | 3.1 — Cross-inventory entity resolution | Resolve exclusive Boshow/District events onto **shared canonical artists/venues/organizers/series**; per-type deterministic resolvers + ambiguity policy; source-handle registry + history; graph IDENTIFIES/ORGANIZED_BY/PART_OF_SERIES; shared entities never imply duplicate events | crawl-service `entity_resolution/`, migration 005, ADR-0010, `docs/entity-resolution.md` |
+| Admin A — inspection console | First internal observability console: gateway **BFF** (`/admin/v1`) with server-side auth + RBAC (VIEWER/ANALYST/OPERATOR/ADMIN), read models over crawl/graph/Shadow-Ledger, bounded graph explorer, `identity_state` (legacy-vs-canonical visible), audited OPERATOR actions; Vite/React frontend (8 screens, provenance drawer, epistemic labels) | api-gateway `admin/`, frontend `src/admin/`, ADR-0011, `docs/admin-console.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -60,9 +61,25 @@ Entity resolution enabled over the real Boshow+District cohorts (migration 005 a
   handles, while reconciliation of the same two events yielded **0 matches** (shared entity ≠ duplicate
   event). Fixture rows removed after.
 
+## Admin Phase A — LIVE VALIDATED (2026-08-04, full docker stack + browser)
+
+Gateway BFF + Vite/React console, live over the real Boshow+District data:
+- Auth: 401 unauthenticated; dev login issues HMAC session; role gate enforced server-side (VIEWER
+  op → 403, VIEWER audit → 403, OPERATOR op → 200, ADMIN audit → 200).
+- Dashboard: 19 tracked, 23 captures, 19 transitions, 0.92 artist rate, 2 ambiguous, boshow/district
+  source cards, attention queues — rendered in the browser.
+- Entities: identity_state badges; `Skinny Mos` as ARTIST **and** VENUE (4 events each, handle reuse).
+- Legacy-vs-canonical visible: event relationships show both `venue:the-urban-theatre-project` (naive)
+  and `venue:urban-theatre-project--kolkata` (Phase 3.1) → `POSSIBLE_DUPLICATE` surfaced, not hidden.
+- Event detail tabs incl. Shadow Ledger timeline (District `EVENT_FIRST_SEEN`); bounded graph explorer
+  (26 nodes/26 edges around THE ABOMINATION XII, PART_OF_SERIES + IDENTIFIES edges).
+- OPERATOR `rerun-entity-resolution` on one event → ok, request id, **persisted to `admin_audit_log`**.
+- Downstream-unavailable and graph node/depth caps enforced (tests + service).
+
 ## Test status
-crawl **169** · signal **70** · graph **60** · analytics **11** · observation **11** · entity **12** ·
-gateway **8** — all pass. Lint clean except baseline-tolerated B008 (FastAPI `Depends`).
+crawl **172** · gateway **30** · signal **70** · graph **60** · analytics **11** · observation **11** ·
+entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Lint clean except baseline-tolerated
+B008 (FastAPI `Depends`).
 
 ## Invariants / constraints (must hold)
 - Deterministic + explainable only; **no LLM** in detection/matching/enrichment.
@@ -75,6 +92,13 @@ gateway **8** — all pass. Lint clean except baseline-tolerated B008 (FastAPI `
 - API keys: user adds to `.env`; never handled/pasted by the agent.
 
 ## Recommended next phase
+**Admin Phase B — governed identity actions + operational hardening.** Add the (still read-only-today)
+resolution-queue *commands* (accept / reject / merge-with-guardrails) behind OPERATOR + audit; a safe
+targeted "capture one event now" internal endpoint (then wire the console button); gateway Alembic for
+the audit table; Google Workspace OIDC via the existing `authenticate` contract; and a
+canonical-vs-legacy **unification migration** driven by the `POSSIBLE_DUPLICATE` signal this phase now
+surfaces. Then resume the data track:
+
 **3.2 — regional/market analytics over shared entities + unify the two entity id conventions.**
 (1) Build minimal internal cross-inventory analytics on top of the Phase 3.1 canonical entities
 (artist/venue/organizer footprints across sources, cities, series) — read-only, deterministic, no
