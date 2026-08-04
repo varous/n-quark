@@ -7,6 +7,7 @@ from crawl_service.enrichment.clients import HttpGraphReader, HttpGraphWriter, H
 from crawl_service.enrichment.pilot.service import PilotService
 from crawl_service.enrichment.service import EnrichmentService
 from crawl_service.entity_resolution.service import EntityResolutionService
+from crawl_service.governance import GovernanceService
 from crawl_service.reconciliation.probe import ProbeService
 from crawl_service.reconciliation.service import ReconciliationService
 from crawl_service.service import SchedulerService
@@ -17,6 +18,14 @@ _pilot: PilotService | None = None
 _reconciler: ReconciliationService | None = None
 _probe: ProbeService | None = None
 _entity_resolver: EntityResolutionService | None = None
+_governance: GovernanceService | None = None
+
+
+def get_governance_service() -> GovernanceService:
+    global _governance
+    if _governance is None:
+        _governance = GovernanceService(SessionLocal, HttpGraphReader(), HttpGraphWriter(), settings)
+    return _governance
 
 
 def get_enricher() -> EnrichmentService:

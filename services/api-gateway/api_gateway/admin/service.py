@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from api_gateway.admin.gateway_client import DownstreamGateway
+from api_gateway.admin.gateway_client import Down, DownstreamGateway
 from api_gateway.config import settings
 
 CRAWL, GRAPH = "crawl", "graph"
@@ -328,7 +328,16 @@ class AdminService:
             "possible_canonical_duplicates": sum(1 for e in elist
                                                  if e.get("identity_state") == "POSSIBLE_DUPLICATE"),
         }
-        return {"services": services, "data_quality": data_quality}
+        # gateway migration status (Admin Phase B) + governed canonical counts
+        from api_gateway.db.session import migration_status
+        counts = await self.governance_counts()
+        return {"services": services, "data_quality": data_quality,
+                "gateway_migration": migration_status(),
+                "canonical_counts": {
+                    "raw_graph_entities_from_candidates": sum(
+                        v.get("unique_canonical_entities", 0) for v in et.values()),
+                    "canonical_resolved_entities": counts.get("canonical_resolved_entities"),
+                    "legacy_superseded_nodes": counts.get("legacy_superseded_nodes")}}
 
     # ---- search ---------------------------------------------------------------------------------
     async def search(self, q: str, *, limit: int = 20) -> dict[str, Any]:
@@ -362,3 +371,18 @@ class AdminService:
                                params={"event_id": event_id, "source": source,
                                        "source_record_id": source_record_id})
         return {"ok": r.ok, "status": r.status, "result": r.data}
+
+    async def capture_now(self, source: str, source_record_id: str,
+                          canonical_event_id: str | None = None) -> dict[str, Any]:
+        r = await self.gw.post(CRAWL, "/v1/internal/capture-schedule/capture-now",
+                               params={"source": source, "source_record_id": source_record_id,
+                                       **({"canonical_event_id": canonical_event_id} if canonical_event_id else {})})
+        return {"ok": r.ok, "status": r.status, "result": r.data}
+
+    # ---- governance commands (proxied to crawl's owned command surface) -------------------------
+    async def governance(self, path: str, payload: dict) -> Down:
+        return await self.gw.post(CRAWL, f"/v1/internal/governance/{path}", json=payload)
+
+    async def governance_counts(self) -> dict[str, Any]:
+        r = await self.gw.get(CRAWL, "/v1/internal/governance/counts")
+        return {"available": r.available, **(r.data or {})} if r.data else {"available": r.available}

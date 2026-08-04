@@ -160,6 +160,19 @@ async def sync_schedule(
     return {"source": source, "discovered": len(refs), "enrolled": enrolled}
 
 
+@router.post("/capture-now", summary="Targeted capture of one tracked event via the normal path (internal)")
+async def capture_now(
+    source: str = Query(...),
+    source_record_id: str = Query(...),
+    canonical_event_id: str | None = Query(default=None),
+    scheduler: SchedulerService = Depends(get_scheduler),
+) -> dict[str, Any]:
+    if not settings.scheduled_capture_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="scheduled capture disabled")
+    return await scheduler.capture_now(source=source, source_record_id=source_record_id,
+                                       canonical_event_id=canonical_event_id)
+
+
 @router.post("/run", summary="Run one scheduling pass (internal)")
 async def run_schedule(
     trace: bool = Query(default=False),

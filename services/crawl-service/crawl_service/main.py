@@ -9,6 +9,7 @@ from crawl_service.routes.enrichment_pilot import router as enrichment_pilot_rou
 from crawl_service.routes.entity_resolution import entities_router as entity_entities_router
 from crawl_service.routes.entity_resolution import events_router as entity_events_router
 from crawl_service.routes.entity_resolution import router as entity_resolution_router
+from crawl_service.routes.governance import router as governance_router
 from crawl_service.routes.reconciliation import events_router as reconciliation_events_router
 from crawl_service.routes.reconciliation import router as reconciliation_router
 
@@ -26,6 +27,7 @@ app.include_router(reconciliation_events_router)
 app.include_router(entity_resolution_router)
 app.include_router(entity_entities_router)
 app.include_router(entity_events_router)
+app.include_router(governance_router)
 
 
 @app.get("/health")

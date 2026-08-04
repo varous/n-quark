@@ -91,6 +91,33 @@ ADMIN_SESSION_SECRET=dev-secret ENTITY_RESOLUTION_ENABLED=true ... docker compos
 cd frontend && VITE_API_URL=http://localhost:8000 npm run dev   # http://localhost:5173
 ```
 
+## Governed commands (Admin Phase B)
+
+The console is now a governed workbench (see [ADR-0012](adr/0012-governed-resolution-decisions.md)). Every
+mutation is role-authorized server-side, validated, audited, recorded as an append-only decision
+(`admin_resolution_decision`, gateway-owned, Alembic migration `001`), idempotent on an idempotency key,
+and reversible. Original source evidence is never deleted.
+
+- `POST /admin/v1/resolution-decisions/preview` — impact preview (no mutation).
+- `.../accept` `.../reject` `.../create-entity` `.../link-handle` `.../mark-alias` `.../mark-unresolved`
+  `.../correct-series` — ANALYST.
+- `.../supersede-legacy` — ADMIN (non-destructive: `legacy -SUPERSEDED_BY-> canonical`, legacy node + edges
+  preserved, canonical counts dedupe superseded ids).
+- `.../{decision_id}/reverse` — ADMIN (blocks with `REVERSAL_REQUIRES_MANUAL_DEPENDENCY_RESOLUTION` if a
+  non-reversed decision depends on it).
+- `GET .../resolution-decisions[/{id}]` — VIEWER.
+- `POST /admin/v1/operations/capture-now` — OPERATOR/ADMIN; one targeted event through the normal
+  scheduler → Shadow Ledger path, idempotent within a one-minute window; a failed request never becomes
+  absence.
+
+Reason is required for create / mark-alias / supersede / correct-series / reverse. Conflicts are explicit:
+`STALE_PREVIEW`, `CANDIDATE_ALREADY_RESOLVED`, `HANDLE_ALREADY_LINKED`, `ENTITY_TYPE_MISMATCH`,
+`LEGACY_ALREADY_SUPERSEDED`, `DECISION_ALREADY_APPLIED`. The **Resolution Workbench** (three panes:
+source evidence · candidate entities · decision & impact) and the event **Capture ops** tab (capture-now)
+drive these, role-gated in the UI *and* enforced server-side.
+
+Extra flags: `ADMIN_OPERATIONAL_ACTIONS_ENABLED` also gates all governance commands (default off).
+
 ## Known limitations
 
 - The audit table uses `create_all` (the gateway has no Alembic yet) with a SQLite fallback when the

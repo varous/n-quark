@@ -305,3 +305,25 @@ class EntityResolutionHistory(Base):
     reason_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
     resolver_version: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EntitySupersession(Base):
+    """A legacy/source-projected canonical node non-destructively superseded by an evidence-resolved
+    canonical entity (Admin Phase B). The legacy node + its edges are preserved; admin reads resolve the
+    alias to the canonical target and stop counting the legacy node as a separate entity."""
+
+    __tablename__ = "entity_supersession"
+    __table_args__ = (
+        Index("uq_entity_supersession", "legacy_entity_id", unique=True),
+        Index("ix_entity_supersession_canonical", "canonical_entity_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    legacy_entity_id: Mapped[str] = mapped_column(String(600), nullable=False)
+    canonical_entity_id: Mapped[str] = mapped_column(String(600), nullable=False)
+    relationship: Mapped[str] = mapped_column(String(24), nullable=False, default="SUPERSEDED_BY")
+    decision_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

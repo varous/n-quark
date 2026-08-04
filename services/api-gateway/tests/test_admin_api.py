@@ -22,7 +22,7 @@ class FakeAudit:
         self.records.append(kw)
         return {"id": "aud1", "request_id": kw["request_id"]}
 
-    def list(self, *, limit=50, offset=0):
+    def list(self, *, limit=50, offset=0, **_filters):
         return {"count": len(self.records), "items": self.records}
 
 

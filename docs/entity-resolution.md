@@ -78,6 +78,22 @@ shared-artist events in different cities converge to one canonical artist yet re
 `ORGANIZER_AUTO_RESOLVE_THRESHOLD` (0.75), `EVENT_SERIES_AUTO_RESOLVE_THRESHOLD` (0.7),
 `ENTITY_RESOLUTION_MAX_EVENTS_PER_RUN` (500).
 
+## Governed manual resolution (Admin Phase B)
+
+The ambiguity policy above is now *curatable* through governed admin commands (deterministic, audited,
+reversible — see [admin-console.md](admin-console.md) and [ADR-0012](adr/0012-governed-resolution-decisions.md)).
+An analyst can accept a candidate onto an existing canonical, create a new canonical from evidence, link a
+source handle, reject with a reason, or keep it unresolved; an admin can non-destructively **supersede** a
+legacy naive-projection node onto its evidence-resolved canonical (`legacy -SUPERSEDED_BY-> canonical`,
+preserving the legacy node) and **reverse** any decision. These reuse the same pathways (canonical-id
+convention, handle registry, resolution history, graph writes) — they add higher-authority governance
+records, never rewriting source evidence.
+
+**Series safeguard (Phase B):** series evidence now requires a *strong* recurrence marker
+(edition/volume/season/roman, including ordinal forms like "5th Edition" and "Vol. 3"). A bare year is no
+longer sufficient — "F1 2026", "India Tour 2026", "Summer 2026" produce **no** series. A recurring event
+that only carries a year is left for a manual `CORRECT_EVENT_SERIES` decision.
+
 ## Known limitations
 
 - Cross-source convergence needs sources whose catalogues actually overlap; the current Boshow/District

@@ -134,21 +134,31 @@ def normalize_organizer(name: str | None) -> OrganizerNorm:
 # ================================================================================ EVENT SERIES
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10,
           "xi": 11, "xii": 12, "xiii": 13}
+# keyword-before-number ("Edition 2", "Vol. 3", "Season 4")
 _EDITION_NUM = re.compile(
-    r"\b(?:edition|ed|vol|volume|chapter|ch|season|part|pt|#)\s*[:\-]?\s*(\d{1,3})\b", re.IGNORECASE)
+    r"\b(?:edition|ed|vol|volume|chapter|ch|season|part|pt|#)\b\.?\s*[:\-]?\s*(\d{1,3})\b", re.IGNORECASE)
+# number-before-keyword ("5th Edition", "3rd Volume")
+_EDITION_ORDINAL = re.compile(
+    r"\b(\d{1,3})(?:st|nd|rd|th)?\s+(?:edition|volume|season|chapter)\b", re.IGNORECASE)
 _EDITION_ROMAN = re.compile(
     r"\b(?:edition|vol|volume|chapter|season|part)\s+([ivx]{1,4})\b", re.IGNORECASE)
 _TRAILING_ROMAN = re.compile(r"\s+([ivx]{2,4})$", re.IGNORECASE)
 _YEAR = re.compile(r"\b(20\d{2})\b")
 _PRESENTED_BY = re.compile(r"^.*?\bpresents?\b[:\-]?\s*", re.IGNORECASE)
 _EDITION_MARKERS = re.compile(
-    r"\b(edition|ed|vol|volume|chapter|ch|season|part|pt)\b\s*[:\-]?\s*[\divx]{0,4}", re.IGNORECASE)
+    r"\b(\d{1,3}(?:st|nd|rd|th)?\s+)?(edition|ed|vol|volume|chapter|ch|season|part|pt)\b\.?\s*[:\-]?\s*[\divx]{0,4}",
+    re.IGNORECASE)
 
 # Generic recurring titles that must NOT link into a series without stronger identity evidence.
 GENERIC_SERIES_TITLES = frozenset({
     "saturday night", "open mic", "live music", "comedy night", "karaoke night", "ladies night",
     "friday night", "sunday brunch", "quiz night", "jam night", "trivia night", "happy hours",
 })
+
+
+# Markers strong enough to indicate a recurring *series* on their own. A bare year is NOT strong
+# (Admin Phase B): "F1 2026" / "India Tour 2026" / "Summer 2026" must never auto-create a series.
+_STRONG_SERIES_MARKERS = frozenset({"edition_number", "edition_roman"})
 
 
 @dataclass
@@ -160,6 +170,10 @@ class SeriesNorm:
     is_generic: bool = False
     markers: list[str] = field(default_factory=list)
 
+    @property
+    def has_strong_marker(self) -> bool:
+        return any(m in _STRONG_SERIES_MARKERS for m in self.markers)
+
 
 def normalize_series(title: str | None) -> SeriesNorm:
     raw = (title or "").strip()
@@ -167,7 +181,7 @@ def normalize_series(title: str | None) -> SeriesNorm:
     edition_number: int | None = None
     edition_label: str | None = None
 
-    m = _EDITION_NUM.search(raw)
+    m = _EDITION_NUM.search(raw) or _EDITION_ORDINAL.search(raw)
     if m:
         edition_number = int(m.group(1))
         edition_label = m.group(0).strip()

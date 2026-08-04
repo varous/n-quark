@@ -2,7 +2,8 @@ import { useState } from "react";
 import { api } from "./api";
 import { AuthProvider, Login, useAuth } from "./auth";
 import { DrawerProvider, Link, useHashRoute } from "./ui";
-import { Captures, Events, Health, Overview, Resolution, Sources } from "./screens";
+import { Captures, Events, Health, Overview, Sources } from "./screens";
+import { Resolution } from "./workbench";
 import { EntityDetail, Entities, EventDetail, Graph } from "./detail";
 
 const NAV = [

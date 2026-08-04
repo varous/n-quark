@@ -179,10 +179,14 @@ async def search(q: str = Query(...), limit: int = Query(default=20, ge=1, le=10
 
 # ---- audit (ADMIN) ------------------------------------------------------------------------------
 @router.get("/audit")
-def audit_log(limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
+def audit_log(actor: str | None = Query(default=None), action: str | None = Query(default=None),
+              object_type: str | None = Query(default=None), object_id: str | None = Query(default=None),
+              request_id: str | None = Query(default=None),
+              limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
               _: auth.Principal = Depends(auth.require_admin),
               store=Depends(get_audit_store)) -> dict[str, Any]:
-    return store.list(limit=limit, offset=offset)
+    return store.list(actor=actor, action=action, object_type=object_type, object_id=object_id,
+                      request_id=request_id, limit=limit, offset=offset)
 
 
 # ---- narrow operational actions (OPERATOR; flag-gated; audited) ---------------------------------
@@ -205,6 +209,26 @@ async def rerun_enrichment(payload: dict = Body(...),
     result = await svc.rerun_enrichment(event_id)
     store.record(actor_id=principal.sub, actor_role=principal.role, action="RERUN_ENRICHMENT",
                  object_type="event", object_id=event_id, request_id=request_id,
+                 new_value={"ok": result["ok"], "status": result["status"]},
+                 reason=payload.get("reason"))
+    return {"request_id": request_id, **result}
+
+
+@router.post("/operations/capture-now")
+async def capture_now(payload: dict = Body(...),
+                      principal: auth.Principal = Depends(auth.require_operator),
+                      svc: AdminService = Depends(get_admin_service),
+                      store=Depends(get_audit_store)) -> dict[str, Any]:
+    _require_operations()
+    source = str(payload.get("source", "")).strip()
+    sid = str(payload.get("source_record_id", "")).strip()
+    if not (source and sid):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="source and source_record_id required")
+    request_id = uuid.uuid4().hex
+    result = await svc.capture_now(source, sid, payload.get("canonical_event_id"))
+    store.record(actor_id=principal.sub, actor_role=principal.role, action="CAPTURE_NOW",
+                 object_type="tracked_event", object_id=f"{source}:{sid}", request_id=request_id,
                  new_value={"ok": result["ok"], "status": result["status"]},
                  reason=payload.get("reason"))
     return {"request_id": request_id, **result}

@@ -95,6 +95,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ event_id, source, source_record_id, reason }),
     }),
+  captureNow: (source: string, source_record_id: string, reason: string) =>
+    req<{ request_id: string; ok: boolean; result: unknown }>("/operations/capture-now", {
+      method: "POST",
+      body: JSON.stringify({ source, source_record_id, reason }),
+    }),
+  candidate: (candidate_id: string) => req<Record<string, unknown>>(`/resolution-queue/candidates/${candidate_id}`),
+  // governance commands
+  gov: (verb: string, body: Record<string, unknown>) =>
+    req<Record<string, unknown>>(`/resolution-decisions/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+  reverse: (decision_id: string, reason: string) =>
+    req<Record<string, unknown>>(`/resolution-decisions/${encodeURIComponent(decision_id)}/reverse`, {
+      method: "POST", body: JSON.stringify({ reason }),
+    }),
+  decisions: (f: Record<string, unknown>) =>
+    req<{ count: number; items: Array<Record<string, unknown>> }>(`/resolution-decisions${qs(f)}`),
 };
 
 // ---- types (loose; the BFF is the source of truth) ----

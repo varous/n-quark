@@ -403,6 +403,58 @@ class SchedulerService:
             te.updated_at = now
         return applied
 
+    async def capture_now(self, *, source: str, source_record_id: str,
+                          canonical_event_id: str | None = None, worker_id: str = "capture-now",
+                          now: datetime | None = None) -> dict[str, Any]:
+        """Targeted, bounded capture of one tracked event through the NORMAL job path (Admin Phase B).
+
+        Idempotent within a one-minute window on the job dedup_key, so a double-clicked/concurrent
+        request never double-captures the same target. A failed request never becomes absence (the
+        existing result classification governs that). Does not bypass the scheduler or Shadow Ledger."""
+        now = now or datetime.now(UTC)
+        window = now.replace(second=0, microsecond=0).isoformat()
+        dedup = f"{source}:{source_record_id}:capture-now:{window}"
+        with self._sf() as s, s.begin():
+            te = s.execute(
+                select(TrackedEvent).where(
+                    TrackedEvent.source == source, TrackedEvent.source_record_id == source_record_id)
+            ).scalar_one_or_none()
+            if te is None:
+                return {"error": "EVENT_NOT_TRACKED", "source": source, "source_record_id": source_record_id}
+            canonical = te.canonical_event_id or canonical_event_id
+            existing = s.execute(
+                select(ScheduledCaptureJob).where(ScheduledCaptureJob.dedup_key == dedup)
+            ).scalar_one_or_none()
+            if existing is not None:
+                job_id, dedup_hit = existing.id, True
+            else:
+                job = ScheduledCaptureJob(
+                    id=_uuid(), dedup_key=dedup, source=source, source_record_id=source_record_id,
+                    canonical_event_id=canonical, status="PENDING", priority=100,
+                    scheduled_at=now, attempt_count=0, consecutive_failures=te.consecutive_failures,
+                    detail={"origin": "capture-now"}, created_at=now, updated_at=now)
+                s.add(job)
+                job_id, dedup_hit = job.id, False
+        # claim (CAS) then process through the normal path; if another worker already claimed, report it
+        claimed = self._claim_specific(job_id, now, worker_id)
+        if not claimed:
+            return {"job_id": job_id, "dedup_hit": dedup_hit, "claimed": False,
+                    "note": "job already claimed/completed by another worker (idempotent)"}
+        trace = await self.process_job(job_id, now)
+        return {"job_id": job_id, "dedup_hit": dedup_hit, "claimed": True, "trace": trace}
+
+    def _claim_specific(self, job_id: str, now: datetime, worker_id: str) -> bool:
+        ttl = self._cfg.scheduled_capture_lock_ttl_seconds
+        with self._sf() as s:
+            res = s.execute(
+                update(ScheduledCaptureJob).where(
+                    ScheduledCaptureJob.id == job_id, ScheduledCaptureJob.status == "PENDING"
+                ).values(status="RUNNING", worker_id=worker_id,
+                         lock_expires_at=now + timedelta(seconds=ttl), started_at=now,
+                         attempt_count=ScheduledCaptureJob.attempt_count + 1, updated_at=now))
+            s.commit()
+            return res.rowcount == 1
+
     async def run_once(self, worker_id: str, *, now: datetime | None = None,
                        limit: int | None = None, trace: bool = False) -> dict[str, Any]:
         now = now or datetime.now(UTC)

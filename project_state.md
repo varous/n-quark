@@ -21,6 +21,7 @@ append-only MCP — never overwrite it).
 | 3 — Second source + reconciliation | Independent source **District** (schema.org JSON-LD); per-origin independence; bounded blocking + deterministic matcher; linkage without truth collapse; field reconciliation across independence groups | crawl-service `reconciliation/`, ADR-0009 |
 | 3.1 — Cross-inventory entity resolution | Resolve exclusive Boshow/District events onto **shared canonical artists/venues/organizers/series**; per-type deterministic resolvers + ambiguity policy; source-handle registry + history; graph IDENTIFIES/ORGANIZED_BY/PART_OF_SERIES; shared entities never imply duplicate events | crawl-service `entity_resolution/`, migration 005, ADR-0010, `docs/entity-resolution.md` |
 | Admin A — inspection console | First internal observability console: gateway **BFF** (`/admin/v1`) with server-side auth + RBAC (VIEWER/ANALYST/OPERATOR/ADMIN), read models over crawl/graph/Shadow-Ledger, bounded graph explorer, `identity_state` (legacy-vs-canonical visible), audited OPERATOR actions; Vite/React frontend (8 screens, provenance drawer, epistemic labels) | api-gateway `admin/`, frontend `src/admin/`, ADR-0011, `docs/admin-console.md` |
+| Admin B — governed workbench | **Governed** entity resolution: gateway Alembic (migration 001; audit + append-only `admin_resolution_decision`), accept/reject/create/link/mark-unresolved/**correct-series**/**supersede-legacy**/**reverse** commands with RBAC + impact preview + idempotency + conflicts; non-destructive legacy supersession + dedup counting; year-only series safeguard; safe targeted **capture-now** via the normal scheduler path; three-pane Resolution Workbench + capture-now UI | api-gateway `db/` + `routes/admin_commands.py`, crawl `governance.py` + migration 006, frontend `workbench.tsx`, ADR-0012 |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -76,10 +77,27 @@ Gateway BFF + Vite/React console, live over the real Boshow+District data:
 - OPERATOR `rerun-entity-resolution` on one event → ok, request id, **persisted to `admin_audit_log`**.
 - Downstream-unavailable and graph node/depth caps enforced (tests + service).
 
+## Admin Phase B — LIVE VALIDATED (2026-08-04, docker + browser)
+
+Governed workbench live over the real Boshow+District data:
+- Gateway migration `001` applied at boot (version surfaced in system-health); crawl migration `006`
+  (`entity_supersession`) applied.
+- ANALYST created `artist:pilu` from the ambiguous `Pilu` candidate; idempotent re-submit →
+  `already_applied`; `expected_status` mismatch → 409 `STALE_PREVIEW`; VIEWER → 403.
+- ADMIN superseded legacy `venue:the-urban-theatre-project` → `venue:urban-theatre-project--kolkata`
+  (legacy node + edges preserved, `SUPERSEDED_BY` edge added; canonical count 47→46, superseded 1;
+  ANALYST → 403).
+- ANALYST `CORRECT_EVENT_SERIES` unlinked the weak `F1 2026` year-series; the year-only series
+  safeguard prevents such auto-creation going forward.
+- ADMIN reversed the `Pilu` create → candidate back to `AMBIGUOUS`; the Resolution Workbench shows the
+  full history `— → AMBIGUOUS → RESOLVED (MANUAL_CREATE) → AMBIGUOUS (REVERSED)`.
+- OPERATOR `capture-now` on a real Boshow event ran the normal job path (authoritative absence),
+  idempotent on repeat. Every command audited + recorded as an append-only decision.
+
 ## Test status
-crawl **172** · gateway **30** · signal **70** · graph **60** · analytics **11** · observation **11** ·
-entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Lint clean except baseline-tolerated
-B008 (FastAPI `Depends`).
+crawl **190** · gateway **42** · signal **70** · graph **60** · analytics **11** · observation **11** ·
+entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Gateway Alembic upgrade+downgrade
+verified. Lint clean except baseline-tolerated B008 (FastAPI `Depends`).
 
 ## Invariants / constraints (must hold)
 - Deterministic + explainable only; **no LLM** in detection/matching/enrichment.
@@ -92,12 +110,11 @@ B008 (FastAPI `Depends`).
 - API keys: user adds to `.env`; never handled/pasted by the agent.
 
 ## Recommended next phase
-**Admin Phase B — governed identity actions + operational hardening.** Add the (still read-only-today)
-resolution-queue *commands* (accept / reject / merge-with-guardrails) behind OPERATOR + audit; a safe
-targeted "capture one event now" internal endpoint (then wire the console button); gateway Alembic for
-the audit table; Google Workspace OIDC via the existing `authenticate` contract; and a
-canonical-vs-legacy **unification migration** driven by the `POSSIBLE_DUPLICATE` signal this phase now
-surfaces. Then resume the data track:
+**Admin Phase C — bulk-safe curation + IdP + deep reversal.** Guarded batch supersession/linking over a
+reviewed candidate set (still explicit + audited, no blind bulk merge); Google Workspace OIDC via the
+existing `authenticate` contract; true rollback of entity-resolution graph edges (not just mark-based);
+and driving a canonical-vs-legacy **unification migration** from the accumulated `SUPERSEDED_BY` decisions.
+Then resume the data track:
 
 **3.2 — regional/market analytics over shared entities + unify the two entity id conventions.**
 (1) Build minimal internal cross-inventory analytics on top of the Phase 3.1 canonical entities

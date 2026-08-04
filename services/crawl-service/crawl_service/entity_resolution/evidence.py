@@ -130,9 +130,11 @@ def extract_event_entities(
     # ---- event series (derived from the event title + organizer/venue context) ------------------
     if title:
         sn = N.normalize_series(title)
-        # Only a title that actually looks recurring (an edition/year/vol marker) is series evidence;
-        # a one-off title with no recurrence marker produces none.
-        if sn.series_normalized and sn.markers:
+        # A recurring series needs a STRONG marker (edition/volume/season/roman). A bare year is NOT
+        # enough on its own (Admin Phase B safeguard: "F1 2026" / "India Tour 2026" / "Summer 2026"
+        # must never auto-create a series) — such a year-only title produces no series evidence and is
+        # left for a manual CORRECT_EVENT_SERIES decision if it truly is recurring.
+        if sn.series_normalized and sn.has_strong_marker:
             ev.series = EntityEvidence(
                 entity_type=EVENT_SERIES, source=source, source_record_id=source_record_id,
                 canonical_event_id=canonical_event_id,
@@ -141,7 +143,8 @@ def extract_event_entities(
                 confidence=0.6, provenance=prov,
                 evidence={"edition_label": sn.edition_label, "edition_number": sn.edition_number,
                           "is_generic": sn.is_generic, "markers": sn.markers,
-                          "organizer": (organizer_name or None), "city": city},
+                          "organizer": (organizer_name or None), "city": city,
+                          "year_only": ("year" in sn.markers and not sn.has_strong_marker)},
             )
 
     return ev

@@ -175,15 +175,21 @@ function CaptureOps({ id, d }: { id: string; d: Awaited<ReturnType<typeof api.ev
   const [msg, setMsg] = useState<string | null>(null);
   const rec = (d.source_records?.[0] ?? {}) as Record<string, unknown>;
   const cv = d.current_view as Record<string, unknown>;
-  async function run(kind: "enrich" | "resolve") {
+  const source = String(cv.source ?? rec.source ?? "");
+  const sid = String(rec.source_record_id ?? "");
+  async function run(kind: "enrich" | "resolve" | "capture") {
     setMsg("Running…");
     try {
       if (kind === "enrich") {
         const r = await api.rerunEnrichment(id, "admin console");
         setMsg(`Enrichment queued (request ${r.request_id.slice(0, 8)}).`);
-      } else {
-        const r = await api.rerunEntityResolution(id, String(cv.source ?? rec.source ?? ""), String(rec.source_record_id ?? ""), "admin console");
+      } else if (kind === "resolve") {
+        const r = await api.rerunEntityResolution(id, source, sid, "admin console");
         setMsg(`Entity resolution queued (request ${r.request_id.slice(0, 8)}).`);
+      } else {
+        const r = await api.captureNow(source, sid, "admin console capture-now");
+        const t = (r.result as Record<string, unknown>) ?? {};
+        setMsg(`Capture-now (request ${r.request_id.slice(0, 8)}) · job ${String(t.job_id ?? "").slice(0, 8)} · claimed=${String(t.claimed)}`);
       }
     } catch (e) {
       setMsg((e as Error).message);
@@ -191,9 +197,11 @@ function CaptureOps({ id, d }: { id: string; d: Awaited<ReturnType<typeof api.ev
   }
   return (
     <Card title="Capture operations">
-      <p className="mb-3 text-sm text-slate-400">Operational actions require the OPERATOR role and are audited. "Capture one event now" has no safe targeted internal endpoint yet (gap — see docs).</p>
+      <p className="mb-1 text-sm text-slate-400">Target: <span className="font-mono text-xs">{source}:{sid}</span></p>
+      <p className="mb-3 text-xs text-slate-500">OPERATOR role required; every action is audited. Capture-now uses the normal scheduler + Shadow Ledger path.</p>
       {can("OPERATOR") ? (
         <div className="flex flex-wrap gap-2">
+          <button className="rounded bg-emerald-600 px-3 py-1.5 text-sm hover:bg-emerald-500" onClick={() => run("capture")}>Capture now</button>
           <button className="rounded bg-sky-600 px-3 py-1.5 text-sm hover:bg-sky-500" onClick={() => run("enrich")}>Re-run enrichment</button>
           <button className="rounded bg-sky-600 px-3 py-1.5 text-sm hover:bg-sky-500" onClick={() => run("resolve")}>Re-run entity resolution</button>
         </div>

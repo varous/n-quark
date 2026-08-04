@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api_gateway.config import settings
 from api_gateway.routes.admin import router as admin_router
+from api_gateway.routes.admin_commands import router as admin_commands_router
 from api_gateway.routes.proxy import router as proxy_router
 
 app = FastAPI(
@@ -25,6 +26,7 @@ app.add_middleware(
 app.include_router(proxy_router)
 # Admin BFF: routes self-gate on ADMIN_API_ENABLED via the auth dependency (404 when disabled).
 app.include_router(admin_router)
+app.include_router(admin_commands_router)
 
 
 @app.get("/health")

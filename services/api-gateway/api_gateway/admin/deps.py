@@ -1,11 +1,13 @@
 """Lazy singletons for the admin BFF (tests override these)."""
 
 from api_gateway.admin.audit import AuditStore
+from api_gateway.admin.decisions import DecisionStore
 from api_gateway.admin.gateway_client import DownstreamGateway
 from api_gateway.admin.service import AdminService
 
 _service: AdminService | None = None
 _audit: AuditStore | None = None
+_decisions: DecisionStore | None = None
 
 
 def get_admin_service() -> AdminService:
@@ -20,3 +22,10 @@ def get_audit_store() -> AuditStore:
     if _audit is None:
         _audit = AuditStore()
     return _audit
+
+
+def get_decision_store() -> DecisionStore:
+    global _decisions
+    if _decisions is None:
+        _decisions = DecisionStore()
+    return _decisions
