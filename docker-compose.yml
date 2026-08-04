@@ -91,6 +91,9 @@ services:
       NQUARK_SECOND_SOURCE_CAPTURE_ENABLED: ${SECOND_SOURCE_CAPTURE_ENABLED:-false}
       NQUARK_SECOND_SOURCE_NAME: ${SECOND_SOURCE_NAME:-district}
       NQUARK_RECONCILIATION_ENABLED: ${RECONCILIATION_ENABLED:-false}
+      # Phase 3.1 cross-inventory entity resolution — OFF by default.
+      NQUARK_ENTITY_RESOLUTION_ENABLED: ${ENTITY_RESOLUTION_ENABLED:-false}
+      NQUARK_ENTITY_RESOLUTION_SOURCES: ${ENTITY_RESOLUTION_SOURCES:-boshow,district}
     depends_on:
       postgres:
         condition: service_healthy

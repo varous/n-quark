@@ -52,6 +52,23 @@ class MultiStubGraphReader:
 
 
 @dataclass
+class StubGraphWriter:
+    """Captures graph batch upserts so entity-resolution graph writes can be asserted offline."""
+
+    batches: list[dict] = field(default_factory=list)
+
+    async def upsert_batch(self, nodes: list[dict], edges: list[dict]) -> dict:
+        self.batches.append({"nodes": nodes, "edges": edges})
+        return {"nodes": len(nodes), "edges": len(edges)}
+
+    def edges(self) -> list[dict]:
+        return [e for b in self.batches for e in b["edges"]]
+
+    def nodes(self) -> list[dict]:
+        return [n for b in self.batches for n in b["nodes"]]
+
+
+@dataclass
 class StubPageFetcher:
     """Returns fixed (html, visible_text) for public-page enrichment tests; None simulates failure."""
 

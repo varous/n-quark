@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     capture_enrichment_public_page_rate_limit_ms: int = 500   # min gap between page requests
     boshow_share_base: str = "https://www.boshow.in/api/shows/share"
 
+    # --- Phase 3.1: cross-inventory entity resolution (all OFF by default) ---
+    entity_resolution_enabled: bool = False
+    entity_resolution_sources: str = "boshow,district"
+    artist_auto_resolve_threshold: float = 0.8
+    venue_auto_resolve_threshold: float = 0.8
+    organizer_auto_resolve_threshold: float = 0.75
+    event_series_auto_resolve_threshold: float = 0.7
+    entity_resolution_max_events_per_run: int = 500
+
     # --- Phase 3: independent second source + cross-platform reconciliation (all OFF by default) ---
     second_source_capture_enabled: bool = False
     second_source_name: str = "district"
@@ -110,6 +119,19 @@ class Settings(BaseSettings):
     def capture_enrichment_source_set(self) -> frozenset[str]:
         base = frozenset(s.strip() for s in self.capture_enrichment_sources.split(",") if s.strip())
         return self._with_second_source(base)
+
+    @property
+    def entity_resolution_source_set(self) -> frozenset[str]:
+        base = frozenset(s.strip() for s in self.entity_resolution_sources.split(",") if s.strip())
+        return self._with_second_source(base)
+
+    def entity_auto_threshold(self, entity_type: str) -> float:
+        return {
+            "ARTIST": self.artist_auto_resolve_threshold,
+            "VENUE": self.venue_auto_resolve_threshold,
+            "ORGANIZER": self.organizer_auto_resolve_threshold,
+            "EVENT_SERIES": self.event_series_auto_resolve_threshold,
+        }.get(entity_type, 0.8)
 
     @property
     def city_allowlist_set(self) -> frozenset[str]:

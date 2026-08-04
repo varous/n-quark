@@ -223,3 +223,85 @@ class EventMatchCandidate(Base):
     review_status: Mapped[str] = mapped_column(String(24), nullable=False, default="AUTO")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ------------------------------------------------------------------- Phase 3.1 entity resolution
+class EntityResolutionCandidate(Base):
+    """One source-event entity mention (artist/venue/organizer/series) and its resolution decision.
+
+    The audit + queue record: it holds the raw + normalized evidence, the chosen canonical entity (or
+    none), the status/score/reason, and the supporting/contradicting signals. Deduped on
+    (entity_type, source, source_record_id, source_entity_handle) so re-running updates in place."""
+
+    __tablename__ = "entity_resolution_candidate"
+    __table_args__ = (
+        Index("uq_entity_res_candidate", "entity_type", "source", "source_record_id",
+              "source_entity_handle", unique=True),
+        Index("ix_entity_res_status", "entity_type", "resolution_status"),
+        Index("ix_entity_res_canonical", "candidate_canonical_entity_id"),
+        Index("ix_entity_res_name", "entity_type", "normalized_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(24), nullable=False)  # ARTIST|VENUE|ORGANIZER|EVENT_SERIES
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    canonical_event_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_entity_handle: Mapped[str] = mapped_column(String(600), nullable=False)
+    raw_name: Mapped[str] = mapped_column(String(600), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(600), nullable=False)
+    candidate_canonical_entity_id: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    match_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    resolution_status: Mapped[str] = mapped_column(String(24), nullable=False)  # RESOLVED|POSSIBLE_MATCH|AMBIGUOUS|UNRESOLVED|REJECTED
+    reason_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    supporting_signals: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    contradicting_signals: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    evidence: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    resolver_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EntitySourceHandle(Base):
+    """A source-specific identity that maps to a canonical entity (the alias registry).
+
+    A canonical entity accretes several source handles over time (Boshow performer text, District
+    profile handle, …); a handle is strong future resolution evidence. Unique per (source, handle)."""
+
+    __tablename__ = "entity_source_handle"
+    __table_args__ = (
+        Index("uq_entity_source_handle", "source", "source_entity_handle", unique=True),
+        Index("ix_entity_handle_canonical", "canonical_entity_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_entity_handle: Mapped[str] = mapped_column(String(600), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    canonical_entity_id: Mapped[str] = mapped_column(String(600), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    resolution_method: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EntityResolutionHistory(Base):
+    """Append-only status-change log for an entity resolution candidate (auditable resolution history).
+
+    Records only genuine status/canonical transitions (e.g. a venue UNRESOLVED -> RESOLVED once address
+    evidence arrives); source evidence itself is never rewritten."""
+
+    __tablename__ = "entity_resolution_history"
+    __table_args__ = (Index("ix_entity_res_history", "candidate_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    previous_canonical_entity_id: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    new_canonical_entity_id: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    resolver_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

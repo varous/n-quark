@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-04. Branch `main`, HEAD `34d8e04`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-04 (Phase 3.1). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -19,6 +19,7 @@ append-only MCP — never overwrite it).
 | 2.1 — Enrichment | candidate→resolution; field registry; deterministic resolver; on-sale intervals (never fabricate exact times) | crawl-service `enrichment/`, ADR-0007 |
 | 2.2 — Source-family / pilot | surface/source_family/independence_group; proved Boshow public page adds no new fields (OG-only, same family) → not promoted | ADR-0008 |
 | 3 — Second source + reconciliation | Independent source **District** (schema.org JSON-LD); per-origin independence; bounded blocking + deterministic matcher; linkage without truth collapse; field reconciliation across independence groups | crawl-service `reconciliation/`, ADR-0009 |
+| 3.1 — Cross-inventory entity resolution | Resolve exclusive Boshow/District events onto **shared canonical artists/venues/organizers/series**; per-type deterministic resolvers + ambiguity policy; source-handle registry + history; graph IDENTIFIES/ORGANIZED_BY/PART_OF_SERIES; shared entities never imply duplicate events | crawl-service `entity_resolution/`, migration 005, ADR-0010, `docs/entity-resolution.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -44,8 +45,23 @@ graph-service/signal-service/crawl-service with Phase 3 flags on. Confirmed live
    **no live match is fabricated**. Match/scoring/linkage/field-reconciliation mechanics are proven by
    the 122 fixture-backed crawl tests.
 
+## Phase 3.1 — LIVE VALIDATED (2026-08-04, full docker stack)
+
+Entity resolution enabled over the real Boshow+District cohorts (migration 005 applied at boot):
+- 19 events resolved (17 SUCCEEDED, 2 PARTIAL). Coverage: ARTIST 24/26 (2 ambiguous: `Pilu`, `BWS`
+  correctly queued), VENUE 19/19, ORGANIZER 8/8, SERIES 2/2. Graph +48 `IDENTIFIES` / +8 `ORGANIZED_BY`
+  / +2 `PART_OF_SERIES`.
+- `Skinny Mos` (a Kolkata venue that also appears as a performer) → `venue:skinny-mos--kolkata` +
+  `artist:skinny-mos`; repeat events converged via `SOURCE_HANDLE_MATCH` (handle registry works).
+  `THE ABOMINATION XII` → `series:the-abomination` (edition 12 preserved as a distinct event).
+- **Live cross-source entity overlap = 0** (Boshow-Kolkata-grassroots vs District-mainstream are
+  disjoint) — reported honestly. Convergence mechanics proven with a **labeled fixture pair**
+  (Kolkata/Boshow + Mumbai/District, both "Prateek Kuhad") → one `artist:prateek-kuhad`, two source
+  handles, while reconciliation of the same two events yielded **0 matches** (shared entity ≠ duplicate
+  event). Fixture rows removed after.
+
 ## Test status
-crawl **122** · signal **70** · graph **60** · analytics **11** · observation **11** · entity **12** ·
+crawl **169** · signal **70** · graph **60** · analytics **11** · observation **11** · entity **12** ·
 gateway **8** — all pass. Lint clean except baseline-tolerated B008 (FastAPI `Depends`).
 
 ## Invariants / constraints (must hold)
@@ -59,8 +75,11 @@ gateway **8** — all pass. Lint clean except baseline-tolerated B008 (FastAPI `
 - API keys: user adds to `.env`; never handled/pasted by the agent.
 
 ## Recommended next phase
-**3.1 — matcher calibration + accepted-match write-back.** (1) Assemble a *labelled* real overlap
-cohort (a mainstream source that overlaps District by city) to tune auto/possible thresholds and
-measure precision/recall; (2) let an accepted match optionally write reconciled consensus fields back
-to the canonical event behind a flag, preserving source records. Defer a third source until District
-reconciliation is calibrated against real overlap.
+**3.2 — regional/market analytics over shared entities + unify the two entity id conventions.**
+(1) Build minimal internal cross-inventory analytics on top of the Phase 3.1 canonical entities
+(artist/venue/organizer footprints across sources, cities, series) — read-only, deterministic, no
+prediction. (2) Reconcile the ingest-time naive entity projection (signal-service name-slug) with the
+Phase 3.1 evidence-based canonical layer so the graph has one id convention. (3) Only then add a third,
+city-overlapping source so cross-source entity convergence becomes non-zero in practice. Deferred:
+matcher/threshold calibration against a real labelled overlap cohort, and accepted-match consensus
+write-back — both still relevant once an overlapping source exists.

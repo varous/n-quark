@@ -6,6 +6,9 @@ from crawl_service.config import settings
 from crawl_service.routes.capture_schedule import router as capture_schedule_router
 from crawl_service.routes.enrichment import router as enrichment_router
 from crawl_service.routes.enrichment_pilot import router as enrichment_pilot_router
+from crawl_service.routes.entity_resolution import entities_router as entity_entities_router
+from crawl_service.routes.entity_resolution import events_router as entity_events_router
+from crawl_service.routes.entity_resolution import router as entity_resolution_router
 from crawl_service.routes.reconciliation import events_router as reconciliation_events_router
 from crawl_service.routes.reconciliation import router as reconciliation_router
 
@@ -20,6 +23,9 @@ app.include_router(enrichment_router)
 app.include_router(enrichment_pilot_router)
 app.include_router(reconciliation_router)
 app.include_router(reconciliation_events_router)
+app.include_router(entity_resolution_router)
+app.include_router(entity_entities_router)
+app.include_router(entity_events_router)
 
 
 @app.get("/health")
@@ -29,6 +35,8 @@ async def health() -> dict[str, object]:
         "service": settings.service_name,
         "scheduled_capture_enabled": settings.scheduled_capture_enabled,
         "capture_enrichment_enabled": settings.capture_enrichment_enabled,
+        "reconciliation_enabled": settings.reconciliation_enabled,
+        "entity_resolution_enabled": settings.entity_resolution_enabled,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

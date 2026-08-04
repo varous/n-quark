@@ -281,6 +281,30 @@ Each signal is normalized into observations.
 
 ---
 
+# Canonical entities & relationships (Phase 3.1)
+
+Canonical entity node types: `event`, `artist`, `venue`, `organizer`, `event_series`, `region`,
+`source_handle`. A `source_handle` (`{source}:{type}:{slug}`) is a per-source identity that points to a
+canonical entity.
+
+Structural relationships:
+
+```
+event        -FEATURES->       artist
+event        -OCCURS_AT->      venue
+event        -ORGANIZED_BY->   organizer      (Phase 3.1)
+event        -PART_OF_SERIES-> event_series   (Phase 3.1)
+event        -IN_REGION->      region
+venue        -IN_REGION->      region          (Phase 3.1)
+source_handle -IDENTIFIES->    canonical_entity (Phase 3.1)
+```
+
+Cross-inventory convergence: two source handles from different platforms resolving to the same canonical
+entity make platform-exclusive events comparable through shared artists/venues/organizers/series —
+without merging the events themselves. See [entity-resolution.md](entity-resolution.md).
+
+---
+
 # Guiding Rules
 
 Entities are canonical.

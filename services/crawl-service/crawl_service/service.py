@@ -43,11 +43,12 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 class SchedulerService:
     def __init__(self, session_factory, capturer: Capturer, config: Settings | None = None,
-                 enricher=None) -> None:
+                 enricher=None, entity_resolver=None) -> None:
         self._sf = session_factory
         self._capturer = capturer
         self._cfg = config or settings
         self._enricher = enricher  # optional EnrichmentService (Phase 2.1)
+        self._entity_resolver = entity_resolver  # optional EntityResolutionService (Phase 3.1)
         self._cadence = CadenceConfig(
             far_future_hours=self._cfg.cadence_far_future_hours,
             mid_hours=self._cfg.cadence_mid_hours,
@@ -308,7 +309,23 @@ class SchedulerService:
                 and self._cfg.capture_enrichment_enabled and source in self._cfg.capture_enrichment_source_set
                 and canonical_after):
             trace["enrichment"] = await self._run_enrichment(source, sid, canonical_after, now)
+
+        # Entity resolution runs after enrichment (best-effort; a failure never fails capture).
+        if (outcome.result_code == SUCCESS_RECORD_PRESENT and self._entity_resolver is not None
+                and self._cfg.entity_resolution_enabled and source in self._cfg.entity_resolution_source_set
+                and canonical_after):
+            trace["entity_resolution"] = await self._run_entity_resolution(source, sid, canonical_after, now)
         return trace
+
+    async def _run_entity_resolution(self, source, sid, canonical_event_id, now) -> dict[str, Any]:
+        try:
+            res = await self._entity_resolver.resolve_event(
+                canonical_event_id=canonical_event_id, source=source, source_record_id=sid, now=now)
+        except Exception as exc:  # noqa: BLE001 — entity resolution must never break the capture
+            return {"outcome": "ENTITY_RESOLUTION_FAILED", "error": str(exc)}
+        return {"outcome": res.get("outcome"),
+                "entities": len(res.get("entities", [])),
+                "geography": (res.get("geography") or {}).get("status")}
 
     async def _run_enrichment(self, source, sid, canonical_event_id, now) -> dict[str, Any]:
         try:

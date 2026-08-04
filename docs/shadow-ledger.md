@@ -280,6 +280,40 @@ Lives in crawl-service; additive migration `004`; default **off**.
   vs mainstream), so match/reconciliation mechanics are proven by fixture-backed tests, not a live
   match. Accepted matches are recorded but canonical-id merging is deliberately not performed.
 
+## Phase 3.1 — Cross-Inventory Entity Resolution `[CURRENT]`
+
+Platform-exclusive Boshow and District events are resolved onto a **shared canonical entity graph**
+(artists / venues / organizers / event series) so exclusive catalogues become comparable through the
+entities they share — without requiring the same event on both platforms and without collapsing distinct
+events. Deterministic, additive, default-off (`ENTITY_RESOLUTION_ENABLED`). Full design +
+endpoints: [entity-resolution.md](entity-resolution.md), [ADR-0010](adr/0010-cross-inventory-entity-resolution.md).
+
+- Per-type deterministic resolvers with an explicit ambiguity policy: ambiguous names, generic venues
+  without geography and generic series titles without an organizer do **not** auto-resolve; a tribute
+  act never collapses into the original; same venue name in a different city stays distinct (city-scoped
+  ids); same series title under a different organizer does not link.
+- Source handles (`{source}:{type}:{slug}`) form the durable alias registry (`entity_source_handle`);
+  cross-source convergence = two source handles → one canonical id. Decisions + status history are
+  auditable (`entity_resolution_candidate`, `entity_resolution_history`).
+- Graph gains `IDENTIFIES`, `ORGANIZED_BY`, `PART_OF_SERIES` edges. Shared entities **never** auto-create
+  a duplicate-event match.
+
+### Live verdict (real Boshow + District, 2026-08-04)
+
+19 events resolved (17 SUCCEEDED, 2 PARTIAL); ARTIST 24/26, VENUE 19/19, ORGANIZER 8/8, SERIES 2/2;
+graph +48 IDENTIFIES / +8 ORGANIZED_BY / +2 PART_OF_SERIES. `Skinny Mos` → `venue:skinny-mos--kolkata`
+(+ handle convergence across repeat events); `THE ABOMINATION XII` → `series:the-abomination` (edition 12
+preserved). **Live cross-source overlap = 0** (disjoint cohorts, reported honestly); convergence
+mechanics proven with a labeled fixture pair (both platforms → one `artist:prateek-kuhad`, 0 event
+matches). Fixture removed after.
+
+### Known limitations (Phase 3.1)
+
+- Convergence needs overlapping catalogues; current cohorts are disjoint. Year-marker series detection
+  has harmless false positives ("F1 2026 …"). Short legitimate single-token names (e.g. "Pilu") are
+  conservatively queued AMBIGUOUS. The ingest-time naive projection coexists with the corrected Phase 3.1
+  canonical layer (unifying id conventions is a follow-up). No geocoding source yet.
+
 ## What is explicitly NOT in Phase 1 `[FUTURE]`
 
 Deferred to the roadmap (see the MCP section + its backlog): prediction / ML sell-through, crowd
