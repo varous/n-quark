@@ -31,3 +31,12 @@ class GraphServiceClient:
                 return []
             resp.raise_for_status()
             return resp.json().get("neighbors", [])
+
+    async def shadow_ledger(self, event_id: str) -> dict[str, Any] | None:
+        """The event's observed transition history (Phase 1). Used for commercial-state summaries."""
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{self.base_url}/v1/internal/events/{event_id}/shadow-ledger")
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()

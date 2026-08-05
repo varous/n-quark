@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from analytics_service.config import settings
 from analytics_service.routes.analytics import router as analytics_router
+from analytics_service.routes.market import router as market_router
 
 app = FastAPI(
     title="n-quark / analytics-service",
@@ -12,6 +13,7 @@ app = FastAPI(
 )
 
 app.include_router(analytics_router)
+app.include_router(market_router)
 
 
 @app.get("/health")

@@ -20,6 +20,12 @@ def default_graph_service_url() -> str:
     return "http://localhost:8006"
 
 
+def default_crawl_service_url() -> str:
+    if detect_network_mode() == "docker":
+        return "http://crawl-service:8001"
+    return "http://localhost:8001"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NQUARK_", env_file=".env", extra="ignore")
 
@@ -28,6 +34,8 @@ class Settings(BaseSettings):
     log_level: str = "info"
     network_mode: str = Field(default_factory=detect_network_mode)
     graph_service_url: str = Field(default_factory=default_graph_service_url)
+    crawl_service_url: str = Field(default_factory=default_crawl_service_url)
+    analytics_max_events: int = 500  # bound on tracked events per aggregation (crawl endpoint max)
     postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"

@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-05 (Admin Phase C). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-05 (Phase 4A). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -23,6 +23,7 @@ append-only MCP — never overwrite it).
 | Admin A — inspection console | First internal observability console: gateway **BFF** (`/admin/v1`) with server-side auth + RBAC (VIEWER/ANALYST/OPERATOR/ADMIN), read models over crawl/graph/Shadow-Ledger, bounded graph explorer, `identity_state` (legacy-vs-canonical visible), audited OPERATOR actions; Vite/React frontend (8 screens, provenance drawer, epistemic labels) | api-gateway `admin/`, frontend `src/admin/`, ADR-0011, `docs/admin-console.md` |
 | Admin B — governed workbench | **Governed** entity resolution: gateway Alembic (migration 001; audit + append-only `admin_resolution_decision`), accept/reject/create/link/mark-unresolved/**correct-series**/**supersede-legacy**/**reverse** commands with RBAC + impact preview + idempotency + conflicts; non-destructive legacy supersession + dedup counting; year-only series safeguard; safe targeted **capture-now** via the normal scheduler path; three-pane Resolution Workbench + capture-now UI | api-gateway `db/` + `routes/admin_commands.py`, crawl `governance.py` + migration 006, frontend `workbench.tsx`, ADR-0012 |
 | Admin C — local inspection hardening | Collapsed RBAC to a single **local-only, unauthenticated `INTERNAL_USER`** context (`ADMIN_LOCAL_MODE`; no login/roles); event search + rich filters (q/city/date/capture-state/resolution-status) URL-persisted; per-source **crawler diagnostics** (success rate, failure classes, parser failures, field present/valid/placeholder/missing); richer **system-health** (per-service version/flags/last-check, feature flags, data-quality set); bounded filtered **CSV/JSON export**; inspection-first Resolution (5 uncertainty queues, mutation controls removed); graph entity-type/source filters + cap warning; **local-only deploy boundary** (fly.toml pins admin off; frontend excluded, guarded by test) | api-gateway `admin/service.py` + `routes/admin.py` (export/diagnostics), frontend `screens.tsx`/`workbench.tsx`/`detail.tsx`/`auth.tsx`, `docs/deployment.md` |
+| 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -123,8 +124,29 @@ keeps its Phase 3.1/B flags). Live over the real Boshow+District data:
 - **Deploy boundary**: gateway `fly.toml` pins `NQUARK_ADMIN_API_ENABLED="false"` +
   `NQUARK_ADMIN_LOCAL_MODE="false"`; no service manifest references the frontend; a test enforces both.
 
+## Phase 4A — LIVE VALIDATED (2026-08-05, docker, real Boshow+District data)
+
+analytics-service rebuilt + started (`:8007`) over crawl (8001) + graph (8006). Live:
+- **Canonical projection**: `canonicalize/venue:the-urban-theatre-project → venue:urban-theatre-project--kolkata`
+  (path + identity_state CANONICAL, no warnings); querying the legacy venue id returns the canonical
+  view (1 event) — folded, counted once, non-destructive.
+- **Regional supply**: 7 region/city groups — `region:west-bengal` 11 boshow events / 23 canonical
+  artists / 8 venues; `region:maharashtra` 3 district events / 3 organizers; source distribution per row.
+- **Artist** *Skinny Mos*: 4 events (2 upcoming / 2 completed), Kolkata, 4 longitudinal, venue folded to
+  `venue:skinny-mos--kolkata`. **Venue** *Skinny Mos*: 4 events, 4 with state transitions,
+  `DIRECT_SOURCE_GEOGRAPHY_ONLY`, 6 artists. **Organizer** *KICKASS ADVENTURES*: 2 events, multi-venue +
+  multi-city recurrence indicators. **Series**: 2 strong (`series:the-abomination`, F1 simulator).
+- **Observation-quality**: 19 tracked, 17 with 1+ transitions, 3 with 2+ observations, avg gap 26.07h,
+  0 stale (by source: boshow 11/11 transitions, district 6/8). **Commercial-state**: 19 price
+  observations, per-source prices kept separate (boshow median ₹499, district ₹549.5), 1 availability
+  change, 1 date/venue change, 3 disappeared/reappeared — Shadow Ledger facts only, nothing estimated.
+- **Filters**: `source=district` → 6 groups; `source=district&date_from=2026-08-05` → 0 (reported
+  honestly — no district event starts after that date in the cohort). **Trace**: shows 19 included / 0
+  excluded, the single superseded fold, and scope limitations. Cohort is small; aggregates reported as-is,
+  no fixtures injected.
+
 ## Test status
-crawl **190** · gateway **58** (was 42; +16 Phase C) · signal **70** · graph **60** · analytics **11** ·
+crawl **190** · gateway **58** · signal **70** · graph **60** · analytics **45** (was 11; +34 Phase 4A) ·
 observation **11** · entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Gateway Alembic
 upgrade+downgrade verified. Lint clean except baseline-tolerated B008 (FastAPI `Depends`) and one
 pre-existing S110 in an alembic migration.
@@ -143,8 +165,11 @@ pre-existing S110 in an alembic migration.
   (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
 
 ## Recommended next phase
-**Resume the core data track — 3.2 — regional/market analytics over shared entities + unify the two
-entity id conventions.**
+**Phase 4B — media/creative intelligence service scaffold**, then **4C — additional source adapter
+scaffolds + broader acquisition**. Still deferred: unify the ingest-time naive projection with the
+evidence-based canonical layer (one graph id convention) so analytics can retire the read-time
+canonicalizer; a materialization layer for analytics if the cohort grows large; and driving a
+canonical-vs-legacy unification migration from accumulated `SUPERSEDED_BY` decisions.
 (1) Build minimal internal cross-inventory analytics on top of the Phase 3.1 canonical entities
 (artist/venue/organizer footprints across sources, cities, series) — read-only, deterministic, no
 prediction. (2) Reconcile the ingest-time naive entity projection (signal-service name-slug) with the
