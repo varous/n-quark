@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     admin_frontend_enabled: bool = False       # informational (frontend build gate)
     admin_dev_auth_enabled: bool = False       # isolated dev login; NEVER a prod identity provider
     admin_operational_actions_enabled: bool = False  # OPERATOR mutations (capture/enrich/resolve one event)
+    # --- Admin Phase C: local-only inspection console ---
+    # When on, the console runs unauthenticated under a single fixed INTERNAL_USER context (no login,
+    # no roles). This is a LOCAL-DEVELOPMENT convenience only and must never be enabled on a public
+    # cloud deployment — see docs/deployment.md. It still requires admin_api_enabled to be true.
+    admin_local_mode: bool = False
     admin_session_secret: str = "dev-insecure-change-me"  # HMAC signing key for dev sessions
     admin_session_ttl_seconds: int = 28800     # 8h dev session
     admin_graph_max_nodes: int = 150           # hard cap on subgraph size

@@ -37,11 +37,11 @@ export class ApiError extends Error {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string>) };
+  // Local mode issues no token; a bearer token (dev-auth) is attached only if one is present.
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (res.status === 401) {
-    session.clear();
-    throw new ApiError(401, "Session expired — please sign in again.");
+    throw new ApiError(401, "Not authorized — the gateway is not in local mode. See docs/deployment.md.");
   }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
@@ -69,16 +69,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, role }),
     }),
-  me: () => req<{ sub: string; role: string; auth_mode: string }>("/auth/me"),
+  me: () => req<Me>("/auth/me"),
   dashboard: () => req<Dashboard>("/dashboard"),
   sources: () => req<{ sources: SourceRow[] }>("/sources"),
+  sourceDiagnostics: (source: string) => req<SourceDiagnostics>(`/sources/${encodeURIComponent(source)}/diagnostics`),
   events: (f: Record<string, unknown>) => req<Paged<EventRow>>(`/events${qs(f)}`),
   eventDetail: (id: string) => req<EventDetail>(`/events/${encodeURIComponent(id)}`),
   eventTimeline: (id: string) => req<Timeline>(`/events/${encodeURIComponent(id)}/timeline`),
   eventEvidence: (id: string) => req<Evidence>(`/events/${encodeURIComponent(id)}/evidence`),
   entities: (f: Record<string, unknown>) => req<Paged<EntityRow>>(`/entities${qs(f)}`),
   entityDetail: (t: string, id: string) => req<EntityDetail>(`/entities/${t}/${encodeURIComponent(id)}`),
-  resolutionQueue: (f: Record<string, unknown>) => req<{ count: number; items: QueueItem[]; available: boolean }>(`/resolution-queue${qs(f)}`),
+  resolutionQueue: (f: Record<string, unknown>) => req<{ count: number; items: QueueItem[]; by_status?: Record<string, number>; states?: string[]; available: boolean }>(`/resolution-queue${qs(f)}`),
   captureJobs: (f: Record<string, unknown>) => req<{ count: number; jobs: Job[]; available: boolean }>(`/capture-jobs${qs(f)}`),
   captureJob: (id: string) => req<Job & { detail?: unknown }>(`/capture-jobs/${encodeURIComponent(id)}`),
   subgraph: (root: string, depth: number, rel?: string) =>
@@ -110,10 +111,23 @@ export const api = {
     }),
   decisions: (f: Record<string, unknown>) =>
     req<{ count: number; items: Array<Record<string, unknown>> }>(`/resolution-decisions${qs(f)}`),
+  // Bounded export honouring active filters. Returns the BFF href (opened as a download link).
+  exportHref: (table: string, format: "csv" | "json", f: Record<string, unknown>) =>
+    `${API_BASE}/export/${table}${qs({ ...f, format })}`,
 };
 
 // ---- types (loose; the BFF is the source of truth) ----
-export type Paged<T> = { count: number; limit: number; offset: number; available?: boolean } & Record<string, T[]>;
+export type Me = { sub: string; role: string; auth_mode: string; local_mode: boolean; mutations_enabled: boolean };
+export type Paged<T> = { count: number; limit: number; offset: number; available?: boolean; hydrated?: boolean; capped?: boolean } & Record<string, T[]>;
+export type SourceDiagnostics = {
+  source: string; tracked_events: number; last_successful_capture: string | null;
+  capture_success_rate: number | null; jobs_total: number; jobs_succeeded: number; jobs_failed: number;
+  jobs_failed_terminal: number; failure_classifications: Record<string, number>; parser_failures: number;
+  average_capture_gap_hours: number | null; stale_events: number; events_with_multiple_states: number;
+  events_with_transitions: number; geography: { present: number; valid: number; placeholder: number; missing: number };
+  entity_resolution: Record<string, { resolved: number; ambiguous: number; unresolved: number }>;
+  available: boolean;
+};
 export type Dashboard = {
   cards: Record<string, number>;
   sources: Record<string, Record<string, number>>;
@@ -122,9 +136,9 @@ export type Dashboard = {
 export type SourceRow = { source: string } & Record<string, number>;
 export type EventRow = {
   canonical_event_id: string; title: string | null; source: string; source_record_id: string;
-  city: string | null; tracking_status: string; last_capture_status: string | null;
+  city: string | null; starts_at: string | null; tracking_status: string; last_capture_status: string | null;
   state_count: number; transition_count: number; capture_gap_hours: number | null;
-  enrichment_status: string | null; stale: boolean;
+  enrichment_status: string | null; resolution_status: string | null; stale: boolean;
 };
 export type EventDetail = {
   canonical_event_id: string; current_view: Record<string, unknown>;
@@ -160,7 +174,12 @@ export type Subgraph = {
   edges: Array<{ source: string; relationship: string; target: string; confidence: number | null }>;
 };
 export type SystemHealth = {
-  services: Record<string, { available: boolean; status: number; health: Record<string, unknown> | null }>;
+  services: Record<string, { available: boolean; status: number; health: Record<string, unknown> | null;
+    version: string | null; flags: Record<string, unknown>; last_check: string }>;
   data_quality: Record<string, number>;
+  checked_at?: string;
+  gateway_migration?: Record<string, unknown>;
+  feature_flags?: Record<string, boolean>;
+  canonical_counts?: Record<string, number | null>;
 };
 export type SearchResult = { query: string; results: { events: Array<Record<string, unknown>>; entities: Array<Record<string, unknown>> } };

@@ -11,6 +11,11 @@ primary_region = "sin"  # Singapore — nearest Fly region to India (no India re
 [env]
   NQUARK_PORT = "8000"
   NQUARK_NETWORK_MODE = "docker"  # base map; the *_SERVICE_URL overrides below win per service
+  # Admin console is LOCAL-ONLY (see docs/deployment.md). It is never served from the public cloud
+  # app: the admin BFF stays disabled and local mode stays off here. The Vite/React admin frontend
+  # has no Fly app of its own and is not built into any deployed image.
+  NQUARK_ADMIN_API_ENABLED = "false"
+  NQUARK_ADMIN_LOCAL_MODE = "false"
   NQUARK_SIGNAL_SERVICE_URL = "http://nquark-signal-service.flycast"
   NQUARK_OBSERVATION_SERVICE_URL = "http://nquark-observation-service.flycast"
   NQUARK_ENTITY_SERVICE_URL = "http://nquark-entity-service.flycast"

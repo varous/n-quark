@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { api, type Subgraph } from "./api";
-import { useAuth } from "./auth";
 import { Badge, Card, Empty, ErrorBox, Link, Loading, Table, Unavailable, useAsync, useDrawer, fmt } from "./ui";
 import { Pager } from "./screens";
 
-const TABS = ["Current", "Source records", "Timeline", "Evidence", "Entities", "Relationships", "Capture ops"];
+const TABS = ["Current", "Source records", "Timeline", "Evidence", "Entities", "Relationships", "Capture status"];
 
 export function EventDetail({ id }: { id: string }) {
   const [tab, setTab] = useState("Current");
@@ -27,7 +26,7 @@ export function EventDetail({ id }: { id: string }) {
           {tab === "Evidence" && <EvidenceTab id={id} />}
           {tab === "Entities" && <EntitiesTab entities={data.resolved_entities} />}
           {tab === "Relationships" && <RelationshipsTab rels={data.relationships} />}
-          {tab === "Capture ops" && <CaptureOps id={id} d={data} />}
+          {tab === "Capture status" && <CaptureStatus id={id} d={data} />}
         </>
       )}
     </div>
@@ -170,43 +169,29 @@ function RelationshipsTab({ rels }: { rels: Awaited<ReturnType<typeof api.eventD
   );
 }
 
-function CaptureOps({ id, d }: { id: string; d: Awaited<ReturnType<typeof api.eventDetail>> }) {
-  const { can } = useAuth();
-  const [msg, setMsg] = useState<string | null>(null);
+// Phase C: read-only capture freshness. Mutation controls (capture-now / re-run) are intentionally
+// not exposed in the local inspection console; those governed/operational endpoints remain on the
+// BFF for developer debugging only.
+function CaptureStatus({ id, d }: { id: string; d: Awaited<ReturnType<typeof api.eventDetail>> }) {
+  const { data, loading } = useAsync(() => api.eventTimeline(id), [id]);
   const rec = (d.source_records?.[0] ?? {}) as Record<string, unknown>;
   const cv = d.current_view as Record<string, unknown>;
   const source = String(cv.source ?? rec.source ?? "");
   const sid = String(rec.source_record_id ?? "");
-  async function run(kind: "enrich" | "resolve" | "capture") {
-    setMsg("Running…");
-    try {
-      if (kind === "enrich") {
-        const r = await api.rerunEnrichment(id, "admin console");
-        setMsg(`Enrichment queued (request ${r.request_id.slice(0, 8)}).`);
-      } else if (kind === "resolve") {
-        const r = await api.rerunEntityResolution(id, source, sid, "admin console");
-        setMsg(`Entity resolution queued (request ${r.request_id.slice(0, 8)}).`);
-      } else {
-        const r = await api.captureNow(source, sid, "admin console capture-now");
-        const t = (r.result as Record<string, unknown>) ?? {};
-        setMsg(`Capture-now (request ${r.request_id.slice(0, 8)}) · job ${String(t.job_id ?? "").slice(0, 8)} · claimed=${String(t.claimed)}`);
-      }
-    } catch (e) {
-      setMsg((e as Error).message);
-    }
-  }
+  const cur = (data?.current ?? {}) as Record<string, unknown>;
   return (
-    <Card title="Capture operations">
-      <p className="mb-1 text-sm text-slate-400">Target: <span className="font-mono text-xs">{source}:{sid}</span></p>
-      <p className="mb-3 text-xs text-slate-500">OPERATOR role required; every action is audited. Capture-now uses the normal scheduler + Shadow Ledger path.</p>
-      {can("OPERATOR") ? (
-        <div className="flex flex-wrap gap-2">
-          <button className="rounded bg-emerald-600 px-3 py-1.5 text-sm hover:bg-emerald-500" onClick={() => run("capture")}>Capture now</button>
-          <button className="rounded bg-sky-600 px-3 py-1.5 text-sm hover:bg-sky-500" onClick={() => run("enrich")}>Re-run enrichment</button>
-          <button className="rounded bg-sky-600 px-3 py-1.5 text-sm hover:bg-sky-500" onClick={() => run("resolve")}>Re-run entity resolution</button>
-        </div>
-      ) : <p className="text-sm text-slate-500">Sign in as OPERATOR to trigger actions.</p>}
-      {msg && <div className="mt-3 rounded border border-slate-700 bg-slate-900 p-2 text-xs text-slate-300">{msg}</div>}
+    <Card title="Capture freshness (read-only)">
+      <p className="mb-3 text-xs text-slate-500">Target <span className="font-mono">{source}:{sid}</span>. This console is
+        inspection-only — capture and re-run actions are not exposed here.</p>
+      {loading ? <Loading /> : (
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
+          <Field label="Last observed" value={fmt(cur.observed_at ?? cur.last_observed_at)} />
+          <Field label="Capture status" value={<Badge label={String(cur.capture_status ?? "Unknown")} />} />
+          <Field label="Completeness" value={<Badge label={String(cur.snapshot_completeness ?? "Unknown")} />} />
+          <Field label="States" value={fmt((data?.states ?? []).length)} />
+          <Field label="Transitions" value={fmt((data?.transitions ?? []).length)} />
+        </dl>
+      )}
     </Card>
   );
 }
@@ -254,21 +239,54 @@ export function EntityDetail({ type, id }: { type: string; id: string }) {
   if (loading) return <Loading />;
   if (error) return <ErrorBox message={error} />;
   if (!data) return <Empty message="Not found." />;
+  const dd = data as unknown as Record<string, unknown>;
+  const aliases = (dd.aliases ?? []) as unknown[];
+  const supersededBy = dd.superseded_by ?? dd.superseded_by_id;
+  const supersedes = (dd.supersedes ?? dd.superseded_identities ?? []) as unknown[];
+  const history = (dd.resolution_history ?? dd.history ?? []) as Array<Record<string, unknown>>;
   return (
     <div className="space-y-4">
-      <Card title={data.canonical_name ?? id} right={<Badge label={data.identity_state} />}>
+      <Card title={data.canonical_name ?? id}
+        right={<span className="flex items-center gap-2"><Badge label={data.identity_state} />
+          <Link to={`/graph?root=${encodeURIComponent(data.canonical_entity_id)}`} className="rounded border border-slate-700 px-2 py-0.5 text-xs text-sky-400 hover:bg-slate-800">Graph neighbourhood</Link></span>}>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
           <Field label="Canonical id" value={<span className="font-mono text-xs">{data.canonical_entity_id}</span>} />
           <Field label="Type" value={data.entity_type} />
           <Field label="Sources" value={data.linked_source_count} />
           <Field label="Linked events" value={data.linked_event_count} />
         </div>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          {["CANONICAL", "ALIAS_LINKED", "LEGACY_PROJECTION", "SUPERSEDED", "POSSIBLE_DUPLICATE", "UNRESOLVED"].map((s) => (
+            <span key={s} className={`rounded border px-1.5 py-0.5 ${s === data.identity_state ? "border-sky-500 text-sky-300" : "border-slate-800 text-slate-600"}`}>{s}</span>
+          ))}
+        </div>
         {data.legacy_projection_id && (
           <div className="mt-3 rounded border border-orange-800 bg-orange-950/30 p-2 text-xs text-orange-300">
             Possible legacy/naive-projection duplicate: <span className="font-mono">{data.legacy_projection_id}</span> (observed, not migrated).
           </div>
         )}
+        {supersededBy != null && (
+          <div className="mt-3 rounded border border-purple-800 bg-purple-950/30 p-2 text-xs text-purple-300">
+            Superseded by <span className="font-mono">{String(supersededBy)}</span> (non-destructive; original preserved).
+          </div>
+        )}
       </Card>
+      {(aliases.length > 0 || supersedes.length > 0 || history.length > 0) && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card title="Aliases">
+            {aliases.length === 0 ? <Empty message="None." /> :
+              <ul className="space-y-1 text-xs text-slate-300">{aliases.map((a, i) => <li key={i} className="font-mono">{typeof a === "object" ? JSON.stringify(a) : String(a)}</li>)}</ul>}
+          </Card>
+          <Card title="Superseded identities">
+            {supersedes.length === 0 ? <Empty message="None." /> :
+              <ul className="space-y-1 text-xs text-slate-300">{supersedes.map((a, i) => <li key={i} className="font-mono">{typeof a === "object" ? JSON.stringify(a) : String(a)}</li>)}</ul>}
+          </Card>
+          <Card title="Resolution history">
+            {history.length === 0 ? <Empty message="None." /> :
+              <ol className="space-y-1 text-xs text-slate-400">{history.map((h, i) => <li key={i}>{fmt(h.status ?? h.new_status)} <span className="text-slate-600">{fmt(h.reason ?? h.reason_code ?? h.created_at)}</span></li>)}</ol>}
+          </Card>
+        </div>
+      )}
       <Card title="Source handles">
         <Table rows={data.source_handles ?? []} empty="No handles." columns={[
           { key: "source", header: "Source", render: (r) => fmt(r.source) },
@@ -307,48 +325,84 @@ const TYPE_COLORS: Record<string, string> = {
   event_series: "#f472b6", region: "#22d3ee", source_handle: "#94a3b8", unknown: "#64748b",
 };
 
+const NODE_TYPES = ["event", "artist", "venue", "organizer", "event_series", "region", "source_handle"];
+
 export function Graph({ initialRoot }: { initialRoot?: string }) {
   const [root, setRoot] = useState(initialRoot ?? "");
   const [query, setQuery] = useState(initialRoot ?? "");
   const [depth, setDepth] = useState(1);
   const [rels, setRels] = useState<string[]>([]);
+  const [types, setTypes] = useState<string[]>([]);
+  const [srcFilter, setSrcFilter] = useState("");
   const { data, loading, error } = useAsync<Subgraph | null>(() => (root ? api.subgraph(root, depth, rels.join(",")) : Promise.resolve(null)), [root, depth, rels.join(",")]);
   const { open } = useDrawer();
+  // client-side entity-type + source-substring filtering (keeps root; drops edges to hidden nodes)
+  const view = data ? filterSubgraph(data, types, srcFilter) : null;
   return (
     <div className="space-y-4">
       <Card title="Graph explorer (bounded)">
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-sm">
             <span className="mb-1 block text-slate-400">Root node id</span>
-            <input className="w-80 rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-mono" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="event:… / artist:… / venue:…" />
+            <input className="w-80 rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-mono" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="event:… / artist:… / venue:…" onKeyDown={(e) => e.key === "Enter" && setRoot(query.trim())} />
           </label>
           <label className="text-sm">
-            <span className="mb-1 block text-slate-400">Depth</span>
+            <span className="mb-1 block text-slate-400">Depth (hops)</span>
             <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm" value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
               {[0, 1, 2].map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           </label>
+          <label className="text-sm">
+            <span className="mb-1 block text-slate-400">Source contains</span>
+            <input className="w-28 rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm" value={srcFilter} onChange={(e) => setSrcFilter(e.target.value)} placeholder="boshow…" />
+          </label>
           <button className="rounded bg-sky-600 px-3 py-1.5 text-sm hover:bg-sky-500" onClick={() => setRoot(query.trim())}>Load</button>
-          <button className="rounded border border-slate-700 px-3 py-1.5 text-sm" onClick={() => { setRoot(""); setQuery(""); }}>Reset</button>
+          <button className="rounded border border-slate-700 px-3 py-1.5 text-sm" onClick={() => { setRoot(""); setQuery(""); setTypes([]); setRels([]); setSrcFilter(""); }}>Reset</button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="text-slate-500">Relationships:</span>
           {REL_TYPES.map((r) => (
             <label key={r} className={`cursor-pointer rounded border px-2 py-0.5 ${rels.includes(r) ? "border-sky-500 text-sky-300" : "border-slate-700 text-slate-400"}`}>
               <input type="checkbox" className="hidden" checked={rels.includes(r)} onChange={() => setRels((cur) => cur.includes(r) ? cur.filter((x) => x !== r) : [...cur, r])} />{r}
             </label>
           ))}
         </div>
+        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          <span className="text-slate-500">Node types:</span>
+          {NODE_TYPES.map((t) => (
+            <label key={t} className={`cursor-pointer rounded border px-2 py-0.5 ${types.includes(t) ? "border-emerald-500 text-emerald-300" : "border-slate-700 text-slate-400"}`}>
+              <input type="checkbox" className="hidden" checked={types.includes(t)} onChange={() => setTypes((cur) => cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t])} />{t}
+            </label>
+          ))}
+        </div>
       </Card>
       {error && <ErrorBox message={error} />}
       {loading && <Loading />}
-      {data && (
-        <Card title={`Subgraph — ${data.node_count} nodes, ${data.edge_count} edges${data.capped ? " (capped)" : ""}`}>
-          <SubgraphSVG data={data} onNode={(id) => { setRoot(id); setQuery(id); }} onEdge={(e) => open("Relationship", e)} />
+      {data?.capped && (
+        <div className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-300">
+          Result capped at the server node limit ({data.max_nodes}) — this is a bounded local view, not the whole graph. Narrow with filters or a deeper root.
+        </div>
+      )}
+      {view && (
+        <Card title={`Subgraph — ${view.nodes.length} nodes, ${view.edges.length} edges${data?.capped ? " · capped" : ""}${(types.length || srcFilter) ? " · filtered" : ""}`}>
+          {view.nodes.length === 0 ? <Empty message="No nodes match the current filters." /> :
+            <SubgraphSVG data={view} onNode={(id) => { setRoot(id); setQuery(id); }} onEdge={(e) => open("Relationship", e)} />}
         </Card>
       )}
       {!root && !loading && <Empty message="Enter a node id (e.g. an event or artist canonical id) and Load." />}
     </div>
   );
+}
+
+function filterSubgraph(data: Subgraph, types: string[], srcFilter: string): Subgraph {
+  const src = srcFilter.trim().toLowerCase();
+  const keep = (nid: string, type: string) =>
+    (nid === data.root) ||
+    ((types.length === 0 || types.includes(type)) && (!src || nid.toLowerCase().includes(src)));
+  const nodes = data.nodes.filter((n) => keep(n.id, n.type));
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = data.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+  return { ...data, nodes, edges };
 }
 
 function SubgraphSVG({ data, onNode, onEdge }: { data: Subgraph; onNode: (id: string) => void; onEdge: (e: unknown) => void }) {

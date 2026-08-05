@@ -6,10 +6,14 @@ Every route enforces authentication + role authorization server-side. The whole 
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 
 from api_gateway.admin import auth
 from api_gateway.admin.deps import get_admin_service, get_audit_store
@@ -40,7 +44,9 @@ def login(payload: dict = Body(...)) -> dict[str, Any]:
 
 @router.get("/auth/me", summary="Current principal")
 def me(principal: auth.Principal = Depends(auth.require_viewer)) -> dict[str, Any]:
-    return {"sub": principal.sub, "role": principal.role, "auth_mode": principal.auth_mode}
+    return {"sub": principal.sub, "role": principal.role, "auth_mode": principal.auth_mode,
+            "local_mode": settings.admin_local_mode,
+            "mutations_enabled": settings.admin_operational_actions_enabled}
 
 
 # ---- read models (VIEWER) -----------------------------------------------------------------------
@@ -62,16 +68,37 @@ async def source_detail(source: str, _: auth.Principal = Depends(auth.require_vi
     return await svc.source_detail(source)
 
 
+@router.get("/sources/{source}/diagnostics")
+async def source_diagnostics(source: str, _: auth.Principal = Depends(auth.require_viewer),
+                             svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
+    return await svc.source_diagnostics(source)
+
+
+def _event_filters(source: str | None, stale_only: bool, has_transitions: bool, q: str | None,
+                   city: str | None, date_from: str | None, date_to: str | None,
+                   capture_state: str | None, resolution_status: str | None) -> dict[str, Any]:
+    return {"source": source, "stale_only": stale_only, "has_transitions": has_transitions,
+            "q": q, "city": city, "date_from": date_from, "date_to": date_to,
+            "capture_state": capture_state, "resolution_status": resolution_status}
+
+
 @router.get("/events")
 async def events(source: str | None = Query(default=None),
                  stale_only: bool = Query(default=False),
                  has_transitions: bool = Query(default=False),
+                 q: str | None = Query(default=None),
+                 city: str | None = Query(default=None),
+                 date_from: str | None = Query(default=None),
+                 date_to: str | None = Query(default=None),
+                 capture_state: str | None = Query(default=None),
+                 resolution_status: str | None = Query(default=None),
                  limit: int = Query(default=25, ge=1, le=100),
                  offset: int = Query(default=0, ge=0),
                  _: auth.Principal = Depends(auth.require_viewer),
                  svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
-    return await svc.events(source=source, stale_only=stale_only,
-                            has_transitions=has_transitions, limit=limit, offset=offset)
+    f = _event_filters(source, stale_only, has_transitions, q, city, date_from, date_to,
+                       capture_state, resolution_status)
+    return await svc.events(**f, limit=limit, offset=offset)
 
 
 @router.get("/events/{event_id}")
@@ -125,10 +152,12 @@ async def entity_detail(entity_type: str, entity_id: str,
 @router.get("/resolution-queue")
 async def resolution_queue(entity_type: str | None = Query(default=None),
                            source: str | None = Query(default=None),
+                           status_filter: str | None = Query(default=None, alias="status"),
                            limit: int = Query(default=50, ge=1, le=200),
                            _: auth.Principal = Depends(auth.require_viewer),
                            svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
-    return await svc.resolution_queue(entity_type=entity_type, source=source, limit=limit)
+    return await svc.resolution_queue(entity_type=entity_type, source=source,
+                                      status=status_filter, limit=limit)
 
 
 @router.get("/resolution-queue/candidates/{candidate_id}")
@@ -175,6 +204,70 @@ async def search(q: str = Query(...), limit: int = Query(default=20, ge=1, le=10
                  _: auth.Principal = Depends(auth.require_viewer),
                  svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
     return await svc.search(q, limit=limit)
+
+
+# ---- bounded export (VIEWER; respects the same filters as the live view) ------------------------
+def _flatten(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False, sort_keys=True)
+    return str(v)
+
+
+def _to_csv(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    header: list[str] = []
+    for r in rows:
+        for k in r:
+            if k not in header:
+                header.append(k)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(header)
+    for r in rows:
+        w.writerow([_flatten(r.get(k)) for k in header])
+    return buf.getvalue()
+
+
+@router.get("/export/{table}")
+async def export(table: str, fmt: str = Query(default="csv", alias="format"),
+                 source: str | None = Query(default=None),
+                 stale_only: bool = Query(default=False),
+                 has_transitions: bool = Query(default=False),
+                 q: str | None = Query(default=None), city: str | None = Query(default=None),
+                 date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+                 capture_state: str | None = Query(default=None),
+                 resolution_status: str | None = Query(default=None),
+                 entity_type: str | None = Query(default=None),
+                 status_filter: str | None = Query(default=None, alias="status"),
+                 _: auth.Principal = Depends(auth.require_viewer),
+                 svc: AdminService = Depends(get_admin_service)) -> Response:
+    if table not in AdminService.EXPORTABLE:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            detail=f"exportable tables: {AdminService.EXPORTABLE}")
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json")
+    filters: dict[str, Any] = {}
+    if table == "events":
+        filters = _event_filters(source, stale_only, has_transitions, q, city, date_from, date_to,
+                                 capture_state, resolution_status)
+    elif table in ("entities", "resolution-queue"):
+        filters = {"entity_type": entity_type, "source": source, "status": status_filter}
+    elif table == "capture-jobs":
+        filters = {"status": status_filter, "source": source}
+    elif table == "source-diagnostics":
+        filters = {"source": source}
+    rows = await svc.export_rows(table, filters={k: v for k, v in filters.items() if v not in (None, "")})
+    fname = f"nquark-{table}"
+    if fmt == "json":
+        body = json.dumps({"table": table, "count": len(rows), "rows": rows},
+                          ensure_ascii=False, indent=2)
+        return Response(content=body, media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}.json"'})
+    return Response(content=_to_csv(rows), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'})
 
 
 # ---- audit (ADMIN) ------------------------------------------------------------------------------

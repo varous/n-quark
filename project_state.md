@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-04 (Phase 3.1). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-05 (Admin Phase C). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -22,6 +22,7 @@ append-only MCP — never overwrite it).
 | 3.1 — Cross-inventory entity resolution | Resolve exclusive Boshow/District events onto **shared canonical artists/venues/organizers/series**; per-type deterministic resolvers + ambiguity policy; source-handle registry + history; graph IDENTIFIES/ORGANIZED_BY/PART_OF_SERIES; shared entities never imply duplicate events | crawl-service `entity_resolution/`, migration 005, ADR-0010, `docs/entity-resolution.md` |
 | Admin A — inspection console | First internal observability console: gateway **BFF** (`/admin/v1`) with server-side auth + RBAC (VIEWER/ANALYST/OPERATOR/ADMIN), read models over crawl/graph/Shadow-Ledger, bounded graph explorer, `identity_state` (legacy-vs-canonical visible), audited OPERATOR actions; Vite/React frontend (8 screens, provenance drawer, epistemic labels) | api-gateway `admin/`, frontend `src/admin/`, ADR-0011, `docs/admin-console.md` |
 | Admin B — governed workbench | **Governed** entity resolution: gateway Alembic (migration 001; audit + append-only `admin_resolution_decision`), accept/reject/create/link/mark-unresolved/**correct-series**/**supersede-legacy**/**reverse** commands with RBAC + impact preview + idempotency + conflicts; non-destructive legacy supersession + dedup counting; year-only series safeguard; safe targeted **capture-now** via the normal scheduler path; three-pane Resolution Workbench + capture-now UI | api-gateway `db/` + `routes/admin_commands.py`, crawl `governance.py` + migration 006, frontend `workbench.tsx`, ADR-0012 |
+| Admin C — local inspection hardening | Collapsed RBAC to a single **local-only, unauthenticated `INTERNAL_USER`** context (`ADMIN_LOCAL_MODE`; no login/roles); event search + rich filters (q/city/date/capture-state/resolution-status) URL-persisted; per-source **crawler diagnostics** (success rate, failure classes, parser failures, field present/valid/placeholder/missing); richer **system-health** (per-service version/flags/last-check, feature flags, data-quality set); bounded filtered **CSV/JSON export**; inspection-first Resolution (5 uncertainty queues, mutation controls removed); graph entity-type/source filters + cap warning; **local-only deploy boundary** (fly.toml pins admin off; frontend excluded, guarded by test) | api-gateway `admin/service.py` + `routes/admin.py` (export/diagnostics), frontend `screens.tsx`/`workbench.tsx`/`detail.tsx`/`auth.tsx`, `docs/deployment.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -94,10 +95,39 @@ Governed workbench live over the real Boshow+District data:
 - OPERATOR `capture-now` on a real Boshow event ran the normal job path (authoritative absence),
   idempotent on repeat. Every command audited + recorded as an append-only decision.
 
+## Admin Phase C — LIVE VALIDATED (2026-08-05, docker + browser)
+
+Gateway rebuilt + recreated with `ADMIN_API_ENABLED=true ADMIN_LOCAL_MODE=true` (`--no-deps`; crawl
+keeps its Phase 3.1/B flags). Live over the real Boshow+District data:
+- `GET /admin/v1/auth/me` with **no token** → `{sub: internal-user, role: INTERNAL_USER, auth_mode: local,
+  local_mode: true, mutations_enabled: false}`; the console opens straight to the dashboard (no login,
+  no role selector), header shows `internal-user · local · read-only`.
+- Event search `?q=skinny` → 4 boshow events where *Skinny Mos* is an artist/venue (search hits resolved
+  entity names, not just ids); filters (source/city/capture-state/resolution/date/transitions/stale) are
+  URL-persisted (`#/events?q=…&source=…`). Timelines: boshow `free-folk-nite` (tickets 10→30, fill
+  0.2→0.57, date change — all `Observed`, per-transition evidence) and district `imagicaa-theme-park`
+  (`EVENT_FIRST_SEEN`, source=district).
+- **Diagnostics**: boshow 11 tracked / 100% success / 0 parser failures / geography present 1·valid 1·
+  placeholder 0·missing 10; district 8 tracked. **Health**: per-service reachability + flags
+  (crawl `entity_resolution=true`, graph `shadow_ledger=true`) + last-check; gateway migration `001`
+  present; feature flags incl. `admin_local_mode=true`; data-quality set (missing venue 19, missing
+  geography 18, superseded-driven `legacy_canonical_duplicates` 0).
+- **Graph**: bounded subgraph around `artist:skinny-mos` (14 nodes/22 edges) with relationship +
+  node-type + source filters and cap warning; the legacy `venue:skinny-mos` and canonical
+  `venue:skinny-mos--kolkata` both visible (duplication surfaced, not hidden).
+- **Export**: `/admin/v1/export/events?format=csv&source=boshow` (header + rows honouring the filter) and
+  `format=json`; `source-diagnostics` export (2 rows). Unknown table → 404, bad format → 422.
+- **Resolution** is inspection-first (5 uncertainty queues + evidence, **no** mutation controls). The
+  live queues are currently empty (Pilu/BWS were curated to RESOLVED in Phase B — ambiguous_mentions=0);
+  reported honestly, no ambiguity fabricated. The queue/status mechanism is covered by tests.
+- **Deploy boundary**: gateway `fly.toml` pins `NQUARK_ADMIN_API_ENABLED="false"` +
+  `NQUARK_ADMIN_LOCAL_MODE="false"`; no service manifest references the frontend; a test enforces both.
+
 ## Test status
-crawl **190** · gateway **42** · signal **70** · graph **60** · analytics **11** · observation **11** ·
-entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Gateway Alembic upgrade+downgrade
-verified. Lint clean except baseline-tolerated B008 (FastAPI `Depends`).
+crawl **190** · gateway **58** (was 42; +16 Phase C) · signal **70** · graph **60** · analytics **11** ·
+observation **11** · entity **12** — all pass. Frontend `tsc -b` + `vite build` clean. Gateway Alembic
+upgrade+downgrade verified. Lint clean except baseline-tolerated B008 (FastAPI `Depends`) and one
+pre-existing S110 in an alembic migration.
 
 ## Invariants / constraints (must hold)
 - Deterministic + explainable only; **no LLM** in detection/matching/enrichment.
@@ -108,15 +138,13 @@ verified. Lint clean except baseline-tolerated B008 (FastAPI `Depends`).
 - No PII/fingerprinting; don't persist full third-party HTML indefinitely; images hotlinked not re-hosted.
 - BookMyShow stays partner_feed (never evasively scraped); no CAPTCHA/bot-evasion.
 - API keys: user adds to `.env`; never handled/pasted by the agent.
+- The admin **inspection console is local-only + unauthenticated** (`ADMIN_LOCAL_MODE`) — never enabled
+  on a cloud deploy; the admin BFF stays disabled and the frontend is excluded from all Fly manifests
+  (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
 
 ## Recommended next phase
-**Admin Phase C — bulk-safe curation + IdP + deep reversal.** Guarded batch supersession/linking over a
-reviewed candidate set (still explicit + audited, no blind bulk merge); Google Workspace OIDC via the
-existing `authenticate` contract; true rollback of entity-resolution graph edges (not just mark-based);
-and driving a canonical-vs-legacy **unification migration** from the accumulated `SUPERSEDED_BY` decisions.
-Then resume the data track:
-
-**3.2 — regional/market analytics over shared entities + unify the two entity id conventions.**
+**Resume the core data track — 3.2 — regional/market analytics over shared entities + unify the two
+entity id conventions.**
 (1) Build minimal internal cross-inventory analytics on top of the Phase 3.1 canonical entities
 (artist/venue/organizer footprints across sources, cities, series) — read-only, deterministic, no
 prediction. (2) Reconcile the ingest-time naive entity projection (signal-service name-slug) with the

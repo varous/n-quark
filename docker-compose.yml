@@ -224,8 +224,10 @@ services:
     environment:
       NQUARK_NETWORK_MODE: docker
       NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
-      # Admin Phase A — internal observability console BFF (all OFF by default).
+      # Admin console BFF (all OFF by default). Phase C: ADMIN_LOCAL_MODE makes it a local-only,
+      # unauthenticated single-INTERNAL_USER console (see docs/deployment.md) — never for cloud.
       NQUARK_ADMIN_API_ENABLED: ${ADMIN_API_ENABLED:-false}
+      NQUARK_ADMIN_LOCAL_MODE: ${ADMIN_LOCAL_MODE:-false}
       NQUARK_ADMIN_DEV_AUTH_ENABLED: ${ADMIN_DEV_AUTH_ENABLED:-false}
       NQUARK_ADMIN_OPERATIONAL_ACTIONS_ENABLED: ${ADMIN_OPERATIONAL_ACTIONS_ENABLED:-false}
       NQUARK_ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-dev-insecure-change-me}

@@ -64,6 +64,11 @@ const EPI: Record<string, string> = {
   CANONICAL: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   ALIAS_LINKED: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   LEGACY_PROJECTION: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+  SUPERSEDED: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  LOW_CONFIDENCE: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  PARTIAL: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  NONE: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  SUCCESS: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
 };
 export function Badge({ label }: { label: string | null | undefined }) {
   if (!label) return <span className="text-slate-500">—</span>;
@@ -177,3 +182,38 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
 }
 
 export const fmt = (v: unknown) => (v === null || v === undefined || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+
+// ---- URL-persisted filters (hash query string, e.g. #/events?source=boshow&q=skinny) -----------
+export function useHashQuery(): [Record<string, string>, (patch: Record<string, string>) => void] {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const on = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const [path, query] = hash.replace(/^#/, "").split("?");
+  const params = Object.fromEntries(new URLSearchParams(query ?? ""));
+  const setParams = (patch: Record<string, string>) => {
+    const next = new URLSearchParams(query ?? "");
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === "" || v === undefined) next.delete(k);
+      else next.set(k, v);
+    }
+    const s = next.toString();
+    window.location.hash = s ? `${path}?${s}` : path;
+  };
+  return [params, setParams];
+}
+
+// ---- bounded filtered export (CSV / JSON) ------------------------------------------------------
+export function ExportButtons({ href }: { href: (fmt: "csv" | "json") => string }) {
+  return (
+    <span className="flex items-center gap-2 text-xs">
+      <span className="text-slate-500">Export</span>
+      {(["csv", "json"] as const).map((f) => (
+        <a key={f} href={href(f)} download
+           className="rounded border border-slate-700 px-2 py-0.5 text-slate-300 hover:bg-slate-800">{f.toUpperCase()}</a>
+      ))}
+    </span>
+  );
+}

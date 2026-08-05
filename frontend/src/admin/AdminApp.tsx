@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { api } from "./api";
-import { AuthProvider, Login, useAuth } from "./auth";
-import { DrawerProvider, Link, useHashRoute } from "./ui";
-import { Captures, Events, Health, Overview, Sources } from "./screens";
+import { MeProvider, NotLocal, useMe } from "./auth";
+import { DrawerProvider, Link, Loading, useHashRoute } from "./ui";
+import { Captures, Diagnostics, Events, Health, Overview, Sources } from "./screens";
 import { Resolution } from "./workbench";
 import { EntityDetail, Entities, EventDetail, Graph } from "./detail";
 
 const NAV = [
   ["/overview", "Overview"], ["/sources", "Sources"], ["/events", "Events"],
   ["/entities", "Entities"], ["/resolution", "Resolution"], ["/graph", "Graph"],
-  ["/captures", "Captures"], ["/health", "Health"],
+  ["/captures", "Captures"], ["/diagnostics", "Diagnostics"], ["/health", "Health"],
 ];
 
 function parse(hash: string): { path: string; parts: string[]; params: URLSearchParams } {
@@ -29,6 +29,7 @@ function Router({ hash }: { hash: string }) {
     case "resolution": return <Resolution />;
     case "graph": return <Graph initialRoot={params.get("root") ?? undefined} />;
     case "captures": return <Captures />;
+    case "diagnostics": return <Diagnostics />;
     case "health": return <Health />;
     default: return <Overview />;
   }
@@ -79,27 +80,30 @@ function GlobalSearch() {
 
 function Shell() {
   const [hash] = useHashRoute();
-  const { sub, role, logout } = useAuth();
+  const { me } = useMe();
   const active = "/" + (parse(hash).parts[0] ?? "overview");
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
       <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 p-4">
         <div className="mb-6">
           <div className="text-sm font-semibold">n-quark</div>
-          <div className="text-xs text-slate-500">Admin Console</div>
+          <div className="text-xs text-slate-500">Inspection Console</div>
         </div>
         <nav className="space-y-1">
           {NAV.map(([to, label]) => (
             <a key={to} href={`#${to}`} className={`block rounded px-3 py-1.5 text-sm ${active === to ? "bg-sky-600/20 text-sky-300" : "text-slate-300 hover:bg-slate-800"}`}>{label}</a>
           ))}
         </nav>
+        <div className="mt-6 rounded border border-amber-800/60 bg-amber-950/20 p-2 text-[11px] leading-snug text-amber-300/90">
+          Local-only · unauthenticated. Do not expose publicly.
+        </div>
       </aside>
       <div className="flex-1">
         <header className="flex items-center justify-between border-b border-slate-800 px-6 py-3">
           <GlobalSearch />
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-slate-400">{sub} · <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs">{role}</span></span>
-            <button className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800" onClick={logout}>Sign out</button>
+          <div className="flex items-center gap-3 text-sm text-slate-400">
+            <span>{me?.sub ?? "internal-user"} · <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs">{me?.auth_mode ?? "local"}</span></span>
+            {me && !me.mutations_enabled && <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-500">read-only</span>}
           </div>
         </header>
         <main className="p-6">
@@ -112,16 +116,18 @@ function Shell() {
 }
 
 function Gate() {
-  const { token } = useAuth();
-  return token ? <Shell /> : <Login />;
+  const { me, loading, error } = useMe();
+  if (loading) return <div className="min-h-screen bg-slate-950 p-6"><Loading label="Connecting" /></div>;
+  if (!me || error) return <NotLocal message={error ?? "Gateway did not return a local principal."} />;
+  return <Shell />;
 }
 
 export default function AdminApp() {
   return (
-    <AuthProvider>
+    <MeProvider>
       <DrawerProvider>
         <Gate />
       </DrawerProvider>
-    </AuthProvider>
+    </MeProvider>
   );
 }

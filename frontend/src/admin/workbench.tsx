@@ -1,170 +1,126 @@
 import { useState } from "react";
-import { api, ApiError } from "./api";
-import { useAuth } from "./auth";
-import { Badge, Card, Empty, ErrorBox, Loading, useAsync, fmt } from "./ui";
+import { api } from "./api";
+import { Badge, Card, Empty, ErrorBox, ExportButtons, Loading, Table, Unavailable, useAsync, useDrawer, fmt } from "./ui";
 
-const REJECT_REASONS = ["WRONG_ENTITY", "TRIBUTE_OR_COVER", "DIFFERENT_CITY", "DIFFERENT_VENUE",
-  "GENERIC_NAME", "SOURCE_DATA_ERROR", "DUPLICATE_CANDIDATE", "OTHER"];
+// Phase C: the Resolution view is INSPECTION-FIRST. It surfaces the resolver's uncertainty queues
+// (AMBIGUOUS / UNRESOLVED / POSSIBLE_MATCH / CONFLICT / LOW_CONFIDENCE) with the raw + normalized
+// evidence, candidate entities, supporting/contradicting signals, resolver reason and history — and
+// NO mutation controls. The governed decision commands still exist on the BFF for developer
+// debugging (see docs/admin-console.md), but they are intentionally not exposed in this console.
 
-type Candidate = Record<string, unknown>;
+const TYPES = ["", "ARTIST", "VENUE", "ORGANIZER", "EVENT_SERIES"];
 
 export function Resolution() {
+  const [status, setStatus] = useState("");
   const [type, setType] = useState("");
-  const [selected, setSelected] = useState<Candidate | null>(null);
-  const { data, loading, error, reload } = useAsync(() => api.resolutionQueue({ entity_type: type, limit: 100 }), [type]);
+  const [source, setSource] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
+  const { data, loading, error } = useAsync(
+    () => api.resolutionQueue({ status, entity_type: type, source, limit: 200 }),
+    [status, type, source]);
+  const states: string[] = data?.states ?? ["AMBIGUOUS", "UNRESOLVED", "POSSIBLE_MATCH", "CONFLICT", "LOW_CONFIDENCE"];
+  const byStatus: Record<string, number> = data?.by_status ?? {};
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h2 className="text-sm font-semibold text-slate-200">Resolution Workbench</h2>
-        <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm" value={type} onChange={(e) => { setType(e.target.value); setSelected(null); }}>
-          <option value="">All types</option>
-          {["ARTIST", "VENUE", "ORGANIZER", "EVENT_SERIES"].map((t) => <option key={t}>{t}</option>)}
-        </select>
-        {data && <span className="text-xs text-slate-500">{data.count} in queue</span>}
-      </div>
-      {error && <ErrorBox message={error} />}
-      {loading ? <Loading /> : (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <Card title="Queue">
-            {(data?.items ?? []).length === 0 ? <Empty message="Queue is clear." /> : (
-              <ul className="space-y-1">
-                {data!.items.map((c) => (
-                  <li key={String(c.id)}>
-                    <button onClick={() => setSelected(c)}
-                      className={`w-full rounded px-2 py-1.5 text-left text-sm ${selected?.id === c.id ? "bg-sky-600/20 text-sky-200" : "hover:bg-slate-800"}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="truncate">{fmt(c.raw_name)}</span>
-                        <Badge label={String(c.status)} />
-                      </div>
-                      <div className="text-xs text-slate-500">{fmt(c.entity_type)} · {fmt(c.source)} · {fmt(c.reason)}</div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          {selected ? <SourceEvidence c={selected} /> : <Card title="Source evidence"><Empty message="Select a candidate." /></Card>}
-          {selected ? <DecisionPane key={String(selected.id)} c={selected} onDone={() => { setSelected(null); reload(); }} /> : <Card title="Decision & impact"><Empty message="Select a candidate." /></Card>}
+      <Card title="Resolution diagnostics" right={<ExportButtons href={(fmt) => api.exportHref("resolution-queue", fmt, { status, entity_type: type, source })} />}>
+        <p className="mb-3 text-xs text-slate-500">Inspection-first — uncertainty is surfaced, not edited. Governed
+          mutation commands remain available on the BFF for developer debugging only.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => setStatus("")} className={`rounded border px-2 py-1 text-xs ${status === "" ? "border-sky-500 text-sky-300" : "border-slate-700 text-slate-400"}`}>All</button>
+          {states.map((s) => (
+            <button key={s} onClick={() => setStatus(s)} className={`rounded border px-2 py-1 text-xs ${status === s ? "border-sky-500 text-sky-300" : "border-slate-700 text-slate-400"}`}>
+              {s} <span className="tabular-nums text-slate-500">{byStatus[s] ?? 0}</span>
+            </button>
+          ))}
+          <select className="ml-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs" value={type} onChange={(e) => setType(e.target.value)}>
+            {TYPES.map((t) => <option key={t} value={t}>{t === "" ? "All types" : t}</option>)}
+          </select>
+          <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs" value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="">All sources</option><option value="boshow">boshow</option><option value="district">district</option>
+          </select>
+          {data && <span className="text-xs text-slate-500">{data.count} shown</span>}
         </div>
-      )}
+      </Card>
+      {error && <ErrorBox message={error} />}
+      {data && !data.available && <Unavailable />}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {loading ? <Loading /> : (
+          <Card title="Queue">
+            <Table rows={data?.items ?? []} empty="Queue is clear." columns={[
+              { key: "entity_type", header: "Type", render: (r) => fmt(r.entity_type) },
+              { key: "raw_name", header: "Raw", render: (r) => fmt(r.raw_name ?? r.raw_value) },
+              { key: "normalized", header: "Normalized", render: (r) => fmt(r.normalized_value ?? r.normalized) },
+              { key: "source", header: "Source", render: (r) => fmt(r.source) },
+              { key: "status", header: "Status", render: (r) => <Badge label={String(r.status ?? "")} /> },
+              { key: "insp", header: "", render: (r) => <button className="text-xs text-sky-400 hover:underline"
+                  onClick={() => setSelected(String(r.candidate_id ?? r.id ?? ""))}>inspect</button> },
+            ]} />
+          </Card>
+        )}
+        <CandidateInspector id={selected} />
+      </div>
     </div>
   );
 }
 
-function SourceEvidence({ c }: { c: Candidate }) {
-  const { data } = useAsync(() => api.candidate(String(c.id)), [c.id]);
-  const ev = (data?.evidence ?? c.evidence ?? {}) as Record<string, unknown>;
+function CandidateInspector({ id }: { id: string | null }) {
+  const { open } = useDrawer();
+  const { data, loading, error } = useAsync(() => (id ? api.candidate(id) : Promise.resolve(null)), [id]);
+  if (!id) return <Card title="Evidence"><Empty message="Select a queue item to inspect its evidence." /></Card>;
+  if (loading) return <Card title="Evidence"><Loading /></Card>;
+  if (error) return <Card title="Evidence"><ErrorBox message={error} /></Card>;
+  if (!data) return <Card title="Evidence"><Empty message="Not found." /></Card>;
+  const d = data as Record<string, unknown>;
+  const supporting = (d.supporting ?? d.supporting_signals ?? []) as unknown[];
+  const contradicting = (d.contradicting ?? d.contradicting_signals ?? []) as unknown[];
+  const candidates = (d.candidate_entities ?? d.candidates ?? []) as Array<Record<string, unknown>>;
+  const history = (d.history ?? d.resolution_history ?? []) as Array<Record<string, unknown>>;
   return (
-    <Card title="Source evidence">
-      <dl className="space-y-1.5 text-sm">
-        <Row k="Raw value" v={fmt(c.raw_name)} />
-        <Row k="Normalized" v={fmt(c.normalized_name)} />
-        <Row k="Source" v={fmt(c.source)} />
-        <Row k="Handle" v={<span className="font-mono text-xs">{fmt(c.handle)}</span>} />
-        <Row k="Event" v={fmt(c.canonical_event_id)} />
-        <Row k="Status" v={<Badge label={String(c.status)} />} />
-        <Row k="Reason" v={fmt(c.reason)} />
-        {"city" in ev && <Row k="City" v={fmt(ev.city)} />}
+    <Card title="Evidence" right={<button className="text-xs text-sky-400" onClick={() => open("Candidate (raw)", d)}>raw</button>}>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+        <F label="Raw value" value={fmt(d.raw_name ?? d.raw_value)} />
+        <F label="Normalized" value={fmt(d.normalized_value ?? d.normalized)} />
+        <F label="Type" value={fmt(d.entity_type)} />
+        <F label="Source event" value={<span className="font-mono text-xs">{fmt(d.source_event_id ?? d.canonical_event_id)}</span>} />
+        <F label="Status" value={<Badge label={String(d.status ?? "")} />} />
+        <F label="Resolver reason" value={fmt(d.reason ?? d.reason_code)} />
       </dl>
-      {Array.isArray(data?.history) && data!.history.length > 0 && (
-        <div className="mt-3">
-          <div className="mb-1 text-xs uppercase text-slate-500">Resolution history</div>
-          <ul className="space-y-1 text-xs text-slate-400">
-            {(data!.history as Array<Record<string, unknown>>).map((h, i) => (
-              <li key={i}>{fmt(h.previous_status)} → <span className="text-slate-200">{fmt(h.new_status)}</span> ({fmt(h.reason)})</li>
-            ))}
+      <Section title="Candidate entities">
+        {candidates.length === 0 ? <Empty message="None." /> : (
+          <ul className="space-y-1 text-xs">
+            {candidates.map((c, i) => <li key={i} className="font-mono text-slate-300">{fmt(c.canonical_entity_id ?? c.id)} <span className="text-slate-500">{fmt(c.score)}</span></li>)}
           </ul>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function Row({ k, v }: { k: string; v: React.ReactNode }) {
-  return <div className="flex justify-between gap-3"><dt className="text-slate-500">{k}</dt><dd className="text-right text-slate-200">{v}</dd></div>;
-}
-
-function DecisionPane({ c, onDone }: { c: Candidate; onDone: () => void }) {
-  const { can } = useAuth();
-  const [target, setTarget] = useState("");
-  const [newName, setNewName] = useState(String(c.raw_name ?? ""));
-  const [city, setCity] = useState("");
-  const [reason, setReason] = useState(REJECT_REASONS[0]);
-  const [impact, setImpact] = useState<Record<string, unknown> | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const canWrite = can("ANALYST");
-
-  async function run(fn: () => Promise<unknown>, label: string) {
-    setBusy(true); setMsg(null);
-    try {
-      const r = (await fn()) as Record<string, unknown>;
-      if (r.already_applied) setMsg("Already applied (idempotent).");
-      else setMsg(`${label} recorded · decision ${(r.decision as Record<string, unknown>)?.id?.toString().slice(0, 8) ?? ""}`);
-      setTimeout(onDone, 700);
-    } catch (e) {
-      setMsg(e instanceof ApiError ? `Conflict/error: ${e.message}` : String(e));
-    } finally { setBusy(false); }
-  }
-
-  async function preview(action: string, extra: Record<string, unknown> = {}) {
-    setBusy(true); setMsg(null);
-    try {
-      setImpact(await api.gov("preview", { action, candidate_id: c.id, ...extra }));
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
-  }
-
-  if (!canWrite) return <Card title="Decision & impact"><Empty message="ANALYST role required to submit decisions." /></Card>;
-
-  return (
-    <Card title="Decision & impact">
-      <div className="space-y-3 text-sm">
-        <div>
-          <label className="mb-1 block text-xs text-slate-500">Target canonical id (accept / link)</label>
-          <input className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs" value={target}
-            onChange={(e) => setTarget(e.target.value)} placeholder={`${String(c.entity_type).toLowerCase()}:…`} />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button disabled={busy || !target} className="rounded border border-slate-700 px-2 py-1 text-xs disabled:opacity-40"
-              onClick={() => preview("ACCEPT_CANDIDATE", { canonical_entity_id: target })}>Preview</button>
-            <button disabled={busy || !target} className="rounded bg-sky-600 px-2 py-1 text-xs hover:bg-sky-500 disabled:opacity-40"
-              onClick={() => run(() => api.gov("accept", { candidate_id: c.id, canonical_entity_id: target, expected_status: c.status }), "Accept")}>Accept</button>
-            <button disabled={busy || !target} className="rounded border border-slate-600 px-2 py-1 text-xs disabled:opacity-40"
-              onClick={() => run(() => api.gov("link-handle", { candidate_id: c.id, canonical_entity_id: target }), "Link handle")}>Link handle</button>
-          </div>
-        </div>
-
-        <div className="border-t border-slate-800 pt-3">
-          <label className="mb-1 block text-xs text-slate-500">Create new canonical entity</label>
-          <input className="mb-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="canonical name" />
-          {c.entity_type === "VENUE" && <input className="mb-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs" value={city} onChange={(e) => setCity(e.target.value)} placeholder="city (required for venue)" />}
-          <button disabled={busy || !newName} className="rounded bg-emerald-600 px-2 py-1 text-xs hover:bg-emerald-500 disabled:opacity-40"
-            onClick={() => run(() => api.gov("create-entity", { entity_type: c.entity_type, canonical_name: newName, candidate_id: c.id, city: city || undefined, reason: "manual create" }), "Create")}>Create entity</button>
-        </div>
-
-        <div className="border-t border-slate-800 pt-3">
-          <label className="mb-1 block text-xs text-slate-500">Reject / keep unresolved</label>
-          <select className="mb-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs" value={reason} onChange={(e) => setReason(e.target.value)}>
-            {REJECT_REASONS.map((r) => <option key={r}>{r}</option>)}
-          </select>
-          <div className="flex gap-2">
-            <button disabled={busy} className="rounded border border-rose-800 px-2 py-1 text-xs text-rose-300 disabled:opacity-40"
-              onClick={() => run(() => api.gov("reject", { candidate_id: c.id, reason_code: reason }), "Reject")}>Reject</button>
-            <button disabled={busy} className="rounded border border-slate-700 px-2 py-1 text-xs disabled:opacity-40"
-              onClick={() => run(() => api.gov("mark-unresolved", { candidate_id: c.id }), "Mark unresolved")}>Mark unresolved</button>
-          </div>
-        </div>
-
-        {impact && (
-          <div className="rounded border border-slate-700 bg-slate-900 p-2 text-xs">
-            <div className="mb-1 font-medium text-slate-300">Impact preview</div>
-            <div className="text-slate-400">proposed → <span className="font-mono">{fmt(impact.proposed_canonical_target)}</span></div>
-            <div className="text-slate-400">events affected: {(impact.events_affected as unknown[])?.length ?? 0} · conflicting: {(impact.possible_conflicting_candidates as unknown[])?.length ?? 0}</div>
-            <div className="text-slate-400">scheduler change: {String(impact.scheduler_metadata_change)} · dup-event reconcile affected: {String(impact.duplicate_event_reconciliation_affected)}</div>
-            <div className="text-emerald-400">source evidence retained: {String(impact.source_evidence_retained)}</div>
-          </div>
         )}
-        {msg && <div className="rounded border border-slate-700 bg-slate-950 p-2 text-xs text-slate-300">{msg}</div>}
+      </Section>
+      <div className="grid grid-cols-2 gap-4">
+        <Section title="Supporting">{signals(supporting)}</Section>
+        <Section title="Contradicting">{signals(contradicting)}</Section>
       </div>
+      <Section title="History">
+        {history.length === 0 ? <Empty message="No history." /> : (
+          <ol className="space-y-1 text-xs text-slate-400">
+            {history.map((h, i) => <li key={i}>{fmt(h.status ?? h.new_status)} <span className="text-slate-600">{fmt(h.reason ?? h.reason_code ?? h.at ?? h.created_at)}</span></li>)}
+          </ol>
+        )}
+      </Section>
     </Card>
   );
+}
+
+function signals(items: unknown[]) {
+  if (!items.length) return <Empty message="None." />;
+  return <ul className="space-y-0.5 text-xs text-slate-400">{items.map((s, i) => <li key={i}>{typeof s === "object" ? JSON.stringify(s) : String(s)}</li>)}</ul>;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-4">
+      <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function F({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div><dt className="text-xs uppercase text-slate-500">{label}</dt><dd className="text-slate-200">{value}</dd></div>;
 }

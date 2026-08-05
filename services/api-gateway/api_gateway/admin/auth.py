@@ -25,6 +25,10 @@ from api_gateway.config import settings
 ROLES = ("VIEWER", "ANALYST", "OPERATOR", "ADMIN")
 _RANK = {r: i for i, r in enumerate(ROLES)}
 
+# Phase C: the single, unauthenticated local context. It satisfies every role requirement so the
+# console needs no login and no role selector when the gateway runs in local mode.
+INTERNAL_USER_ROLE = "INTERNAL_USER"
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -33,7 +37,14 @@ class Principal:
     auth_mode: str = "dev"
 
     def has_role(self, required: str) -> bool:
+        if self.role == INTERNAL_USER_ROLE:
+            return True  # local internal user has full inspection access
         return _RANK.get(self.role, -1) >= _RANK.get(required, 99)
+
+
+def internal_user() -> Principal:
+    """The fixed principal used in local mode (no token, single context)."""
+    return Principal(sub="internal-user", role=INTERNAL_USER_ROLE, auth_mode="local")
 
 
 def _b64u(raw: bytes) -> str:
@@ -90,6 +101,8 @@ def require_role(required: str):
     def _dep(authorization: str | None = Header(default=None)) -> Principal:
         if not settings.admin_api_enabled:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="admin api disabled")
+        if settings.admin_local_mode:
+            return internal_user()  # single unauthenticated local context; no token, all roles
         principal = authenticate(_extract_token(authorization))
         if principal is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="authentication required",
