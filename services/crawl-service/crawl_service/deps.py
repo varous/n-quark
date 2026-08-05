@@ -47,9 +47,11 @@ def get_entity_resolution_service() -> EntityResolutionService:
 def get_scheduler() -> SchedulerService:
     global _scheduler
     if _scheduler is None:
+        from crawl_service.media_notifier import notify_media
         _scheduler = SchedulerService(SessionLocal, HttpCapturer(), settings,
                                       enricher=get_enricher(),
-                                      entity_resolver=get_entity_resolution_service())
+                                      entity_resolver=get_entity_resolution_service(),
+                                      media_notifier=notify_media)
     return _scheduler
 
 

@@ -94,6 +94,9 @@ services:
       # Phase 3.1 cross-inventory entity resolution — OFF by default.
       NQUARK_ENTITY_RESOLUTION_ENABLED: ${ENTITY_RESOLUTION_ENABLED:-false}
       NQUARK_ENTITY_RESOLUTION_SOURCES: ${ENTITY_RESOLUTION_SOURCES:-boshow,district}
+      # Phase 4B — best-effort creative-observation hook (OFF by default).
+      NQUARK_MEDIA_OBSERVATION_ENABLED: ${CRAWL_MEDIA_OBSERVATION_ENABLED:-false}
+      NQUARK_MEDIA_SERVICE_URL: http://media-service:8002
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,6 +107,17 @@ services:
     build: ./services/media-service
     ports:
       - "8002:8002"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      # Phase 4B — creative-asset observation (all OFF by default).
+      NQUARK_MEDIA_OBSERVATION_ENABLED: ${MEDIA_OBSERVATION_ENABLED:-false}
+      NQUARK_MEDIA_FETCH_ENABLED: ${MEDIA_FETCH_ENABLED:-false}
+      NQUARK_MEDIA_STORAGE_ENABLED: ${MEDIA_STORAGE_ENABLED:-false}
+      NQUARK_MEDIA_GRAPH_LINK_ENABLED: ${MEDIA_GRAPH_LINK_ENABLED:-false}
+      NQUARK_MEDIA_STORAGE_DIR: /data/media
+    volumes:
+      - media_data:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -256,3 +270,4 @@ volumes:
   redis_data:
   qdrant_data:
   minio_data:
+  media_data:

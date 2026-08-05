@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     event_series_auto_resolve_threshold: float = 0.7
     entity_resolution_max_events_per_run: int = 500
 
+    # --- Phase 4B: best-effort creative-asset observation hook (OFF by default) ---
+    # When on, a successful capture notifies media-service to observe the event's creative. It is
+    # best-effort and never fails the capture or Shadow Ledger update.
+    media_observation_enabled: bool = False
+    media_service_url: str = Field(default_factory=lambda: (
+        "http://media-service:8002" if detect_network_mode() == "docker" else "http://localhost:8002"))
+    media_observation_sources: str = "boshow,district"
+
     # --- Phase 3: independent second source + cross-platform reconciliation (all OFF by default) ---
     second_source_capture_enabled: bool = False
     second_source_name: str = "district"
@@ -124,6 +132,10 @@ class Settings(BaseSettings):
     def entity_resolution_source_set(self) -> frozenset[str]:
         base = frozenset(s.strip() for s in self.entity_resolution_sources.split(",") if s.strip())
         return self._with_second_source(base)
+
+    @property
+    def media_observation_source_set(self) -> frozenset[str]:
+        return frozenset(s.strip() for s in self.media_observation_sources.split(",") if s.strip())
 
     def entity_auto_threshold(self, entity_type: str) -> float:
         return {
