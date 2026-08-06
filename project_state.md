@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-05 (Phase 4B). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-05 (Phase 4C). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -25,6 +25,7 @@ append-only MCP — never overwrite it).
 | Admin C — local inspection hardening | Collapsed RBAC to a single **local-only, unauthenticated `INTERNAL_USER`** context (`ADMIN_LOCAL_MODE`; no login/roles); event search + rich filters (q/city/date/capture-state/resolution-status) URL-persisted; per-source **crawler diagnostics** (success rate, failure classes, parser failures, field present/valid/placeholder/missing); richer **system-health** (per-service version/flags/last-check, feature flags, data-quality set); bounded filtered **CSV/JSON export**; inspection-first Resolution (5 uncertainty queues, mutation controls removed); graph entity-type/source filters + cap warning; **local-only deploy boundary** (fly.toml pins admin off; frontend excluded, guarded by test) | api-gateway `admin/service.py` + `routes/admin.py` (export/diagnostics), frontend `screens.tsx`/`workbench.tsx`/`detail.tsx`/`auth.tsx`, `docs/deployment.md` |
 | 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 | 4B — creative asset observation | Built **media-service** (Phase 4B scaffold): observe public event creatives over time — **content-addressed identity** (SHA-256 → normalized URL → optional phash), **safe SSRF-guarded bounded fetcher** (http(s)-only, private-net/redirect/size/MIME guards, 8 classified outcomes), **content-addressed local storage** (dedup, disable-able, bytes never in PG), dependency-free header **metadata**, deterministic **media transitions** (FIRST_SEEN/CONTENT_CHANGED/URL_CHANGED_SAME_CONTENT/ROLE_CHANGED/DISAPPEARED/REAPPEARED) in a dedicated history, `event -USES_CREATIVE-> media_asset` graph link, bounded internal APIs + coverage/failures + stable creative-summary contract. Best-effort crawl capture hook (never fails capture). No OCR/recognition/embeddings/scoring; flags default off; migration `001` additive/reversible | media-service `identity/metadata/transitions/fetcher/storage/service/reads/routes`, migration 001, crawl `media_notifier.py` + hook, ADR-0014, `docs/media-observation.md` |
+| 4C — shared ticketing adapter + Skillbox | One typed **TicketingAdapter contract** (discover/fetch_event/normalize_event/classify_failure/extract_source_handles/extract_asset_references) wrapping the existing providers — Boshow/District/Skillbox conform, no regression. Deterministic **quality validation** before enrollment (12 rejection reasons; verified-city geography, tz-aware date normalization, present/valid/specific field status); **validated discovery** partitions accepted/rejected/out-of-scope; per-source **quality/coverage diagnostics** (`/v1/internal/sources/...`, observed-supply only). Skillbox third-source pilot flag-gated; pipeline parity config-driven (add `skillbox` to crawl source-sets). Bounded **Soundcharts feasibility** (no impl, no fabricated endpoints) + `ArtistIntelligenceProvider` proposal separating ticketing supply from licensed artist intelligence | signal `adapters/contract.py`+`quality.py`+`sources.py`+`routes/sources.py`, ADR-0015, `docs/ticketing-adapters.md`/`skillbox-probe.md`/`soundcharts-feasibility.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
 
@@ -163,9 +164,27 @@ media-service built + started (`:8002`) with observation/fetch/storage/graph-lin
   → capture `SUCCEEDED`, trace `media: {MEDIA_OBSERVED, MEDIA_FIRST_SEEN, FETCHED}`; with media-service
   **down** → capture still `SUCCEEDED`, trace `media: MEDIA_OBSERVATION_FAILED`. Capture isolation proven.
 
+## Phase 4C — LIVE VALIDATED (2026-08-05, docker, real Skillbox/Boshow data)
+
+signal-service rebuilt with the shared adapter contract + Skillbox quality gate (flag-gated). Live:
+- `/v1/internal/sources` lists boshow/district/skillbox each advertising the six contract capabilities.
+- **Skillbox bounded Kolkata pass** (25 records fetched+validated): **0** accepted for Kolkata, **1**
+  rejected `PLACEHOLDER_DATE` (real pre-sale shell `taba-chake-india-tour-2026-…`), **24** out-of-scope
+  (other cities — the sitemap head is not Kolkata-first). Field quality: title 1.0/1.0/1.0, city
+  1.0/1.0/0.76, venue 1.0/0.8/0.8, date 1.0/0.96/**0.0** (all Skillbox dates tz-naive) — the gate works
+  and Skillbox is confirmed low-quality.
+- One accepted (city-agnostic) Skillbox event normalized cleanly (`DANCE WORKSHOP…`, Bengaluru, venue
+  flagged non-specific). **Boshow** validated **5/5** accepted (city+venue specific 1.0) — unaffected.
+- **No live cross-source convergence claimed**: no Kolkata Skillbox event met validation in the bounded
+  sample (disjoint-cohort finding persists) — reported honestly, no fixtures injected to inflate. Pipeline
+  parity (discovery→validation→capture→Shadow Ledger→enrichment→entity→media) is config-driven and
+  identical to District's proven path; entity/media hooks stay best-effort.
+- **Soundcharts**: feasibility report + `ArtistIntelligenceProvider` proposal delivered as docs — no
+  implementation, no fabricated endpoint availability, ticketing-supply kept separate from artist intel.
+
 ## Test status
-crawl **192** (+2 media-hook isolation) · gateway **58** · signal **70** · graph **60** ·
-analytics **45** · media **43** (was 1; +42 Phase 4B) · observation **11** · entity **12** — all pass.
+crawl **192** · gateway **58** · signal **93** (was 70; +23 Phase 4C) · graph **60** ·
+analytics **45** · media **43** · observation **11** · entity **12** — all pass.
 Media Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean except
 baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
 
@@ -183,10 +202,12 @@ baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alem
   (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
 
 ## Recommended next phase
-**Phase 4C — additional source adapter scaffolds + broader acquisition** (a third, city-overlapping
-source so cross-source entity/creative convergence becomes non-zero). Then fold media-service's
-`creative-summary` contract into analytics, and add perceptual/near-duplicate creative matching. Still
-deferred: unify the ingest-time naive projection with the
+**Paged Kolkata-first Skillbox discovery** (the sitemap head isn't Kolkata-ordered, so a city-targeted
+paged crawl is needed to surface Kolkata inventory and make cross-source convergence non-zero), then run
+Skillbox through the full capture pipeline (config-driven) and measure real convergence. In parallel: fold
+media-service's `creative-summary` contract into analytics, add perceptual/near-duplicate creative
+matching, and — when artist intelligence becomes a priority — the ~90-call Soundcharts proof-of-value set
+behind a future `ArtistIntelligenceProvider`. Still deferred: unify the ingest-time naive projection with the
 evidence-based canonical layer (one graph id convention) so analytics can retire the read-time
 canonicalizer; a materialization layer for analytics if the cohort grows large; and driving a
 canonical-vs-legacy unification migration from accumulated `SUPERSEDED_BY` decisions.

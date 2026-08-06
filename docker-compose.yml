@@ -146,6 +146,11 @@ services:
       NQUARK_DATAFORSEO_PASSWORD: ${DATAFORSEO_PASSWORD:-}
       NQUARK_SERPAPI_KEY: ${SERPAPI_KEY:-}
       NQUARK_TICKETING_PROVIDER: ${TICKETING_PROVIDER:-mock}
+      # Phase 4C — Skillbox third-source pilot + quality diagnostics (all OFF by default).
+      NQUARK_SKILLBOX_ENABLED: ${SKILLBOX_ENABLED:-false}
+      NQUARK_SKILLBOX_DISCOVERY_ENABLED: ${SKILLBOX_DISCOVERY_ENABLED:-false}
+      NQUARK_SKILLBOX_CITY_FILTERS: ${SKILLBOX_CITY_FILTERS:-Kolkata}
+      NQUARK_QUALITY_FETCH_CAP: ${QUALITY_FETCH_CAP:-12}
       # Shadow Ledger (Phase 1) — OFF by default; enable to record commercial-state history.
       NQUARK_SHADOW_LEDGER_ENABLED: ${SHADOW_LEDGER_ENABLED:-false}
     depends_on:

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from signal_service.config import settings
 from signal_service.routes.google_trends import router as google_trends_router
 from signal_service.routes.spotify import router as spotify_router
+from signal_service.routes.sources import router as sources_router
 from signal_service.routes.ticketing import router as ticketing_router
 from signal_service.routes.youtube import router as youtube_router
 
@@ -18,6 +19,7 @@ app.include_router(spotify_router)
 app.include_router(youtube_router)
 app.include_router(google_trends_router)
 app.include_router(ticketing_router)
+app.include_router(sources_router)
 
 
 @app.get("/health")

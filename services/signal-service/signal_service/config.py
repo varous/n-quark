@@ -71,6 +71,18 @@ class Settings(BaseSettings):
     #   raises until a data partnership exists).
     ticketing_provider: str = "mock"
     boshow_api_base: str = "https://www.boshow.in/api"
+    # --- Phase 4C: shared adapter contract + source quality/diagnostics ---
+    ticketing_managed_sources: str = "boshow,district,skillbox"  # sources with quality diagnostics
+    quality_fetch_cap: int = 12                                  # max events fetched per validated pass
+    # --- Phase 4C: Skillbox third-source pilot (all OFF by default) ---
+    skillbox_enabled: bool = False
+    skillbox_discovery_enabled: bool = False
+    skillbox_city_filters: str = "Kolkata"        # Kolkata-first pilot
+    skillbox_discovery_limit: int = 20
+    skillbox_capture_timeout: float = 25.0
+    skillbox_rate_limit: int = 5                  # bounded fetches per discovery pass
+    skillbox_retry_limit: int = 2
+    skillbox_sitemap_url: str = "https://www.skillboxes.com/media/sitemap/sitemap-event.xml"
     # Shadow Ledger (Phase 1) — OFF by default so ingestion behaviour is byte-identical unless
     # explicitly enabled. When on, each ticketing ingest also records the event's public commercial
     # state to graph-service's internal Shadow Ledger (best-effort; never blocks ingest).
@@ -106,6 +118,10 @@ class Settings(BaseSettings):
     @property
     def shadow_ledger_source_set(self) -> frozenset[str]:
         return frozenset(s.strip() for s in self.shadow_ledger_sources.split(",") if s.strip())
+
+    @property
+    def skillbox_city_filter_set(self) -> frozenset[str]:
+        return frozenset(c.strip() for c in self.skillbox_city_filters.split(",") if c.strip())
 
     @property
     def resolved_trends_provider(self) -> str:

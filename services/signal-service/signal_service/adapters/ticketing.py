@@ -623,7 +623,8 @@ class SkillboxProvider:
             r.raise_for_status()
             payload = r.json()
         if not payload.get("success") or not payload.get("data"):
-            raise ValueError(f"skillbox: event not found for slug {event_ref!r}")
+            # Source reachable, record genuinely absent -> authoritative absence (not a parse error).
+            raise EventNotFound(f"skillbox: event not found for slug {event_ref!r}")
         return event_from_skillbox(payload["data"])
 
 
