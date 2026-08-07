@@ -1,10 +1,9 @@
+app = "nquark-media-service"
 # Fly.io — media-service (Phase 4D private collection topology).
 # PRIVATE-ONLY: <app>.flycast, no public IP. Fetches + hashes creatives; byte STORAGE stays disabled.
-app = "nquark-media-service"
 primary_region = "sin"
 
 [build]
-  dockerfile = "Dockerfile"
 
 [env]
   NQUARK_PORT = "8002"

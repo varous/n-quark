@@ -1,10 +1,9 @@
+app = "nquark-signal-service"
 # Fly.io — signal-service (Phase 4D private collection topology).
 # PRIVATE-ONLY: <app>.flycast, no public IP. Stateless discovery/fetch/normalization for Boshow + District.
-app = "nquark-signal-service"
 primary_region = "sin"
 
 [build]
-  dockerfile = "Dockerfile"
 
 [env]
   NQUARK_PORT = "8003"

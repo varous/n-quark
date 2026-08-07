@@ -1,11 +1,10 @@
+app = "nquark-graph-service"
 # Fly.io — graph-service (Phase 4D private collection topology).
 # PRIVATE-ONLY: reachable only over the org's private network as <app>.flycast — no public IP.
 # Build context is the service dir; deploy via scripts/fly-deploy.sh (cd services/graph-service).
-app = "nquark-graph-service"
 primary_region = "sin"
 
 [build]
-  dockerfile = "Dockerfile"
 
 [env]
   NQUARK_PORT = "8006"

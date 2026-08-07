@@ -1,11 +1,10 @@
+app = "nquark-crawl-service"
 # Fly.io — crawl-service (Phase 4D private collection topology). THE ALWAYS-ON COLLECTOR.
 # PRIVATE-ONLY: <app>.flycast, no public IP. Runs the in-process collector (discover + capture) plus
 # enrichment, entity resolution and the best-effort media hook for Boshow + District. Skillbox disabled.
-app = "nquark-crawl-service"
 primary_region = "sin"
 
 [build]
-  dockerfile = "Dockerfile"
 
 [env]
   NQUARK_PORT = "8001"
