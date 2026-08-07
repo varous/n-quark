@@ -1,8 +1,8 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-07 (Phase 4D). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-07 (Phase 5A). Branch `main`. Repo: github.com/varous/n-quark._
 
-n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
+n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
 It feeds **crawl-space** (a separate discovery/ticketing product) via the events feed. The strategic
 moat is an **independent, cross-platform temporal observation layer** (see `docs/product-spec.md`, the
@@ -25,6 +25,7 @@ append-only MCP — never overwrite it).
 | Admin C — local inspection hardening | Collapsed RBAC to a single **local-only, unauthenticated `INTERNAL_USER`** context (`ADMIN_LOCAL_MODE`; no login/roles); event search + rich filters (q/city/date/capture-state/resolution-status) URL-persisted; per-source **crawler diagnostics** (success rate, failure classes, parser failures, field present/valid/placeholder/missing); richer **system-health** (per-service version/flags/last-check, feature flags, data-quality set); bounded filtered **CSV/JSON export**; inspection-first Resolution (5 uncertainty queues, mutation controls removed); graph entity-type/source filters + cap warning; **local-only deploy boundary** (fly.toml pins admin off; frontend excluded, guarded by test) | api-gateway `admin/service.py` + `routes/admin.py` (export/diagnostics), frontend `screens.tsx`/`workbench.tsx`/`detail.tsx`/`auth.tsx`, `docs/deployment.md` |
 | 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 | 4B — creative asset observation | Built **media-service** (Phase 4B scaffold): observe public event creatives over time — **content-addressed identity** (SHA-256 → normalized URL → optional phash), **safe SSRF-guarded bounded fetcher** (http(s)-only, private-net/redirect/size/MIME guards, 8 classified outcomes), **content-addressed local storage** (dedup, disable-able, bytes never in PG), dependency-free header **metadata**, deterministic **media transitions** (FIRST_SEEN/CONTENT_CHANGED/URL_CHANGED_SAME_CONTENT/ROLE_CHANGED/DISAPPEARED/REAPPEARED) in a dedicated history, `event -USES_CREATIVE-> media_asset` graph link, bounded internal APIs + coverage/failures + stable creative-summary contract. Best-effort crawl capture hook (never fails capture). No OCR/recognition/embeddings/scoring; flags default off; migration `001` additive/reversible | media-service `identity/metadata/transitions/fetcher/storage/service/reads/routes`, migration 001, crawl `media_notifier.py` + hook, ADR-0014, `docs/media-observation.md` |
+| 5A — public demand intelligence | New **artist-intelligence-service** (port 8010): demand-side layer meeting supply only through `canonical_artist_id`. Own **demand ledger** (`artist_external_identity`, `artist_demand_observation`, `provider_quota_day`, `demand_refresh_job`; separate from the event Shadow Ledger; append-only, idempotent on `observation_key`). **Reuses signal-service for YouTube acquisition** (extended with acquisition-only `search`+`videos`) — no parallel ingestion path, API key stays in signal-service. Provider-neutral contract (capability flags); deterministic YouTube identity resolution (RESOLVED/AMBIGUOUS/UNRESOLVED, name-equality never resolves alone, never creates a canonical artist); rounded-subscriber honesty (`PROVIDER_REPORTED`); per-provider/day **quota accounting** (search 100u vs read 1u, budget-enforced); restart-safe **refresh scheduler** (lease/retry/idempotent, known-id reads only); Google Trends **OFFICIAL_API (gated → ACCESS_UNAVAILABLE) + IMPORT** (labeled CSV, no scraping); first-class **geography** (ISO IN-XX); deterministic **momentum/geography/supply-demand/event-response** read models (no score, no causal claim, `INSUFFICIENT_HISTORY` honesty). Separate service so demand failure never disrupts the crawl→signal spine | artist-intelligence-service `providers/`+`service.py`+`scheduler.py`+`intelligence.py`+`supply.py`+`signal_client.py`, migration 001, signal `adapters/youtube.py`+`routes/youtube.py`, ADR-0017, `docs/demand-intelligence.md`+`docs/providers/{youtube,google-trends}.md` |
 | 4C — shared ticketing adapter + Skillbox | One typed **TicketingAdapter contract** (discover/fetch_event/normalize_event/classify_failure/extract_source_handles/extract_asset_references) wrapping the existing providers — Boshow/District/Skillbox conform, no regression. Deterministic **quality validation** before enrollment (12 rejection reasons; verified-city geography, tz-aware date normalization, present/valid/specific field status); **validated discovery** partitions accepted/rejected/out-of-scope; per-source **quality/coverage diagnostics** (`/v1/internal/sources/...`, observed-supply only). Skillbox third-source pilot flag-gated; pipeline parity config-driven (add `skillbox` to crawl source-sets). Bounded **Soundcharts feasibility** (no impl, no fabricated endpoints) + `ArtistIntelligenceProvider` proposal separating ticketing supply from licensed artist intelligence | signal `adapters/contract.py`+`quality.py`+`sources.py`+`routes/sources.py`, ADR-0015, `docs/ticketing-adapters.md`/`skillbox-probe.md`/`soundcharts-feasibility.md` |
 
 ## Phase 3 — LIVE VALIDATED (2026-08-04, full docker stack)
@@ -205,6 +206,39 @@ locally; no paid Fly resources created). See `deploy/fly/README.md`, ADR-0016.
   138 jobs identical) and capture continues (SUCCESS_RECORD_PRESENT + entity resolution); media failure
   stays isolated. No Fly credentials supplied → no cloud mutations performed.
 
+## Phase 5A — public demand intelligence (2026-08-07, LIVE VALIDATED, real YouTube API + Trends import)
+
+New **artist-intelligence-service** (port 8010) — the demand-side layer. Two evidence systems meet only
+through `canonical_artist_id`; YouTube/Trends metrics never enter the event Shadow Ledger. See ADR-0017,
+`docs/demand-intelligence.md`, `docs/providers/{youtube,google-trends}.md`.
+- **Reuse, not a parallel path**: signal-service remains the sole YouTube ingestion path (extended with
+  additive acquisition-only `GET /v1/signals/youtube/search` + `/channels/{id}/videos/preview`); the
+  demand service's YouTube provider is a thin signal-service client. API key stays in signal-service.
+  Kept in a **separate service** so demand-layer failure never disrupts the crawl→signal collection spine.
+- **Demand ledger** (migration 001, `alembic_version_artist_intel`): `artist_external_identity`,
+  `artist_demand_observation` (append-only, idempotent on `observation_key`, `evidence_status` +
+  provenance), `provider_quota_day`, `demand_refresh_job`. Additive/reversible (upgrade+downgrade verified).
+- **Identity**: deterministic resolution (bounded search → ranked candidates → RESOLVED/AMBIGUOUS/
+  UNRESOLVED); name-equality alone never resolves; never creates a canonical artist; pending/rejected slots
+  auditable.
+- **Google Trends**: `OFFICIAL_API` (gated → reports `ACCESS_UNAVAILABLE`, no alpha creds) + `IMPORT`
+  (labeled CSV exports; no scraping). Relative 0–100 interest with preserved normalization context;
+  SEARCH_TERM vs TOPIC kept distinct; independently normalized exports never merged; ISO IN-XX geography.
+- **Read models**: momentum (independent components, no score), geography (demand×supply, transparent
+  labels), supply-demand juxtaposition (no combined score), event-response (co-movement only, no causal
+  claim); `INSUFFICIENT_HISTORY` honesty; freshness; bounded/filterable observation listing.
+- **Live demo** (docker, **real `YOUTUBE_API_KEY` in signal-service**): "Arijit Singh" name-only →
+  **AMBIGUOUS** (multiple real channels, no corroboration — correct); with channel-id evidence →
+  **RESOLVED** (score 1.0). Real snapshot: **3 channel + 15 video** observations; re-refresh **idempotent**
+  (0 created). Quota accounted (**2 searches/200u + 6 reads/8u**). Trends import: **5** West Bengal-led
+  REGION observations (`IMPORTED_PROVIDER_EXPORT`, normalization context, IN-WB). Momentum honestly
+  `INSUFFICIENT_HISTORY` (1 snapshot); geography label `HIGHER_OBSERVED_DEMAND / LOWER_OBSERVED_SUPPLY`
+  (demand 100, supply 0 — Arijit not in the captured indie inventory); provider-health `ACCESS_UNAVAILABLE`;
+  event-response `EVENT_NOT_FOUND` (honest). Coverage carries the "NOT complete market demand coverage"
+  disclaimer.
+- **Fly**: optional private Flycast `deploy/fly/artist-intelligence-service.toml` — **deliberately not in
+  `fly-deploy.sh`** (hand-deploy only; can't disrupt the collection spine). No paid resources created.
+
 ## Phase 4C.1 — Skillbox targeted probe & decision (2026-08-07, live)
 
 Bounded discovery probe + decision gate (see `docs/skillbox-probe.md`). Findings: **no public
@@ -221,10 +255,11 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 = 0 real overlap** (new Skillbox-only venues; no duplicate event fabricated). Boshow/District unaffected.
 
 ## Test status
-crawl **200** (+8 Phase 4D) · gateway **58** · signal **95** · graph **60** ·
-analytics **45** · media **43** · observation **11** · entity **12** — all pass.
-Media Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean except
-baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
+crawl **200** · gateway **58** · signal **95** (YouTube search/videos additions covered) · graph **60** ·
+analytics **45** · media **43** · observation **11** · entity **12** ·
+**artist-intelligence 35** (identity, YouTube, Trends, read models, scheduler) — all pass.
+artist-intelligence Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean
+except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
 
 ## Invariants / constraints (must hold)
 - Deterministic + explainable only; **no LLM** in detection/matching/enrichment.
@@ -234,6 +269,10 @@ baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alem
 - `docs/product-spec.md` (MCP) is append-only — never overwrite.
 - No PII/fingerprinting; don't persist full third-party HTML indefinitely; images hotlinked not re-hosted.
 - BookMyShow stays partner_feed (never evasively scraped); no CAPTCHA/bot-evasion.
+- **Demand (YouTube/Trends) and supply (Shadow Ledger) are separate evidence systems** meeting only at
+  `canonical_artist_id`; demand metrics never enter the event Shadow Ledger; the demand layer never
+  creates a canonical artist. No composite popularity/value/booking score; no causal claim from
+  co-movement. Google Trends is relative interest (never absolute volume); no unofficial scraping.
 - API keys: user adds to `.env`; never handled/pasted by the agent.
 - The admin **inspection console is local-only + unauthenticated** (`ADMIN_LOCAL_MODE`) — never enabled
   on a cloud deploy; the admin BFF stays disabled and the frontend is excluded from all Fly manifests

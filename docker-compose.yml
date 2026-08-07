@@ -242,6 +242,25 @@ services:
       redis:
         condition: service_healthy
 
+  # Phase 5A — public demand-side intelligence (YouTube via signal-service; Google Trends import).
+  # Separate service so demand-layer failure never affects the crawl→signal collection spine.
+  artist-intelligence-service:
+    build: ./services/artist-intelligence-service
+    ports:
+      - "8010:8010"
+    environment:
+      NQUARK_NETWORK_MODE: docker
+      NQUARK_POSTGRES_URL: postgresql+psycopg://${POSTGRES_USER:-nquark}:${POSTGRES_PASSWORD:-nquark}@postgres:5432/${POSTGRES_DB:-nquark}
+      # All OFF by default. Enabling runs migrations + (optionally) the in-process refresh loop.
+      NQUARK_DEMAND_INTELLIGENCE_ENABLED: ${DEMAND_INTELLIGENCE_ENABLED:-false}
+      NQUARK_YOUTUBE_ENABLED: ${YOUTUBE_ENABLED:-false}
+      NQUARK_YOUTUBE_SEARCH_ENABLED: ${YOUTUBE_SEARCH_ENABLED:-true}
+      NQUARK_GOOGLE_TRENDS_MODE: ${GOOGLE_TRENDS_MODE:-IMPORT}
+      NQUARK_DEMAND_SCHEDULER_ENABLED: ${DEMAND_SCHEDULER_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api-gateway:
     build: ./services/api-gateway
     ports:

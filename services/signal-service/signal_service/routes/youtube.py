@@ -13,7 +13,11 @@ from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
 from signal_service.graph_projection import project_entity_graph
 from signal_service.identity import mbid_alias
-from signal_service.schemas import YouTubeChannelSignals
+from signal_service.schemas import (
+    YouTubeChannelSignals,
+    YouTubeSearchResult,
+    YouTubeVideoSignals,
+)
 
 router = APIRouter(prefix="/v1/signals/youtube", tags=["youtube"])
 
@@ -29,6 +33,33 @@ async def preview_youtube_channel(channel_id: str) -> YouTubeChannelSignals:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"YouTube fetch failed: {exc}",
         ) from exc
+
+
+@router.get("/search", response_model=YouTubeSearchResult)
+async def search_youtube_channels(
+    q: str = Query(min_length=1, max_length=256, description="Artist name to discover a channel for."),
+    limit: int = Query(default=5, ge=1, le=25),
+) -> YouTubeSearchResult:
+    """Bounded channel search for identity discovery (Phase 5A). Acquisition-only, no persistence —
+    the demand layer resolves identity from these candidates."""
+    try:
+        return await YouTubeClient().search_channels(q, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube search failed: {exc}") from exc
+
+
+@router.get("/channels/{channel_id}/videos/preview", response_model=YouTubeVideoSignals)
+async def preview_youtube_videos(
+    channel_id: str,
+    limit: int = Query(default=5, ge=1, le=50),
+) -> YouTubeVideoSignals:
+    """Recent uploaded-video stats by known channel id (Phase 5A). Acquisition-only, no persistence."""
+    try:
+        return await YouTubeClient().fetch_recent_videos(channel_id, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube video fetch failed: {exc}") from exc
 
 
 @router.post("/channels/{channel_id}/ingest")

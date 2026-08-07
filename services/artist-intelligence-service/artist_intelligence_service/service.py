@@ -1,0 +1,263 @@
+"""DemandService — orchestrates acquisition (via signal-service) + persistence into the demand ledger.
+
+Guarantees:
+- provider resolution NEVER creates a canonical artist (identity only attaches to an existing one);
+- observation ingest is idempotent on ``observation_key`` (no duplicate logical observations);
+- history is preserved (a new day's snapshot / a new export is new history, never an overwrite);
+- YouTube quota is accounted per provider/day, and search is refused past the daily budget;
+- one provider/artist failure is isolated by the caller (scheduler) — this layer surfaces errors.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from artist_intelligence_service import identity as idlib
+from artist_intelligence_service.config import settings
+from artist_intelligence_service.models import ArtistDemandObservation, ArtistExternalIdentity
+from artist_intelligence_service.providers.base import (
+    PROVIDER_GOOGLE_TRENDS,
+    PROVIDER_YOUTUBE,
+    RESOLVED,
+    DemandDatum,
+)
+from artist_intelligence_service.providers.google_trends import (
+    GoogleTrendsImportProvider,
+    GoogleTrendsProvider,
+    parse_trends_csv,
+)
+from artist_intelligence_service.providers.youtube import YouTubeProvider
+from artist_intelligence_service.quota import QuotaMeter, record_meter, search_calls_today
+
+
+class QuotaExhausted(RuntimeError):
+    """The daily search budget is spent; identity discovery is refused until it resets."""
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class DemandService:
+    def __init__(self, *, youtube: YouTubeProvider | None = None,
+                 trends_import: GoogleTrendsImportProvider | None = None,
+                 trends_official: GoogleTrendsProvider | None = None) -> None:
+        self.youtube = youtube or YouTubeProvider()
+        self.trends_import = trends_import or GoogleTrendsImportProvider()
+        self.trends_official = trends_official or GoogleTrendsProvider()
+
+    # ---- identity ----------------------------------------------------------------------------
+    def get_identity(self, db: Session, provider: str, identity_type: str,
+                     provider_id: str) -> ArtistExternalIdentity | None:
+        return db.execute(
+            select(ArtistExternalIdentity).where(
+                ArtistExternalIdentity.provider == provider,
+                ArtistExternalIdentity.identity_type == identity_type,
+                ArtistExternalIdentity.provider_id == provider_id,
+            )
+        ).scalar_one_or_none()
+
+    def list_identities(self, db: Session, canonical_artist_id: str) -> list[ArtistExternalIdentity]:
+        return list(db.execute(
+            select(ArtistExternalIdentity)
+            .where(ArtistExternalIdentity.canonical_artist_id == canonical_artist_id)
+            .order_by(ArtistExternalIdentity.provider, ArtistExternalIdentity.identity_type)
+        ).scalars())
+
+    def _upsert_identity(self, db: Session, *, canonical_artist_id: str, provider: str,
+                         identity_type: str, provider_id: str, status: str, display_name: str | None,
+                         canonical_url: str | None, resolution_method: str | None, confidence: float,
+                         metadata: dict[str, Any]) -> ArtistExternalIdentity:
+        now = _now()
+        row = self.get_identity(db, provider, identity_type, provider_id)
+        if row is None:
+            row = ArtistExternalIdentity(
+                id=idlib.new_id(provider, identity_type, provider_id),
+                canonical_artist_id=canonical_artist_id, provider=provider,
+                identity_type=identity_type, provider_id=provider_id, first_seen_at=now,
+                created_at=now, updated_at=now, identity_metadata={}, provenance={},
+            )
+            db.add(row)
+        # A provider identity attaches to an existing canonical artist; it never rebinds to another.
+        row.canonical_artist_id = canonical_artist_id
+        row.status = status
+        row.display_name = display_name
+        row.canonical_url = canonical_url
+        row.resolution_method = resolution_method
+        row.confidence = confidence
+        row.identity_metadata = metadata
+        row.updated_at = now
+        if status == RESOLVED:
+            row.last_verified_at = now
+        db.flush()
+        return row
+
+    async def resolve_youtube(self, db: Session, canonical_artist_id: str, *, query: str,
+                              hints: dict | None = None, limit: int = 5) -> dict[str, Any]:
+        """Bounded search → deterministic decision → persist identity. Refuses search past the budget.
+
+        Does NOT create a canonical artist. AMBIGUOUS/UNRESOLVED are recorded on a per-artist pending
+        slot so the state is auditable and re-resolution is idempotent."""
+        if not settings.youtube_search_enabled:
+            raise QuotaExhausted("YouTube search disabled (NQUARK_YOUTUBE_SEARCH_ENABLED=false)")
+        if search_calls_today(db, PROVIDER_YOUTUBE) >= settings.youtube_max_searches_per_day:
+            raise QuotaExhausted(
+                f"daily YouTube search budget spent ({settings.youtube_max_searches_per_day})")
+
+        meter = QuotaMeter()
+        self.youtube.meter = meter
+        try:
+            resolution = await self.youtube.resolve_identity(query, hints=hints or {}, limit=limit)
+        finally:
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+
+        cand_meta = {"query": query, "candidates": [
+            {"provider_id": c.provider_id, "display_name": c.display_name, "score": c.score,
+             "signals": c.signals, "canonical_url": c.canonical_url} for c in resolution.candidates]}
+
+        if resolution.status == RESOLVED and resolution.chosen is not None:
+            chosen = resolution.chosen
+            identity = self._upsert_identity(
+                db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+                identity_type="CHANNEL_ID", provider_id=chosen.provider_id, status=RESOLVED,
+                display_name=chosen.display_name, canonical_url=chosen.canonical_url,
+                resolution_method=resolution.method, confidence=chosen.score,
+                metadata={**cand_meta, "reason": resolution.reason})
+            # Retire any leftover pending slot for this artist.
+            pending = self.get_identity(db, PROVIDER_YOUTUBE, "CHANNEL_ID",
+                                        idlib.pending_identity_id(canonical_artist_id))
+            if pending is not None and pending.id != identity.id:
+                pending.status = "REJECTED"
+                pending.updated_at = _now()
+                db.flush()
+        else:
+            identity = self._upsert_identity(
+                db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+                identity_type="CHANNEL_ID", provider_id=idlib.pending_identity_id(canonical_artist_id),
+                status=resolution.status, display_name=None, canonical_url=None,
+                resolution_method=resolution.method,
+                confidence=(resolution.candidates[0].score if resolution.candidates else 0.0),
+                metadata={**cand_meta, "reason": resolution.reason})
+
+        return {"canonical_artist_id": canonical_artist_id, "status": resolution.status,
+                "reason": resolution.reason, "method": resolution.method,
+                "identity_id": identity.id, "provider_id": identity.provider_id,
+                "candidates": cand_meta["candidates"]}
+
+    # ---- observation ingest ------------------------------------------------------------------
+    def _ingest(self, db: Session, *, canonical_artist_id: str, provider: str,
+                external_identity_id: str | None, data: list[DemandDatum], observed_at: datetime,
+                bucket: str) -> dict[str, int]:
+        """Idempotent append: one logical observation per observation_key. Returns counts."""
+        created = 0
+        for d in data:
+            key = idlib.observation_key(
+                canonical_artist_id=canonical_artist_id, provider=provider, metric=d.metric,
+                scope_type=d.scope_type, scope_id=d.scope_id, dedup_extra=d.dedup_extra, bucket=bucket)
+            exists = db.execute(
+                select(ArtistDemandObservation.id)
+                .where(ArtistDemandObservation.observation_key == key)
+            ).scalar_one_or_none()
+            if exists is not None:
+                continue
+            db.add(ArtistDemandObservation(
+                id=idlib.new_id(key), canonical_artist_id=canonical_artist_id, provider=provider,
+                external_identity_id=external_identity_id, metric=d.metric,
+                value_numeric=d.value_numeric, value_text=d.value_text, unit=d.unit,
+                scope_type=d.scope_type, scope_id=d.scope_id, scope_label=d.scope_label,
+                provider_timestamp=d.provider_timestamp, observed_at=observed_at,
+                evidence_status=d.evidence_status, provenance=d.provenance,
+                observation_key=key, created_at=_now()))
+            created += 1
+        db.flush()
+        return {"received": len(data), "created": created, "duplicates": len(data) - created}
+
+    async def snapshot_youtube(self, db: Session, canonical_artist_id: str, *,
+                               channel_id: str | None = None, include_channel: bool = True,
+                               include_videos: bool = True,
+                               observed_at: datetime | None = None) -> dict[str, Any]:
+        """Refresh a RESOLVED artist's YouTube channel (+ recent videos) into the ledger. Known-id reads
+        only — never search. Idempotent per day (re-running the same day creates no duplicates)."""
+        observed_at = observed_at or _now()
+        identity = self._resolved_youtube_identity(db, canonical_artist_id, channel_id)
+        if identity is None:
+            return {"status": "NO_RESOLVED_IDENTITY", "canonical_artist_id": canonical_artist_id}
+        cid = identity.provider_id
+        bucket = observed_at.date().isoformat()
+
+        meter = QuotaMeter()
+        self.youtube.meter = meter
+        try:
+            channel_data = await self.youtube.get_global_snapshot(cid) if include_channel else []
+            video_data = await self.youtube.get_content_snapshot(
+                cid, limit=settings.youtube_recent_video_limit) if include_videos else []
+        finally:
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+
+        chan = self._ingest(db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+                            external_identity_id=identity.id, data=channel_data,
+                            observed_at=observed_at, bucket=bucket)
+        vids = self._ingest(db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+                           external_identity_id=identity.id, data=video_data,
+                           observed_at=observed_at, bucket=bucket)
+        identity.last_verified_at = observed_at
+        identity.updated_at = _now()
+        db.flush()
+        return {"status": "OK", "canonical_artist_id": canonical_artist_id, "channel_id": cid,
+                "channel_observations": chan, "video_observations": vids}
+
+    def _resolved_youtube_identity(self, db: Session, canonical_artist_id: str,
+                                   channel_id: str | None) -> ArtistExternalIdentity | None:
+        if channel_id:
+            return self.get_identity(db, PROVIDER_YOUTUBE, "CHANNEL_ID", channel_id)
+        for row in self.list_identities(db, canonical_artist_id):
+            if row.provider == PROVIDER_YOUTUBE and row.identity_type == "CHANNEL_ID" \
+                    and row.status == RESOLVED:
+                return row
+        return None
+
+    # ---- Trends import -----------------------------------------------------------------------
+    def import_trends(self, db: Session, canonical_artist_id: str, *, csv_text: str,
+                      identity_type: str, provider_id: str, geo: str, time_range: str | None = None,
+                      comparison_window: str | None = None, source_file: str | None = None,
+                      export_timestamp: str | None = None,
+                      observed_at: datetime | None = None) -> dict[str, Any]:
+        """Ingest one legitimately-obtained Trends CSV export. Idempotent per export fingerprint.
+
+        identity_type is SEARCH_TERM or TOPIC_ID — persisted so search-term and topic histories are
+        never silently combined."""
+        if identity_type not in ("SEARCH_TERM", "TOPIC_ID"):
+            raise ValueError("identity_type must be SEARCH_TERM or TOPIC_ID")
+        observed_at = observed_at or _now()
+        parsed = parse_trends_csv(csv_text)   # raises TrendsImportError on malformed input
+        data = self.trends_import.build_data(
+            parsed, identity_type=identity_type, provider_id=provider_id, geo=geo,
+            time_range=time_range, comparison_window=comparison_window, source_file=source_file,
+            export_timestamp=export_timestamp)
+
+        identity = self._upsert_identity(
+            db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_GOOGLE_TRENDS,
+            identity_type=identity_type, provider_id=provider_id, status=RESOLVED,
+            display_name=parsed.label, canonical_url=None, resolution_method="operator_import",
+            confidence=1.0, metadata={"kind": parsed.kind, "aggregation": parsed.aggregation})
+
+        fingerprint = idlib.export_fingerprint(
+            label=parsed.label, geo=geo, time_range=time_range,
+            comparison_window=comparison_window, source_file=source_file)
+        counts = self._ingest(db, canonical_artist_id=canonical_artist_id,
+                              provider=PROVIDER_GOOGLE_TRENDS, external_identity_id=identity.id,
+                              data=data, observed_at=observed_at, bucket=fingerprint)
+        return {"status": "OK", "canonical_artist_id": canonical_artist_id, "kind": parsed.kind,
+                "identity_type": identity_type, "provider_id": provider_id, "geo": geo,
+                "export_fingerprint": fingerprint, "observations": counts}
+
+    def trends_official_status(self) -> dict[str, Any]:
+        if self.trends_official.available:
+            return {"mode": "OFFICIAL_API", "status": "AVAILABLE"}
+        return {"mode": settings.resolved_trends_mode, "status": "ACCESS_UNAVAILABLE",
+                "reason": "Google Trends API alpha credentials/endpoint not configured",
+                "fallback": "IMPORT"}

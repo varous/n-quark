@@ -49,3 +49,38 @@ class GoogleTrendsSignals(BaseModel):
     observations: list[NormalizedObservation]
     fetched_at: datetime
     mock: bool = False
+
+
+class YouTubeSearchCandidate(BaseModel):
+    """One channel candidate from a bounded identity-discovery search (evidence, not a decision)."""
+
+    channel_id: str
+    title: str
+    description: str = ""
+    handle: str | None = None
+    canonical_url: str
+    topic_signal: bool = False
+
+
+class YouTubeSearchResult(BaseModel):
+    query: str
+    candidates: list[YouTubeSearchCandidate]
+    fetched_at: datetime
+    mock: bool = False
+
+
+class YouTubeVideoStat(BaseModel):
+    video_id: str
+    title: str | None = None
+    published_at: datetime | None = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+
+
+class YouTubeVideoSignals(BaseModel):
+    channel_id: str
+    uploads_playlist_id: str | None = None
+    videos: list[YouTubeVideoStat]
+    fetched_at: datetime
+    mock: bool = False

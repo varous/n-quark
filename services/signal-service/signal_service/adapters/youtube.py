@@ -197,7 +197,177 @@ def mock_channel_payload(channel_id: str) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- Phase 5A additions
+# Additive, acquisition-only primitives the demand layer (artist-intelligence-service) needs:
+# bounded channel SEARCH (identity discovery) and recent VIDEO stats (repeated observation by known
+# id). Neither touches the existing ingest pipeline. Mock catalogs keep the whole flow demonstrable
+# offline; the demand layer never talks to YouTube directly — it calls signal-service.
+import re as _re
+from datetime import datetime as _dt
+
+from signal_service.schemas import (
+    YouTubeSearchCandidate,
+    YouTubeSearchResult,
+    YouTubeVideoSignals,
+    YouTubeVideoStat,
+)
+
+
+def _norm_name(value: str) -> str:
+    return _re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+# Real Google channel ids so the demo reads truthfully; statistics/videos are illustrative and are
+# clearly flagged mock via ``mock=true``. A confusable pair ("the local train") lets the demand
+# layer's resolver return AMBIGUOUS rather than guess.
+_MOCK_SEARCH: dict[str, list[dict[str, Any]]] = {
+    "arijit singh": [
+        {"channel_id": "UCUEcefFC0sBRZfCTBqcx9jg", "title": "Arijit Singh",
+         "description": "Official channel of Arijit Singh. Music and live performances.",
+         "handle": "@arijitsingh", "topic_signal": True},
+    ],
+    "diljit dosanjh": [
+        {"channel_id": "UCT9zcQNlyht7fRlcjmflRSA", "title": "Diljit Dosanjh",
+         "description": "Official YouTube channel of Diljit Dosanjh.",
+         "handle": "@diljitdosanjh", "topic_signal": True},
+    ],
+    "nucleya": [
+        {"channel_id": "UCnucleyaBassOfficial00", "title": "Nucleya",
+         "description": "Bass Rani. Indian electronic music producer.",
+         "handle": "@nucleya", "topic_signal": True},
+    ],
+    "the local train": [
+        {"channel_id": "UCtlt_official_0000000", "title": "The Local Train",
+         "description": "Official band channel.", "handle": "@thelocaltrain", "topic_signal": True},
+        {"channel_id": "UCtlt_fanclub_00000000", "title": "The Local Train",
+         "description": "Fan uploads and covers.", "handle": "@tlt_fans", "topic_signal": False},
+    ],
+}
+_MOCK_UPLOADS: dict[str, str] = {
+    "UCUEcefFC0sBRZfCTBqcx9jg": "UUUEcefFC0sBRZfCTBqcx9jg",
+    "UCT9zcQNlyht7fRlcjmflRSA": "UUT9zcQNlyht7fRlcjmflRSA",
+}
+_MOCK_VIDEOS: dict[str, list[dict[str, Any]]] = {
+    "UCUEcefFC0sBRZfCTBqcx9jg": [
+        {"video_id": "arjt_v1", "title": "Arijit Singh — Live in Mumbai 2026",
+         "published_at": "2026-07-20T12:00:00Z", "views": 4200000, "likes": 310000, "comments": 12000},
+        {"video_id": "arjt_v2", "title": "Arijit Singh — Studio Session",
+         "published_at": "2026-06-15T12:00:00Z", "views": 1800000, "likes": 150000, "comments": 5400},
+    ],
+    "UCT9zcQNlyht7fRlcjmflRSA": [
+        {"video_id": "dlj_v1", "title": "Diljit Dosanjh — Dil-Luminati Tour",
+         "published_at": "2026-07-01T12:00:00Z", "views": 9800000, "likes": 720000, "comments": 41000},
+    ],
+}
+
+
+def _channel_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/channel/{channel_id}"
+
+
+def _parse_ts(value: str | None) -> _dt | None:
+    if not value:
+        return None
+    try:
+        return _dt.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 class YouTubeClient:
+    async def search_channels(self, query: str, *, limit: int = 5) -> YouTubeSearchResult:
+        """Bounded channel search for identity discovery (search.list; 100 quota units when live).
+
+        Discovery only — the demand layer resolves identity from these candidates; it does not treat
+        search as measurement."""
+        when = datetime.now(UTC)
+        if settings.use_youtube_mock:
+            rows = _MOCK_SEARCH.get(_norm_name(query))
+            if rows is None:
+                # Unknown artist → a single weak, non-topic candidate (fails the resolver threshold).
+                slug = _re.sub(r"[^a-z0-9]", "", _norm_name(query))[:16] or "unknown"
+                rows = [{"channel_id": f"UCmock_{slug}", "title": query.title(),
+                         "description": "Uploads.", "handle": None, "topic_signal": False}]
+            candidates = [
+                YouTubeSearchCandidate(channel_id=r["channel_id"], title=r["title"],
+                                       description=r.get("description", ""), handle=r.get("handle"),
+                                       canonical_url=_channel_url(r["channel_id"]),
+                                       topic_signal=bool(r.get("topic_signal")))
+                for r in rows[:limit]
+            ]
+            return YouTubeSearchResult(query=query, candidates=candidates, fetched_at=when, mock=True)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{settings.youtube_api_base}/search",
+                params={"part": "snippet", "q": query, "type": "channel",
+                        "maxResults": min(limit, 25), "key": settings.youtube_api_key},
+            )
+            response.raise_for_status()
+            items = response.json().get("items") or []
+        candidates = []
+        for item in items:
+            snip = item.get("snippet") or {}
+            cid = snip.get("channelId") or (item.get("id") or {}).get("channelId")
+            if not cid:
+                continue
+            candidates.append(YouTubeSearchCandidate(
+                channel_id=cid, title=snip.get("channelTitle") or snip.get("title", ""),
+                description=snip.get("description", ""), handle=None,
+                canonical_url=_channel_url(cid), topic_signal=False))
+        return YouTubeSearchResult(query=query, candidates=candidates, fetched_at=when, mock=False)
+
+    async def fetch_recent_videos(self, channel_id: str, *, limit: int = 5) -> YouTubeVideoSignals:
+        """Recent uploaded-video stats by known channel id (channels.list -> playlistItems.list ->
+        videos.list; ~3 quota units when live). Repeated observation uses known ids, never search."""
+        when = datetime.now(UTC)
+        if settings.use_youtube_mock:
+            uploads = _MOCK_UPLOADS.get(channel_id)
+            rows = _MOCK_VIDEOS.get(channel_id, [])[:limit]
+            videos = [YouTubeVideoStat(video_id=r["video_id"], title=r.get("title"),
+                                       published_at=_parse_ts(r.get("published_at")),
+                                       views=r.get("views"), likes=r.get("likes"),
+                                       comments=r.get("comments")) for r in rows]
+            return YouTubeVideoSignals(channel_id=channel_id, uploads_playlist_id=uploads,
+                                       videos=videos, fetched_at=when, mock=True)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            chan = await client.get(
+                f"{settings.youtube_api_base}/channels",
+                params={"part": "contentDetails", "id": channel_id, "key": settings.youtube_api_key})
+            chan.raise_for_status()
+            items = chan.json().get("items") or []
+            if not items:
+                raise ValueError(f"YouTube channel not found: {channel_id}")
+            uploads = (((items[0].get("contentDetails") or {}).get("relatedPlaylists") or {})
+                       .get("uploads"))
+            if not uploads:
+                return YouTubeVideoSignals(channel_id=channel_id, uploads_playlist_id=None,
+                                           videos=[], fetched_at=when, mock=False)
+            pl = await client.get(
+                f"{settings.youtube_api_base}/playlistItems",
+                params={"part": "contentDetails", "playlistId": uploads,
+                        "maxResults": min(limit, 50), "key": settings.youtube_api_key})
+            pl.raise_for_status()
+            ids = [((i.get("contentDetails") or {}).get("videoId")) for i in (pl.json().get("items") or [])]
+            ids = [i for i in ids if i][:limit]
+            videos = []
+            if ids:
+                vresp = await client.get(
+                    f"{settings.youtube_api_base}/videos",
+                    params={"part": "snippet,statistics", "id": ",".join(ids),
+                            "key": settings.youtube_api_key})
+                vresp.raise_for_status()
+                for v in vresp.json().get("items") or []:
+                    snip, st = v.get("snippet") or {}, v.get("statistics") or {}
+                    videos.append(YouTubeVideoStat(
+                        video_id=v.get("id"), title=snip.get("title"),
+                        published_at=_parse_ts(snip.get("publishedAt")),
+                        views=_as_int(st.get("viewCount")), likes=_as_int(st.get("likeCount")),
+                        comments=_as_int(st.get("commentCount"))))
+        return YouTubeVideoSignals(channel_id=channel_id, uploads_playlist_id=uploads,
+                                   videos=videos, fetched_at=when, mock=False)
+
     async def fetch_channel(self, channel_id: str) -> YouTubeChannelSignals:
         if settings.use_youtube_mock:
             payload = mock_channel_payload(channel_id)

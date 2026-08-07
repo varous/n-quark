@@ -1,0 +1,43 @@
+app = "nquark-artist-intelligence-service"
+# Fly.io — artist-intelligence-service (Phase 5A public demand intelligence). OPTIONAL / OPT-IN.
+# PRIVATE-ONLY: <app>.flycast, no public IP. This service is DELIBERATELY NOT in scripts/fly-deploy.sh:
+# deploy it by hand only, so a demand-layer change can never disrupt the crawl→signal collection spine.
+# It reads YouTube via signal-service (the single ingestion path); the YouTube API key lives in
+# signal-service secrets, NOT here. Google Trends is IMPORT-only until alpha access exists.
+primary_region = "sin"
+
+[build]
+
+[env]
+  NQUARK_PORT = "8010"
+  NQUARK_NETWORK_MODE = "docker"
+  NQUARK_DEMAND_INTELLIGENCE_ENABLED = "true"   # runs migrations on boot
+  NQUARK_YOUTUBE_ENABLED = "true"
+  NQUARK_YOUTUBE_SEARCH_ENABLED = "true"
+  NQUARK_GOOGLE_TRENDS_MODE = "IMPORT"          # OFFICIAL_API reports ACCESS_UNAVAILABLE until alpha
+  NQUARK_DEMAND_SCHEDULER_ENABLED = "false"     # enable only once a resolved cohort exists
+  NQUARK_SIGNAL_SERVICE_URL = "http://nquark-signal-service.flycast"
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+  NQUARK_CRAWL_SERVICE_URL = "http://nquark-crawl-service.flycast"
+  # DATABASE_URL + MIGRATION_DATABASE_URL are SECRETS (pooled / direct), same split as Phase 4D.
+
+[http_service]
+  internal_port = 8010
+  force_https = false
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 150
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
