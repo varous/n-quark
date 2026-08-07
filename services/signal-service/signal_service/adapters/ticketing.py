@@ -95,6 +95,7 @@ class TicketingEvent:
     artist_source_id: str | None = None
     curator: str | None = None
     image_url: str | None = None
+    source_city_id: str | None = None  # Phase 4C.1 — stable source city id, when the source exposes one
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -323,6 +324,7 @@ def event_from_skillbox(data: dict[str, Any], *, fetched_at: datetime | None = N
         category="Event", language="", currency="INR", price_min=price,
         is_free=(price == 0.0), starts_at=starts_dt, capacity=None, tickets_sold=None,
         verified=bool(data.get("status")), image_url=(data.get("cover_image") or None),
+        source_city_id=(str(data["city_id"]) if data.get("city_id") else None),
         fetched_at=fetched_at or datetime.now(UTC),
     )
 

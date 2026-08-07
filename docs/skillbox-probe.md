@@ -56,3 +56,90 @@ scheduled_capture_job → signal fetch → graph projection → Shadow Ledger �
 media observation), enabled purely by adding `skillbox` to the crawl source-set env lists. Entity- and
 media-resolution hooks remain best-effort; a media or entity failure never fails capture; retry/locking/
 idempotency are unchanged; Boshow/District jobs are unaffected.
+
+---
+
+# Phase 4C.1 — Targeted discovery probe & decision (2026-08-07)
+
+## 1. Discovery surfaces inspected (live)
+
+| Surface | Result |
+|---|---|
+| city-filtered event API | **none public** — guessed `/servers/v3/api/…` list endpoints all 404; browse APIs live in lazy Angular chunks (reverse-engineering out of scope + borderline private) |
+| city IDs | **yes** — `event-details` returns a stable `city_id` (e.g. Mumbai=`5`, Bengaluru=`1106620`) |
+| city catalogue | **yes** — `sitemap-cities.xml` (46 cities incl. `/events-kolkata`) |
+| city public pages | exist (`/events-kolkata`) but are **non-SSR SPA shells** — no embedded events, no JSON-LD |
+| event sitemap | `sitemap-event.xml` — **24,401 URLs, single file, all-cities, not paginated, not city-ordered** |
+| pagination | none on the sitemap or any public list endpoint |
+
+**Conclusion:** the only reliable public bulk surface is the 24k-event all-cities sitemap (a full crawl is
+out of scope) plus the cities sitemap and the per-slug `event-details` API. **No efficient city-targeted
+discovery exists** without SPA reverse-engineering.
+
+## 2. City-targeted strategy used
+
+With no city API, the honest bounded strategy is a **stratified sitemap sample** (head/thirds/tail, hard
+cap 30 fetches) filtered by the fetched event's `city_id`/`city_name`. This is bounded and never crawls
+the catalogue. It is a probe, not a production discovery path.
+
+## 3. Verified city mapping (`adapters/skillbox_cities.py`)
+
+Built **only from source evidence** — every `city_id` read from `event-details` for events actually
+observed: Mumbai `5`, Bengaluru `1106620`, Goa `1113278`, Hyderabad `1114881`, Thane `1132982`, Sonipat
+`1131718`, Jaipur `1115282`/`1115279`, Guwahati `1114002`, Dehradun `1110654`, Gurugram `2790953`,
+Shillong `1130829` — all `Asia/Kolkata`. **Kolkata is intentionally absent** (zero Kolkata events observed;
+no id guessed). The map corroborates an unverified city name (`VERIFIED_BY_ID`) and derives region/tz.
+
+## 4. Live probe results
+
+Stratified sample of 30 events across the 24,401-URL sitemap: **0 Kolkata**. City distribution skewed to
+Bengaluru (7), Goa (6), Hyderabad (2), Mumbai (1) and a long tail; ~6 records had no city. 16/30 fell in
+current n-quark markets — but **none in Kolkata**. Skillbox records remain low-quality (tz-naive dates,
+placeholder venues like "To Be Decided"/"Mutiple Cities", far-future pre-sale shells).
+
+## 5. Skillbox source classification: **OPPORTUNISTIC_SOURCE**
+
+- Stable event ids (`EventId`) and city ids ✅; repeatable `event-details` fetch ✅.
+- Real validated inventory in **some covered markets** (Mumbai, Bengaluru) ✅.
+- **Zero Kolkata inventory** in a fair sample ❌; **no efficient city-targeted discovery** ❌; weak date
+  validity (tz-naive) and mixed venue specificity ❌; **no artist evidence** (event-details returns none).
+
+Not `ACTIVE_SOURCE` (Kolkata-first goal unmet, no targeted discovery, weak quality); not fully
+`LOW_VALUE_SOURCE` (real Mumbai/Bengaluru inventory + stable ids). **Kept disabled by default.**
+
+## 6. Full pipeline proof (real Mumbai events)
+
+Qualifying inventory exists in Mumbai, so two real events were run through the **complete** pipeline
+(enrolled via `/sync`, captured via the normal scheduler path):
+- `event:domi-jd-beck-who-asked-tour-mumbai` (venue *antiSOCIAL Lower Parel*): capture
+  `SUCCESS_RECORD_PRESENT` → entity resolution `SUCCEEDED` → new canonical `venue:antisocial-lower-parel
+  --mumbai` (source handle `skillbox:venue:antisocial-lower-parel`).
+- `event:ad-design-show-2026-mumbai` (venue *Jio World Convention Centre*): capture
+  `SUCCESS_RECORD_PRESENT` → entity resolution `SUCCEEDED` → new canonical venue; media hook
+  `MEDIA_OBSERVED` (fetch classified `BLOCKED` — Skillbox image host).
+
+## 7. Cross-source convergence (honest)
+
+Both Skillbox Mumbai venues resolved to **new** city-scoped canonical venues (`sources=[skillbox]`) — **no
+overlap** with District/Boshow entities in this cohort. **Zero real cross-source convergence** for the
+enrolled Skillbox events; the `shared entity ≠ duplicate event` invariant held and **no duplicate event
+was fabricated**. Artists did not resolve (Skillbox provides no artist evidence).
+
+## 8. Quality snapshot (Mumbai-covered, discovery-time)
+
+Stable ids ✅ · repeatable fetch ✅ · date valid ✅ but **date specific 0** (tz-naive) · venue specificity
+~0.8 (placeholder venues present) · **artist coverage 0** · organizer coverage 0 · image coverage present
+but fetch often `BLOCKED`. Capture success (enrolled cohort) high; entity-resolution creates **new**
+canonical venues (no reuse yet).
+
+## 9. Stop decision
+
+Skillbox is **OPPORTUNISTIC / low-value for Kolkata**. Per the stop condition: keep the shared adapter,
+keep the quality gates, **leave Skillbox disabled by default**, do **not** build a Skillbox-specific
+discovery pipeline (no city API exists; sitemap sampling is inefficient and unbounded for a single city).
+**Recommend directing acquisition effort elsewhere** — Skillbox may be re-enabled opportunistically for
+Mumbai/Bengaluru, but is not worth further Kolkata-targeted optimization.
+
+*Config caveats surfaced during the proof (follow-ups, not blockers): enrolling Skillbox via `/sync`
+currently bypasses the quality gate at enrollment (raw discovery); media fetch of Skillbox images returns
+`BLOCKED`; Shadow-Ledger state recording for Skillbox needs the source added to the shadow write path.*

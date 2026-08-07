@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+from signal_service.adapters.skillbox_cities import verified_city
 from signal_service.adapters.ticketing import TicketingEvent
 
 # ---- rejection reason codes ---------------------------------------------------------------------
@@ -90,8 +91,11 @@ def classify_geography(event: TicketingEvent) -> dict:
     city_raw = (event.city or "").strip()
     city_norm = city_raw.lower()
     verified = VERIFIED_CITIES.get(city_norm)
+    # a stable source city id, verified from source evidence (Phase 4C.1), corroborates the name
+    by_id = verified_city(getattr(event, "source_city_id", None))
     status = "UNRESOLVED"
     region = (event.region or "").strip() or None
+    timezone = None
     if _MULTI_CITY.search(city_raw):
         status = "MULTIPLE_CITIES_PLACEHOLDER"
     elif _is_numeric(city_raw):
@@ -100,17 +104,21 @@ def classify_geography(event: TicketingEvent) -> dict:
         status = "GENERIC"
     elif verified:
         status = "VERIFIED"
-        region = verified[0]  # derived geography — kept separate from the source's own region below
+        region, timezone = verified[0], verified[1]  # derived geography, kept separate from source region
+    elif by_id:
+        status = "VERIFIED_BY_ID"
+        region, timezone = by_id[1], by_id[2]
     elif city_raw:
         status = "NAMED_UNVERIFIED"
     return {
         "venue_name": event.venue_name or None,
         "city": city_raw or None,
         "city_status": status,
-        "source_region": (event.region or "").strip() or None,   # direct-source geography
-        "derived_region": region if verified else None,           # from the verified map only
+        "source_city_id": getattr(event, "source_city_id", None),
+        "source_region": (event.region or "").strip() or None,        # direct-source geography
+        "derived_region": region if (verified or by_id) else None,    # from a verified map/id only
         "country": event.country or None,
-        "timezone": (verified[1] if verified else None),
+        "timezone": timezone,
     }
 
 
@@ -170,8 +178,8 @@ def _venue_status(event: TicketingEvent, geo: dict) -> FieldStatus:
 def _city_status(geo: dict) -> FieldStatus:
     st = geo["city_status"]
     present = bool(geo["city"])
-    valid = st in ("VERIFIED", "NAMED_UNVERIFIED")
-    return FieldStatus(present=present, valid=valid, specific=(st == "VERIFIED"))
+    valid = st in ("VERIFIED", "VERIFIED_BY_ID", "NAMED_UNVERIFIED")
+    return FieldStatus(present=present, valid=valid, specific=st in ("VERIFIED", "VERIFIED_BY_ID"))
 
 
 def validate_ticketing_event(event: TicketingEvent, *, now: datetime | None = None) -> ValidationResult:

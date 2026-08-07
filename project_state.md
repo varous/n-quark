@@ -182,8 +182,23 @@ signal-service rebuilt with the shared adapter contract + Skillbox quality gate 
 - **Soundcharts**: feasibility report + `ArtistIntelligenceProvider` proposal delivered as docs — no
   implementation, no fabricated endpoint availability, ticketing-supply kept separate from artist intel.
 
+## Phase 4C.1 — Skillbox targeted probe & decision (2026-08-07, live)
+
+Bounded discovery probe + decision gate (see `docs/skillbox-probe.md`). Findings: **no public
+city-filtered event API** (browse APIs in lazy SPA chunks); `sitemap-event.xml` is 24,401 URLs in one
+all-cities file (not paginated/city-ordered); `/events-kolkata` is a non-SSR shell; **stable `city_id`**
+in `event-details` → a verified city-id map built from source evidence (`adapters/skillbox_cities.py`;
+Mumbai=5, Bengaluru=1106620, … — **Kolkata intentionally absent**, 0 observed). Stratified 30-event
+sample: **0 Kolkata**, skew to Bengaluru/Goa/Mumbai. **Classification: OPPORTUNISTIC_SOURCE** (real
+Mumbai/Bengaluru inventory + stable ids, but 0 Kolkata, no targeted discovery, tz-naive dates, no artist
+evidence) — **left disabled by default; no further Kolkata-specific work** per the stop condition. Full
+pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show…`): capture
+`SUCCESS_RECORD_PRESENT` → entity resolution `SUCCEEDED` → new canonical venues (`venue:antisocial-lower
+-parel--mumbai`, Jio World) with `skillbox:venue:` handles; media hook fired (best-effort). **Convergence
+= 0 real overlap** (new Skillbox-only venues; no duplicate event fabricated). Boshow/District unaffected.
+
 ## Test status
-crawl **192** · gateway **58** · signal **93** (was 70; +23 Phase 4C) · graph **60** ·
+crawl **192** · gateway **58** · signal **95** (was 70; +25 Phases 4C/4C.1) · graph **60** ·
 analytics **45** · media **43** · observation **11** · entity **12** — all pass.
 Media Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean except
 baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.

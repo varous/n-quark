@@ -96,6 +96,7 @@ services:
       NQUARK_ENTITY_RESOLUTION_SOURCES: ${ENTITY_RESOLUTION_SOURCES:-boshow,district}
       # Phase 4B — best-effort creative-observation hook (OFF by default).
       NQUARK_MEDIA_OBSERVATION_ENABLED: ${CRAWL_MEDIA_OBSERVATION_ENABLED:-false}
+      NQUARK_MEDIA_OBSERVATION_SOURCES: ${CRAWL_MEDIA_OBSERVATION_SOURCES:-boshow,district}
       NQUARK_MEDIA_SERVICE_URL: http://media-service:8002
     depends_on:
       postgres:
@@ -115,6 +116,7 @@ services:
       NQUARK_MEDIA_FETCH_ENABLED: ${MEDIA_FETCH_ENABLED:-false}
       NQUARK_MEDIA_STORAGE_ENABLED: ${MEDIA_STORAGE_ENABLED:-false}
       NQUARK_MEDIA_GRAPH_LINK_ENABLED: ${MEDIA_GRAPH_LINK_ENABLED:-false}
+      NQUARK_MEDIA_SOURCES: ${MEDIA_SOURCES:-boshow,district}
       NQUARK_MEDIA_STORAGE_DIR: /data/media
     volumes:
       - media_data:/data/media

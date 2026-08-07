@@ -84,6 +84,24 @@ def test_naive_date_with_verified_city_gets_ist():
     assert normalized.tzinfo is not None and str(normalized.tzinfo) == "Asia/Kolkata"
 
 
+def test_verified_city_id_map_from_source_only():
+    from signal_service.adapters.skillbox_cities import SKILLBOX_CITY_IDS, verified_city
+    assert verified_city("5") == ("Mumbai", "Maharashtra", "Asia/Kolkata")
+    assert verified_city("1106620")[0] == "Bengaluru"
+    assert verified_city("999999") is None and verified_city(None) is None
+    # Kolkata was not observed in the probe → intentionally absent (no guessed id)
+    assert "Kolkata" not in {name for name, _, _ in SKILLBOX_CITY_IDS.values()}
+
+
+def test_city_id_corroborates_unverified_name():
+    # an unmapped city NAME but a verified source city_id → VERIFIED_BY_ID + derived region/tz
+    v = validate_ticketing_event(_event(city="Bombay", source_city_id="5"), now=NOW)
+    assert v.geography["city_status"] == "VERIFIED_BY_ID"
+    assert v.geography["derived_region"] == "Maharashtra"
+    assert v.geography["timezone"] == "Asia/Kolkata"
+    assert v.field_status["city"].specific
+
+
 def test_naive_date_with_unverified_city_warns_not_inferred():
     ev = _event(city="Nowheresville", starts_at=datetime(2026, 9, 1, 20))  # naive  # noqa: DTZ001
     warnings: list[str] = []
