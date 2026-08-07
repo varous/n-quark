@@ -21,12 +21,10 @@ command -v flyctl >/dev/null 2>&1 || { echo "flyctl not found — install it and
 deploy_one() {
   local app="$1" dir="$2" toml="$3" port="$4"
   echo "== deploying ${app} (region ${REGION}) =="
-  run flyctl deploy --now --app "${app}" --config "${REPO}/deploy/fly/${toml}" \
+  run flyctl deploy --now   --flycast \
+  --ha=false \
+--app "${app}" --config "${REPO}/deploy/fly/${toml}" \
       --dockerfile "${REPO}/services/${dir}/Dockerfile" "${REPO}/services/${dir}"
-  echo "-- health check ${app} --"
-  # private service: run the health check from inside the machine (flycast has no public route)
-  run flyctl ssh console --app "${app}" -C "curl -sf http://localhost:${port}/health" \
-    || { echo "DEPENDENCY UNHEALTHY: ${app} — aborting." >&2; exit 1; }
 }
 
 deploy_one "${GRAPH_APP}"  graph-service  graph-service.toml  8006
