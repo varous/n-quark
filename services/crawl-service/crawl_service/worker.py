@@ -13,13 +13,10 @@ import asyncio
 import json
 import uuid
 
-from crawl_service.capturer import HttpCapturer
 from crawl_service.config import settings
 from crawl_service.db import SessionLocal, engine
-from crawl_service.enrichment.clients import HttpGraphReader, HttpPageFetcher
-from crawl_service.enrichment.service import EnrichmentService
+from crawl_service.deps import build_scheduler
 from crawl_service.models import Base
-from crawl_service.service import SchedulerService
 
 
 async def _run() -> int:
@@ -27,9 +24,8 @@ async def _run() -> int:
         print(json.dumps({"skipped": "scheduled capture disabled"}), flush=True)
         return 0
     Base.metadata.create_all(engine)  # alembic owns prod schema; check-first fallback for dev
-    page_fetcher = HttpPageFetcher() if settings.capture_enrichment_public_page_enabled else None
-    enricher = EnrichmentService(SessionLocal, HttpGraphReader(), page_fetcher, settings)
-    service = SchedulerService(SessionLocal, HttpCapturer(), settings, enricher=enricher)
+    # full-pipeline scheduler (enrichment + entity resolution + media hook), same as the HTTP app
+    service = build_scheduler(SessionLocal)
     worker_id = f"worker-{uuid.uuid4().hex[:8]}"
     summary = await service.run_once(worker_id, trace=True)
     print(json.dumps(summary, default=str), flush=True)

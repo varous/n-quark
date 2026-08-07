@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-05 (Phase 4C). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-07 (Phase 4D). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 10 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -182,6 +182,29 @@ signal-service rebuilt with the shared adapter contract + Skillbox quality gate 
 - **Soundcharts**: feasibility report + `ArtistIntelligenceProvider` proposal delivered as docs — no
   implementation, no fabricated endpoint availability, ticketing-supply kept separate from artist intel.
 
+## Phase 4D — continuous private collection on Fly.io (2026-08-07)
+
+Prepared crawl/signal/graph/media for always-on **private** collection (config + scripts, validated
+locally; no paid Fly resources created). See `deploy/fly/README.md`, ADR-0016.
+- **Topology**: four private Flycast apps (region `sin`, no public IP, `force_https=false`,
+  `auto_stop_machines=off`, `min_machines_running=1`, `/health` checks) — `deploy/fly/{graph,signal,media,
+  crawl}-service.toml`. Admin frontend / api-gateway / analytics-service **not** deployed.
+- **DB**: `DATABASE_URL` (pooled) for app + `MIGRATION_DATABASE_URL` (direct) for Alembic (falls back to
+  `DATABASE_URL`), both normalized `postgres://`→`postgresql+psycopg://`; alembic env uses the migration
+  URL. `NQUARK_POSTGRES_URL` still overrides; local unchanged.
+- **Collector**: new bounded, restart-safe in-process loop in crawl-service (`collector.py`,
+  `COLLECTOR_ENABLED`) reusing the existing scheduler (discover+enroll via `sync_from_refs`, capture via
+  `run_once`) — no second scheduler. Full-pipeline worker + one-shot `python -m crawl_service.bootstrap`.
+  Skillbox excluded from the collector source-set.
+- **Cloud flags**: Boshow+District on, Skillbox off; Shadow Ledger + entity resolution + media
+  observation + media fetch on; media byte storage off. Best-effort isolation preserved.
+- **Scripts**: `scripts/fly-{deploy,bootstrap,smoke}.sh` (deploy graph→signal→media→crawl, health-gated;
+  never create paid resources; DRY_RUN supported).
+- **Local validation**: all 4 fly.toml parse; all 4 images build; bootstrap idempotent (boshow+district
+  tracked count stable at 109 across two runs); crawl container restart preserves state (134 tracked /
+  138 jobs identical) and capture continues (SUCCESS_RECORD_PRESENT + entity resolution); media failure
+  stays isolated. No Fly credentials supplied → no cloud mutations performed.
+
 ## Phase 4C.1 — Skillbox targeted probe & decision (2026-08-07, live)
 
 Bounded discovery probe + decision gate (see `docs/skillbox-probe.md`). Findings: **no public
@@ -198,7 +221,7 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 = 0 real overlap** (new Skillbox-only venues; no duplicate event fabricated). Boshow/District unaffected.
 
 ## Test status
-crawl **192** · gateway **58** · signal **95** (was 70; +25 Phases 4C/4C.1) · graph **60** ·
+crawl **200** (+8 Phase 4D) · gateway **58** · signal **95** · graph **60** ·
 analytics **45** · media **43** · observation **11** · entity **12** — all pass.
 Media Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean except
 baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
@@ -217,7 +240,11 @@ baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alem
   (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
 
 ## Recommended next phase
-**Paged Kolkata-first Skillbox discovery** (the sitemap head isn't Kolkata-ordered, so a city-targeted
+**Operator executes the Fly deploy** (create 4 apps + Managed Postgres, set `DATABASE_URL`/
+`MIGRATION_DATABASE_URL` secrets, `scripts/fly-deploy.sh` → `fly-bootstrap.sh` → `fly-smoke.sh`, verify
+`fly ips list` is private-only) and lets the collector run; then observe accrued Shadow Ledger history.
+Then resume product work: fold media's `creative-summary` into analytics, add perceptual creative
+matching, and (deferred) **paged Kolkata-first Skillbox discovery** (the sitemap head isn't Kolkata-ordered, so a city-targeted
 paged crawl is needed to surface Kolkata inventory and make cross-source convergence non-zero), then run
 Skillbox through the full capture pipeline (config-driven) and measure real convergence. In parallel: fold
 media-service's `creative-summary` contract into analytics, add perceptual/near-duplicate creative

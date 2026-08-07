@@ -1,183 +1,108 @@
-# Deploying n-quark on Fly.io (dev-phase feed subset)
+# Deploying n-quark's collection spine on Fly.io (Phase 4D)
 
-This deploys the slice crawl-space needs — the events feed and the pipeline that fills it —
-consolidated onto **one Postgres** (no Neo4j/Qdrant/MinIO). It's the same platform the full
-prod build grows into, so nothing here is throwaway.
+Continuous **private** collection: four services observe Boshow + District into one Postgres, always-on.
+This is the observation spine only — **no public/customer surface is deployed**.
 
-## What gets deployed
+> **The admin dashboard is LOCAL-ONLY and is NOT deployed here** (see `docs/deployment.md`). Neither is
+> `api-gateway`, `analytics-service`, `observation-service`, `entity-service`, nor the frontend.
 
-| App (globally-unique name) | Public? | Purpose | Postgres? |
+## Resource topology
+
+| App (private, Flycast only) | Port | Role | Postgres |
 |---|---|---|---|
-| `nquark-api-gateway` | **yes** (crawl-space hits this) | CORS + proxy; exposes `/v1/events` | no |
-| `nquark-graph-service` | private (flycast) | graph store + `/v1/events` feed | **yes** |
-| `nquark-observation-service` | private | append-only observations | **yes** |
-| `nquark-entity-service` | private | canonical entities + alias folding | **yes** |
-| `nquark-signal-service` | private | adapters + ingestion pipeline | no |
-| `nquark-analytics-service` | private | demand/supply scoring (optional) | no |
-| `nquark-ingest-cron` | private, scheduled | daily discover+ingest job | no |
-| Fly Postgres cluster | private | the one datastore (shared, per-service version tables) | — |
+| `nquark-graph-service` | 8006 | canonical graph + Shadow Ledger | **yes** |
+| `nquark-signal-service` | 8003 | discovery / fetch / normalization (stateless) | no |
+| `nquark-media-service` | 8002 | creative fetch + hash + graph link (byte storage OFF) | **yes** |
+| `nquark-crawl-service` | 8001 | **always-on collector** (discover + capture) + enrichment + entity resolution + media hook | **yes** |
+| Fly Managed Postgres | — | the one datastore (per-service Alembic version tables) | — |
 
-`primary_region = "sin"` (Singapore) in every `fly.toml` — the nearest Fly region to India.
-Every app service uses `auto_stop_machines = "stop"` + `min_machines_running = 0`, so idle
-services scale to zero and the Fly proxy wakes them on the first request (via `.flycast`).
+All four are **private**: reachable only over the org's 6PN as `<app>.flycast`, **no public IP**, region
+`sin` (Singapore, nearest to India). `auto_stop_machines = "off"`, `min_machines_running = 1`,
+`force_https = false`. **DO NOT allocate a public IP.** After the first deploy, verify:
+`fly ips list -a nquark-crawl-service` (there must be only a private Flycast address).
 
-> **App names are globally unique across all Fly users.** If a name is taken, rename it in that
-> service's `fly.toml` **and** update the matching `*.flycast` URL everywhere it appears
-> (gateway + signal-service `[env]`, and the cron target).
+## Required app names (override via env)
 
-## 0. Prereqs
+`GRAPH_APP` `SIGNAL_APP` `MEDIA_APP` `CRAWL_APP` (defaults above). App names live only in the `fly.toml`
+`app =` line and these env vars — never in application code (service discovery is env-driven).
 
-```bash
-# install flyctl: https://fly.io/docs/flyctl/install/
-fly auth login
-fly auth whoami   # confirm the target org
+## Required secrets (never in git)
+
+Set per app with `fly secrets set` (read as plain env, not `NQUARK_`-prefixed):
+
+| Secret | Apps | Purpose |
+|---|---|---|
+| `DATABASE_URL` | graph, media, crawl | pooled application DB access (normalized to `postgresql+psycopg://`) |
+| `MIGRATION_DATABASE_URL` | graph, media, crawl | direct (unpooled) URL for Alembic/startup migrations; falls back to `DATABASE_URL` if unset |
+
+`signal-service` needs no DB secret (stateless).
+
+## Database attachment matrix (pooled vs direct)
+
+Fly Managed Postgres exposes a **pooled** connection (PgBouncer) and a **direct** connection. Use:
+
+- `DATABASE_URL` → the **pooled** endpoint for normal app traffic.
+- `MIGRATION_DATABASE_URL` → the **direct** endpoint for migrations (DDL over a transaction pooler is
+  unreliable). If you only set `DATABASE_URL`, migrations fall back to it.
+
+```
+fly secrets set -a nquark-crawl-service \
+  DATABASE_URL='postgres://<user>:<pw>@<pooled-host>:5432/<db>' \
+  MIGRATION_DATABASE_URL='postgres://<user>:<pw>@<direct-host>:5432/<db>'
+# repeat for graph + media (same DB)
 ```
 
-## 1. Postgres (the one datastore)
+## Service URL matrix (Flycast, env-driven)
+
+| Consumer | Variable | Value |
+|---|---|---|
+| crawl | `NQUARK_SIGNAL_SERVICE_URL` | `http://nquark-signal-service.flycast` |
+| crawl | `NQUARK_GRAPH_SERVICE_URL` | `http://nquark-graph-service.flycast` |
+| crawl | `NQUARK_MEDIA_SERVICE_URL` | `http://nquark-media-service.flycast` |
+| media | `NQUARK_GRAPH_SERVICE_URL` | `http://nquark-graph-service.flycast` |
+
+Local Docker/dev keep their `service:port` defaults — unchanged.
+
+## Feature-flag matrix (cloud defaults, set in each `fly.toml [env]`)
+
+| Flag | graph | signal | media | crawl |
+|---|---|---|---|---|
+| Shadow Ledger | `SHADOW_LEDGER_ENABLED=true` | `true` | — | (writes via graph) |
+| entity resolution | — | — | — | `ENTITY_RESOLUTION_ENABLED=true` (boshow,district) |
+| media observation | — | — | `MEDIA_OBSERVATION_ENABLED=true` | `MEDIA_OBSERVATION_ENABLED=true` (boshow,district) |
+| media fetch | — | — | `MEDIA_FETCH_ENABLED=true` | — |
+| media byte storage | — | — | `MEDIA_STORAGE_ENABLED=false` | — |
+| collector | — | — | — | `COLLECTOR_ENABLED=true` (boshow,district) |
+| **Skillbox** | — | `SKILLBOX_ENABLED=false` | excluded from `MEDIA_SOURCES` | excluded from every source-set |
+
+Best-effort isolation is preserved: a media failure, an entity-resolution failure, or one source's failure
+never fails a capture or another source.
+
+## Deployment order & commands
 
 ```bash
-fly postgres create --name nquark-db --region sin --vm-size shared-cpu-1x --volume-size 3
-# Attaching creates a database + role and prints a connection string (postgres://...):
-fly postgres attach nquark-db --app nquark-graph-service
+# 0) operator (manual, cost-bearing): create the 4 apps + Fly Managed Postgres, attach + set secrets.
+#    Do NOT allocate public IPs. Scripts never create paid resources.
+scripts/fly-deploy.sh      # graph -> signal -> media -> crawl; health-gated; DRY_RUN=1 to preview
+scripts/fly-bootstrap.sh   # one-time seed of an empty DB (Boshow+District; idempotent)
+scripts/fly-smoke.sh       # private connectivity, health, migration heads, tracked events, Skillbox off
 ```
 
-Take the printed `postgres://USER:PASS@nquark-db.flycast:5432/DBNAME` and **rewrite the scheme**
-to the driver SQLAlchemy uses. All three DB-backed services share this one database (they own
-distinct `alembic_version_*` tables, so their migrations never collide):
+The crawl collector then runs continuously (discovery every `COLLECTOR_DISCOVERY_INTERVAL_SECONDS`,
+capture every `COLLECTOR_CAPTURE_INTERVAL_SECONDS`). All state is in Postgres, so a restart resumes with
+no lost tracked events, no duplicated work, and no reset Shadow Ledger.
 
-```bash
-PG="postgresql+psycopg://USER:PASS@nquark-db.flycast:5432/DBNAME"   # note the +psycopg
-for app in nquark-graph-service nquark-observation-service nquark-entity-service; do
-  fly secrets set --app "$app" NQUARK_POSTGRES_URL="$PG"
-done
-```
+## Rollback / pause procedure
 
-> Newer alternative: **Managed Postgres** (`fly mpg create`). Same idea — grab its connection
-> string, rewrite the scheme to `postgresql+psycopg://`, set it as `NQUARK_POSTGRES_URL`.
-> pgvector isn't needed for the feed; it becomes relevant when feature-service lands.
+- **Pause collection:** `fly secrets set -a nquark-crawl-service NQUARK_COLLECTOR_ENABLED=false` (redeploys;
+  the API stays up, the loop stops) — or `fly scale count 0 -a nquark-crawl-service` to stop the machine.
+- **Rollback a bad release:** `fly releases -a <app>` then `fly deploy --image <previous-image> -a <app>`
+  (or `fly releases rollback`). Migrations are additive/reversible per service.
+- **Resume:** re-enable the flag / `fly scale count 1`.
 
-## 2. Create the apps
+## Cost-bearing resources (operator-created only)
 
-```bash
-for app in nquark-api-gateway nquark-graph-service nquark-observation-service \
-           nquark-entity-service nquark-signal-service nquark-analytics-service; do
-  fly apps create "$app" --org personal   # swap in your org slug
-done
-```
-
-## 3. Deploy each service
-
-Each service's `fly.toml` lives in its own directory; deploy from there so the build context
-matches Docker Compose. Deploy the DB-backed ones first (they run `alembic upgrade head` at boot):
-
-```bash
-cd services/observation-service && fly deploy && cd ../..
-cd services/entity-service       && fly deploy && cd ../..
-cd services/graph-service        && fly deploy && cd ../..   # graph_backend=postgres -> migrates
-cd services/signal-service       && fly deploy && cd ../..
-cd services/analytics-service    && fly deploy && cd ../..
-cd services/api-gateway          && fly deploy && cd ../..
-```
-
-## 4. Networking
-
-Only the gateway is public. Internal services get a **private** IPv6 so `.flycast` resolves and
-the Fly proxy can wake stopped machines.
-
-```bash
-# public entry (gateway):
-fly ips allocate-v4 --shared --app nquark-api-gateway
-fly ips allocate-v6 --app nquark-api-gateway
-
-# private (flycast) for every internal app:
-for app in nquark-graph-service nquark-observation-service nquark-entity-service \
-           nquark-signal-service nquark-analytics-service; do
-  fly ips allocate-v6 --private --app "$app"
-done
-```
-
-## 5. Scheduled ingest (daily)
-
-Runs the discover+ingest walk against signal-service, then exits. Idempotent — a daily run just
-refreshes the catalog.
-
-```bash
-fly apps create nquark-ingest-cron --org personal
-cd deploy/fly/ingest-cron
-fly machine run . \
-  --app nquark-ingest-cron \
-  --region sin \
-  --schedule daily \
-  --vm-memory 256 \
-  --env NQUARK_INGEST_TARGET=http://nquark-signal-service.flycast
-cd ../../..
-```
-
-Run it once on demand to seed the catalog immediately:
-
-```bash
-fly machine run . --app nquark-ingest-cron --region sin --rm \
-  --env NQUARK_INGEST_TARGET=http://nquark-signal-service.flycast
-```
-
-### 5a. Controlled scheduled capture (Phase 2 — Shadow Ledger histories)
-
-The `nquark-ingest-cron` above is a simple daily catalog refresh. **Phase 2** adds a smarter,
-lease-locked, idempotent scheduler in **crawl-service** that repeatedly captures tracked Boshow
-events at a per-event cadence so the Shadow Ledger accumulates real longitudinal histories. It calls
-signal-service over the private network; enable it by setting secrets/env on crawl-service:
-
-```bash
-fly secrets set --app nquark-crawl-service \
-  NQUARK_SCHEDULED_CAPTURE_ENABLED=true \
-  NQUARK_POSTGRES_URL="$PG" \
-  NQUARK_SIGNAL_SERVICE_URL=http://nquark-signal-service.flycast \
-  NQUARK_GRAPH_SERVICE_URL=http://nquark-graph-service.flycast
-cd services/crawl-service && fly deploy && cd ../..   # entrypoint runs migration 001 when enabled
-```
-
-Enroll events once, then run the worker on a schedule (idempotent — safe to over-invoke):
-
-```bash
-# one-time enrollment (discover + track Boshow events)
-curl -s -X POST "https://nquark-crawl-service.flycast/v1/internal/capture-schedule/sync?source=boshow&limit=50"
-
-# scheduled worker machine (hourly): recover locks -> generate due jobs -> claim -> capture
-fly machine run . --app nquark-crawl-service --region sin --schedule hourly \
-  --env NQUARK_SCHEDULED_CAPTURE_ENABLED=true \
-  --entrypoint "python -m crawl_service.worker"
-```
-
-Inspect operational coverage any time (internal):
-`GET https://nquark-crawl-service.flycast/v1/internal/capture-schedule`. Requires
-signal-service `NQUARK_SHADOW_LEDGER_ENABLED=true` so present captures reach the Shadow Ledger.
-
-To ingest **real** platforms instead of the mock, set the provider + keys as secrets on
-signal-service (never commit keys), e.g. `fly secrets set --app nquark-signal-service
-NQUARK_TICKETING_PROVIDER=boshow NQUARK_SERPAPI_KEY=…`, then redeploy signal-service.
-
-## 6. Smoke test
-
-```bash
-GW="https://nquark-api-gateway.fly.dev"
-curl -s "$GW/health"
-curl -s "$GW/v1/events?limit=5" | python3 -m json.tool | head -40
-```
-
-You should see the feed assembled off Postgres — canonical `venue_id`/`region_id`/`artist_ids`,
-`redistribution_tier`, and an `updated_at` cursor.
-
-## 7. Hand off to crawl-space
-
-Give crawl-space the gateway base URL — its sync points at `{GW}/v1/events` (see
-[`docs/events-feed.md`](../../docs/events-feed.md) and [`tools/crawl_space_sync.py`](../../tools/crawl_space_sync.py)).
-The redistribution policy is enforced server-side, so crawl-space just consumes what it's handed.
-
-## Cost (dev-phase, pay-as-you-go, iad/sin shared-cpu-1x)
-
-- Fly Postgres (shared-cpu-1x, 512 MB, 3 GB volume): **~$3–6/mo** — the only always-on floor.
-- App services: auto-stop to zero when idle; a light dev workload runs a few machine-hours/day
-  → **~$1–4/mo** total across all of them.
-- Scheduled ingest: seconds/day → negligible.
-- **≈ $5–10/mo** during dev. No Neo4j/Qdrant/MinIO lines. Cost grows per machine as
-  crawl/feature/media/intelligence services land — same platform, same Postgres.
+Running Machines (4 × shared-cpu-1x/512mb) and the Fly Managed Postgres cluster are the cost-bearing
+resources. The scripts **never** create them — `fly apps create`, `fly pg create`, `fly volumes create`
+and IP allocation are all explicit manual operator steps. No Fly Volume / Tigris / object storage is used
+in this phase (media byte storage is disabled).

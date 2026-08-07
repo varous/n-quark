@@ -44,14 +44,24 @@ def get_entity_resolution_service() -> EntityResolutionService:
     return _entity_resolver
 
 
+def build_scheduler(session_factory=SessionLocal) -> SchedulerService:
+    """Construct a fresh full-pipeline scheduler (enrichment + entity resolution + media hook).
+
+    Used by the HTTP app (via get_scheduler), the run-to-completion worker, the bootstrap command and
+    the continuous collector — one construction, no divergence."""
+    from crawl_service.media_notifier import notify_media
+    page_fetcher = HttpPageFetcher() if settings.capture_enrichment_public_page_enabled else None
+    enricher = EnrichmentService(session_factory, HttpGraphReader(), page_fetcher, settings)
+    entity_resolver = EntityResolutionService(session_factory, HttpGraphReader(), HttpGraphWriter(), settings)
+    return SchedulerService(session_factory, HttpCapturer(), settings,
+                            enricher=enricher, entity_resolver=entity_resolver,
+                            media_notifier=notify_media)
+
+
 def get_scheduler() -> SchedulerService:
     global _scheduler
     if _scheduler is None:
-        from crawl_service.media_notifier import notify_media
-        _scheduler = SchedulerService(SessionLocal, HttpCapturer(), settings,
-                                      enricher=get_enricher(),
-                                      entity_resolver=get_entity_resolution_service(),
-                                      media_notifier=notify_media)
+        _scheduler = build_scheduler()
     return _scheduler
 
 

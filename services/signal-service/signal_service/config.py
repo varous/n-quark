@@ -5,6 +5,23 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def normalize_db_url(url: str | None) -> str | None:
+    """Normalize a DB URL to the SQLAlchemy+psycopg driver (Fly Managed Postgres gives postgres://)."""
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
+def default_postgres_url() -> str:
+    # signal-service is stateless wrt the DB, but honour DATABASE_URL for deployment consistency.
+    return normalize_db_url(os.environ.get("DATABASE_URL")) or \
+        "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+
+
 def detect_network_mode() -> str:
     explicit = os.environ.get("NQUARK_NETWORK_MODE", "").lower()
     if explicit in ("local", "docker"):
@@ -88,7 +105,7 @@ class Settings(BaseSettings):
     # state to graph-service's internal Shadow Ledger (best-effort; never blocks ingest).
     shadow_ledger_enabled: bool = False
     shadow_ledger_sources: str = "boshow,mock,district,skillbox,townscript,allevents,luma,meetup,knowafest"
-    postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+    postgres_url: str = Field(default_factory=default_postgres_url)
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"

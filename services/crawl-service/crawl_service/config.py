@@ -26,7 +26,23 @@ def default_graph_service_url() -> str:
     return _host("http://graph-service:8006", "http://localhost:8006")
 
 
+def normalize_db_url(url: str | None) -> str | None:
+    """Normalize a DB URL to the SQLAlchemy+psycopg driver (Fly Managed Postgres gives postgres://)."""
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 def default_postgres_url() -> str:
+    # Cloud (Fly Managed Postgres) provides DATABASE_URL for pooled app access; NQUARK_POSTGRES_URL
+    # still overrides. Local Docker/dev keep their existing defaults.
+    env = normalize_db_url(os.environ.get("DATABASE_URL"))
+    if env:
+        return env
     if Path("/.dockerenv").exists():
         return "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     return "postgresql+psycopg://nquark:nquark@localhost:5432/nquark"
@@ -92,6 +108,16 @@ class Settings(BaseSettings):
         "http://media-service:8002" if detect_network_mode() == "docker" else "http://localhost:8002"))
     media_observation_sources: str = "boshow,district"
 
+    # --- Phase 4D: continuous in-process collector (periodic discover+enroll+capture; OFF by default) ---
+    # The smallest bounded, restart-safe mechanism to keep a Fly collector both enrolling new events and
+    # capturing tracked ones — it reuses the existing scheduler (sync_from_refs + run_once), no second
+    # scheduling architecture. All state lives in Postgres, so a restart just resumes idempotently.
+    collector_enabled: bool = False
+    collector_sources: str = "boshow,district"        # Skillbox intentionally excluded
+    collector_discovery_interval_seconds: int = 3600  # how often to discover/enroll new events
+    collector_capture_interval_seconds: int = 300     # how often to run a capture pass
+    collector_discovery_limit: int = 50               # bounded discovery per source per cycle
+
     # --- Phase 3: independent second source + cross-platform reconciliation (all OFF by default) ---
     second_source_capture_enabled: bool = False
     second_source_name: str = "district"
@@ -136,6 +162,17 @@ class Settings(BaseSettings):
     @property
     def media_observation_source_set(self) -> frozenset[str]:
         return frozenset(s.strip() for s in self.media_observation_sources.split(",") if s.strip())
+
+    @property
+    def collector_source_set(self) -> frozenset[str]:
+        # Skillbox is never collected by the continuous loop, even if it appears in the list.
+        return frozenset(s.strip() for s in self.collector_sources.split(",")
+                         if s.strip() and s.strip() != "skillbox")
+
+    @property
+    def migration_database_url(self) -> str:
+        """DB URL for Alembic/startup migrations: MIGRATION_DATABASE_URL if set, else the app URL."""
+        return normalize_db_url(os.environ.get("MIGRATION_DATABASE_URL")) or self.postgres_url
 
     def entity_auto_threshold(self, entity_type: str) -> float:
         return {

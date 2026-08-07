@@ -1,0 +1,37 @@
+# Fly.io — graph-service (Phase 4D private collection topology).
+# PRIVATE-ONLY: reachable only over the org's private network as <app>.flycast — no public IP.
+# Build context is the service dir; deploy via scripts/fly-deploy.sh (cd services/graph-service).
+app = "nquark-graph-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8006"
+  NQUARK_NETWORK_MODE = "docker"
+  NQUARK_GRAPH_BACKEND = "postgres"
+  NQUARK_SHADOW_LEDGER_ENABLED = "true"
+  # DATABASE_URL + MIGRATION_DATABASE_URL are SECRETS (fly secrets set) — never in git.
+  # The entrypoint runs `alembic upgrade head` (using MIGRATION_DATABASE_URL if set) before boot.
+
+[http_service]
+  internal_port = 8006
+  force_https = false            # private Flycast traffic only
+  auto_stop_machines = "off"     # always on
+  auto_start_machines = false
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 150
+    hard_limit = 200
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

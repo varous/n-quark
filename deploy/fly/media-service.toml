@@ -1,0 +1,39 @@
+# Fly.io — media-service (Phase 4D private collection topology).
+# PRIVATE-ONLY: <app>.flycast, no public IP. Fetches + hashes creatives; byte STORAGE stays disabled.
+app = "nquark-media-service"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NQUARK_PORT = "8002"
+  NQUARK_NETWORK_MODE = "docker"
+  NQUARK_MEDIA_OBSERVATION_ENABLED = "true"
+  NQUARK_MEDIA_FETCH_ENABLED = "true"
+  NQUARK_MEDIA_STORAGE_ENABLED = "false"       # no Fly Volume / object storage in this phase
+  NQUARK_MEDIA_GRAPH_LINK_ENABLED = "true"
+  NQUARK_MEDIA_SOURCES = "boshow,district"     # Skillbox excluded
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+  # DATABASE_URL + MIGRATION_DATABASE_URL are SECRETS. Entrypoint migrates when observation is enabled.
+
+[http_service]
+  internal_port = 8002
+  force_https = false
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 150
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

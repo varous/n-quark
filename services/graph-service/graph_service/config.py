@@ -1,10 +1,25 @@
+import os
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def normalize_db_url(url: str | None) -> str | None:
+    """Normalize a DB URL to the SQLAlchemy+psycopg driver (Fly Managed Postgres gives postgres://)."""
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 def default_postgres_url() -> str:
+    env = normalize_db_url(os.environ.get("DATABASE_URL"))  # Fly Managed Postgres pooled URL
+    if env:
+        return env
     if Path("/.dockerenv").exists():
         return "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
     return "postgresql+psycopg://nquark:nquark@localhost:5432/nquark"
@@ -18,6 +33,11 @@ class Settings(BaseSettings):
     log_level: str = "info"
     graph_backend: str = "postgres"  # "postgres" (consolidated) | "neo4j" | "memory" (tests)
     postgres_url: str = Field(default_factory=default_postgres_url)
+
+    @property
+    def migration_database_url(self) -> str:
+        """DB URL for Alembic/startup migrations: MIGRATION_DATABASE_URL if set, else the app URL."""
+        return normalize_db_url(os.environ.get("MIGRATION_DATABASE_URL")) or self.postgres_url
     # Shadow Ledger (Phase 1). Disabling it makes the internal /v1/internal/... write path a no-op;
     # the public /v1/graph and /v1/events contracts are unaffected either way.
     shadow_ledger_enabled: bool = True
