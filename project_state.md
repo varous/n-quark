@@ -282,6 +282,19 @@ crawl + artist-intelligence rebuilt/recreated with promotion/ecosystem/event fla
   (discovery 300/1400 used, unresolved 0/1400, ambiguity 0/525) with configured fractions shown separately.
 - **Event-aware cadence** flag on; scheduler reads graph FEATURES live (safe-degrade to normal on failure).
 
+**Deployed to private Fly** (2026-08-09): signal + crawl (create-artist) + artist-intelligence redeployed
+(region sin, private Flycast, 1/1 checks passing each). **Migration 002 live in prod**
+(`alembic_version_artist_intel=002_artist_universe`); `youtube_mock=false`; scheduler + discovery +
+auto-onboard + promotion + event-aware flags all on in the artist-intel Fly toml. **Production proof**:
+discovery producing candidates (**20**, all `YOUTUBE_SEARCH`, correctly `RESOLUTION_PENDING`); promotion
+backlog evaluated 5 → **0 promoted** (weak single-source YouTube evidence correctly never canonicalises);
+per-purpose search allocation consuming (discovery 200/1400); scheduler 2 SUCCEEDED + 1 FAILED_TERMINAL
+(a stale-id invalidation — 5A.1a) persisted across the deploy restart; 9 demand observations retained.
+Honest prod note: the prod crawl currently exposes **0 canonical ARTIST** entities (entity resolution
+enabled but no canonical artists accrued yet), so backfill/match have nothing to act on in prod today —
+the endpoint fix is verified locally against 56 canonical artists; discovery independence is what is
+proven live.
+
 ## Phase 5A.3 — Indian artist universe & demand saturation (2026-08-09, LIVE VALIDATED, real YouTube API)
 
 signal + artist-intelligence + api-gateway rebuilt/recreated; **migration 002 applied on boot** (all 4
