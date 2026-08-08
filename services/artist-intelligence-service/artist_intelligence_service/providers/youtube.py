@@ -31,6 +31,7 @@ from artist_intelligence_service.providers.base import (
     YT_VIDEO_VIEWS,
     ArtistCandidate,
     ArtistIntelligenceProvider,
+    ChannelNotFound,
     DemandDatum,
     IdentityResolution,
 )
@@ -121,16 +122,29 @@ class YouTubeProvider(ArtistIntelligenceProvider):
                                "videoCount": channel_stat(signals, "video_count")},
                 "mock": bool(signals.get("mock"))}
 
-    async def get_global_snapshot(self, provider_id: str) -> list[DemandDatum]:
-        self._require(CAP_GLOBAL_SNAPSHOT)
-        signals = await self.signal.youtube_channel(provider_id)
-        self.meter.read(units=1)
-        mock = bool(signals.get("mock"))
+    async def verify_channel(self, provider_id: str) -> dict[str, Any]:
+        """Authoritative channels.list existence check (Phase 5A.1a). Returns the signal-service
+        verification dict ({status: FOUND|CHANNEL_NOT_FOUND, ...}); meters the 1-unit read. A
+        provider/network failure raises (SignalAcquisitionError) — never a false NOT_FOUND."""
+        self._require(CAP_METADATA)
+        try:
+            result = await self.signal.youtube_verify(provider_id)
+            self.meter.read(units=1, ok=True)
+            return result
+        except Exception:
+            self.meter.record("read", 0, ok=False)   # attempted verify that could not complete
+            raise
+
+    def channel_demand_from_verification(self, provider_id: str,
+                                         verification: dict[str, Any]) -> list[DemandDatum]:
+        """Build channel DemandData from an already-fetched (verified) channels.list result — no extra
+        quota. Views/video-count are DIRECT_PROVIDER_VALUE; subscribers are PROVIDER_REPORTED (rounded)."""
+        mock = bool(verification.get("mock"))
         prov = self._provenance("channels.list", mock, {"channel_id": provider_id})
         out: list[DemandDatum] = []
-        views = _as_int(channel_stat(signals, "total_view_count"))
-        subs = _as_int(channel_stat(signals, "subscriber_count"))
-        videos = _as_int(channel_stat(signals, "video_count"))
+        views = _as_int(verification.get("total_view_count"))
+        subs = _as_int(verification.get("subscriber_count"))
+        videos = _as_int(verification.get("video_count"))
         if views is not None:
             out.append(DemandDatum(metric=YT_CHANNEL_VIEWS, value_numeric=views, unit="views",
                                    evidence_status=DIRECT_PROVIDER_VALUE, provenance=prov))
@@ -143,6 +157,15 @@ class YouTubeProvider(ArtistIntelligenceProvider):
             out.append(DemandDatum(metric=YT_VIDEO_COUNT, value_numeric=videos, unit="videos",
                                    evidence_status=DIRECT_PROVIDER_VALUE, provenance=prov))
         return out
+
+    async def get_global_snapshot(self, provider_id: str) -> list[DemandDatum]:
+        self._require(CAP_GLOBAL_SNAPSHOT)
+        # channels.list IS the authoritative check: an empty result is a definitive NOT_FOUND, so we
+        # never fabricate zero statistics for a channel that no longer exists.
+        verification = await self.verify_channel(provider_id)
+        if verification.get("status") != "FOUND":
+            raise ChannelNotFound(provider_id)
+        return self.channel_demand_from_verification(provider_id, verification)
 
     async def get_content_snapshot(self, provider_id: str, *, limit: int) -> list[DemandDatum]:
         self._require(CAP_CONTENT_SNAPSHOT)
@@ -212,7 +235,8 @@ def _decide(candidates: list[ArtistCandidate]) -> IdentityResolution:
         return IdentityResolution(status=UNRESOLVED, method=method,
                                   reason="best_candidate_below_floor", candidates=candidates)
     runner = candidates[1].score if len(candidates) > 1 else 0.0
-    if top.score >= RESOLVE_THRESHOLD and (top.score - runner) >= RESOLVE_MARGIN:
+    # round the margin so float subtraction (e.g. 1.0 - 0.8 = 0.19999…) can't drop a clear leader
+    if top.score >= RESOLVE_THRESHOLD and round(top.score - runner, 6) >= RESOLVE_MARGIN:
         return IdentityResolution(status=RESOLVED, method=method, reason="clear_leader",
                                   chosen=top, candidates=candidates)
     return IdentityResolution(status=AMBIGUOUS, method=method,

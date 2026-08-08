@@ -68,14 +68,14 @@ async def test_restart_safe(db):
 
 async def test_failure_is_isolated_and_retried(db):
     fake = _fake()
-    fake.fail_channel = True                # channel snapshots will fail
-    svc = await _resolve(db, fake)          # resolve used search (not channel), so identity exists
+    fake.fail_videos = True                  # video snapshots fail; channel snapshots succeed
+    svc = await _resolve(db, fake)
     sched = DemandScheduler(service=svc)
     out = await sched.run_once(db)
-    # the channel job failed-retryable; the video job still succeeded (isolation)
+    # the video job failed-retryable; the channel job still succeeded (isolation)
     assert out["outcomes"].get("FAILED_RETRYABLE", 0) >= 1
     assert out["outcomes"].get("SUCCEEDED", 0) >= 1
-    chan_job = db.execute(select(DemandRefreshJob)
-                          .where(DemandRefreshJob.job_type == "YOUTUBE_CHANNEL_SNAPSHOT")).scalar_one()
-    assert chan_job.status == "FAILED_RETRYABLE"
-    assert chan_job.consecutive_failures == 1
+    vid_job = db.execute(select(DemandRefreshJob)
+                         .where(DemandRefreshJob.job_type == "YOUTUBE_VIDEO_SNAPSHOT")).scalar_one()
+    assert vid_job.status == "FAILED_RETRYABLE"
+    assert vid_job.consecutive_failures == 1

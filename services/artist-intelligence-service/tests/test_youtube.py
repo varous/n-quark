@@ -2,7 +2,7 @@
 quota accounting + exhaustion, provider errors, duplicate-observation prevention."""
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from artist_intelligence_service import config
 from artist_intelligence_service.models import ArtistDemandObservation as ADO
@@ -58,7 +58,7 @@ async def test_refresh_uses_known_id_not_search(db):
     searches_before = fake.calls["search"]
     await svc.snapshot_youtube(db, ARTIST)
     assert fake.calls["search"] == searches_before        # no search during refresh
-    assert fake.calls["channel"] >= 1
+    assert fake.calls["verify"] >= 1                       # authoritative channels.list check by id
 
 
 async def test_duplicate_observation_prevention(db):
@@ -90,9 +90,15 @@ async def test_quota_exhaustion(db, monkeypatch):
         await svc.resolve_youtube(db, ARTIST, query="Arijit Singh")
 
 
-async def test_provider_error_propagates(db):
+async def test_refresh_verification_transient_failure_does_not_invalidate(db):
+    """A network/provider failure during refresh verification must NOT invalidate the identity and must
+    NOT write observations — it's a transient VERIFICATION_UNAVAILABLE (Phase 5A.1a §6/§8)."""
+    from artist_intelligence_service.providers.base import RESOLVED as _RESOLVED
     fake = _fake()
-    fake.fail_channel = True
     svc = await _resolved_service(db, fake)
-    with pytest.raises(RuntimeError):
-        await svc.snapshot_youtube(db, ARTIST)
+    fake.fail_verify = True
+    out = await svc.snapshot_youtube(db, ARTIST, include_videos=False)
+    assert out["status"] == "VERIFICATION_UNAVAILABLE"
+    assert db.execute(select(func.count()).select_from(ADO)).scalar_one() == 0
+    ident = svc._resolved_youtube_identity(db, ARTIST, CID)
+    assert ident is not None and ident.status == _RESOLVED   # still resolved, not invalidated

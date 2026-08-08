@@ -42,6 +42,12 @@ class SignalClient:
         """Channel snapshot. Returns YouTubeChannelSignals (observations keyed by attribute)."""
         return await self._get(f"/v1/signals/youtube/channels/{channel_id}/preview")
 
+    async def youtube_verify(self, channel_id: str) -> dict[str, Any]:
+        """Authoritative channels.list existence check (Phase 5A.1a). Returns
+        {status: FOUND|CHANNEL_NOT_FOUND, ...}. Raises SignalAcquisitionError on provider/network
+        failure (HTTP 502) — a transient outage must never look like CHANNEL_NOT_FOUND."""
+        return await self._get(f"/v1/signals/youtube/channels/{channel_id}/verify")
+
     async def youtube_videos(self, channel_id: str, *, limit: int) -> dict[str, Any]:
         """Recent uploaded-video stats by known channel id. Returns YouTubeVideoSignals."""
         return await self._get(f"/v1/signals/youtube/channels/{channel_id}/videos/preview",

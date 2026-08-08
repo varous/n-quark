@@ -206,6 +206,7 @@ import re as _re
 from datetime import datetime as _dt
 
 from signal_service.schemas import (
+    YouTubeChannelVerification,
     YouTubeSearchCandidate,
     YouTubeSearchResult,
     YouTubeVideoSignals,
@@ -261,6 +262,21 @@ _MOCK_VIDEOS: dict[str, list[dict[str, Any]]] = {
 }
 
 
+# Channel ids that "exist" in mock mode — everything else verifies as CHANNEL_NOT_FOUND, so a
+# fabricated/stale candidate id is authoritatively rejected even offline.
+_MOCK_KNOWN_CHANNEL_IDS: set[str] = {DEFAULT_MOCK_CHANNEL_ID} | {
+    c["channel_id"] for rows in _MOCK_SEARCH.values() for c in rows
+}
+
+
+def _mock_channel_meta(channel_id: str) -> dict[str, Any]:
+    for rows in _MOCK_SEARCH.values():
+        for c in rows:
+            if c["channel_id"] == channel_id:
+                return c
+    return {}
+
+
 def _channel_url(channel_id: str) -> str:
     return f"https://www.youtube.com/channel/{channel_id}"
 
@@ -275,6 +291,47 @@ def _parse_ts(value: str | None) -> _dt | None:
 
 
 class YouTubeClient:
+    async def verify_channel(self, channel_id: str) -> YouTubeChannelVerification:
+        """Authoritative existence check for a KNOWN channel id (channels.list; 1 quota unit when live).
+
+        Returns FOUND (with bounded metadata) or CHANNEL_NOT_FOUND for an empty ``items`` array. A
+        network/provider failure raises (surfaced as HTTP 502 by the route) — never CHANNEL_NOT_FOUND —
+        so a transient outage can never be mistaken for a deleted channel."""
+        when = datetime.now(UTC)
+        if settings.use_youtube_mock:
+            if channel_id in _MOCK_KNOWN_CHANNEL_IDS:
+                payload = mock_channel_payload(channel_id)
+                st = payload.get("statistics") or {}
+                meta = _mock_channel_meta(channel_id)
+                return YouTubeChannelVerification(
+                    status="FOUND", channel_id=channel_id,
+                    title=meta.get("title") or (payload.get("snippet") or {}).get("title"),
+                    handle=meta.get("handle"),
+                    subscriber_count=_as_int(st.get("subscriberCount")),
+                    total_view_count=_as_int(st.get("viewCount")),
+                    video_count=_as_int(st.get("videoCount")), fetched_at=when, mock=True)
+            return YouTubeChannelVerification(status="CHANNEL_NOT_FOUND", channel_id=channel_id,
+                                              fetched_at=when, mock=True)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{settings.youtube_api_base}/channels",
+                params={"part": "snippet,statistics", "id": channel_id,
+                        "key": settings.youtube_api_key})
+            response.raise_for_status()
+            items = response.json().get("items") or []
+        if not items:
+            return YouTubeChannelVerification(status="CHANNEL_NOT_FOUND", channel_id=channel_id,
+                                              fetched_at=when, mock=False)
+        snippet = items[0].get("snippet") or {}
+        stats = items[0].get("statistics") or {}
+        return YouTubeChannelVerification(
+            status="FOUND", channel_id=channel_id, title=snippet.get("title"),
+            handle=snippet.get("customUrl"),
+            subscriber_count=_as_int(stats.get("subscriberCount")),
+            total_view_count=_as_int(stats.get("viewCount")),
+            video_count=_as_int(stats.get("videoCount")), fetched_at=when, mock=False)
+
     async def search_channels(self, query: str, *, limit: int = 5) -> YouTubeSearchResult:
         """Bounded channel search for identity discovery (search.list; 100 quota units when live).
 

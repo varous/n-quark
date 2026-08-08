@@ -117,8 +117,14 @@ class DemandScheduler:
                     observed_at=now)
             else:
                 return self._terminal(job, now, "UNKNOWN_JOB_TYPE")
-            if result.get("status") == "NO_RESOLVED_IDENTITY":
-                return self._terminal(job, now, "NO_RESOLVED_IDENTITY")
+            status = result.get("status")
+            if status in ("NO_RESOLVED_IDENTITY", "PROVIDER_ID_NOT_FOUND"):
+                # authoritative: the identity is gone/invalid → terminal, and it is no longer RESOLVED
+                # so enqueue_due won't recreate jobs for it (no continual retry of a dead channel).
+                return self._terminal(job, now, status)
+            if status == "VERIFICATION_UNAVAILABLE":
+                # transient provider/network failure → retry with backoff; identity NOT invalidated.
+                return self._fail(job, now, RuntimeError("verification unavailable (transient)"))
             return self._succeed(job, now, result)
         except Exception as exc:  # noqa: BLE001 — isolate: one job's failure never stops the others
             return self._fail(job, now, exc)

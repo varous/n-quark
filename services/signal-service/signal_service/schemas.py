@@ -69,6 +69,23 @@ class YouTubeSearchResult(BaseModel):
     mock: bool = False
 
 
+class YouTubeChannelVerification(BaseModel):
+    """Authoritative channels.list existence check for a KNOWN channel id (Phase 5A.1a).
+
+    ``status`` is FOUND or CHANNEL_NOT_FOUND (an empty ``items`` array is NOT_FOUND, never a failure).
+    A provider/network failure is surfaced as an HTTP error by the route, never as CHANNEL_NOT_FOUND."""
+
+    status: str                                  # FOUND | CHANNEL_NOT_FOUND
+    channel_id: str
+    title: str | None = None
+    handle: str | None = None                    # snippet.customUrl where available
+    subscriber_count: int | None = None
+    total_view_count: int | None = None
+    video_count: int | None = None
+    fetched_at: datetime
+    mock: bool = False
+
+
 class YouTubeVideoStat(BaseModel):
     video_id: str
     title: str | None = None

@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-07 (Phase 5A). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-08 (Phase 5A.1a). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -239,6 +239,31 @@ through `canonical_artist_id`; YouTube/Trends metrics never enter the event Shad
 - **Fly**: optional private Flycast `deploy/fly/artist-intelligence-service.toml` — **deliberately not in
   `fly-deploy.sh`** (hand-deploy only; can't disrupt the collection spine). No paid resources created.
 
+## Phase 5A.1a — YouTube identity verification integrity hotfix (2026-08-08, LIVE VALIDATED)
+
+Production defect: a search-result candidate could transition a YouTube CHANNEL_ID to `RESOLVED`
+(confidence 0.8, `last_verified_at` stamped) even though an authoritative `channels.list(id=…)` returned
+`items: []` — i.e. the channel did not exist (real case: `artist:arijit-singh` →
+`UCUEcefFC0sBRZfCTBqcx9jg`). Search evidence alone was resolving identities.
+- **Invariant now enforced**: a CHANNEL_ID may become `RESOLVED` only after an authoritative
+  `channels.list` lookup confirms that exact id exists at resolution time; **search is candidate
+  discovery only**. `last_verified_at` is populated **only** after a successful provider verification.
+- **signal-service**: additive `verify_channel` + `GET /v1/signals/youtube/channels/{id}/verify` →
+  typed `FOUND` / `CHANNEL_NOT_FOUND` (empty `items` = NOT_FOUND, 200); provider/network failure → 502
+  (never NOT_FOUND). Key stays in signal-service; no YouTube HTTP in artist-intelligence-service.
+- **Resolution**: verify the deterministic leader; on `CHANNEL_NOT_FOUND` record rejection evidence and
+  consider the next ranked candidate (which must independently satisfy the thresholds + verify); no
+  candidate satisfying both → AMBIGUOUS/UNRESOLVED; transient verify failure → not resolved, nothing
+  invalidated. Also fixed a float-margin bug in `_decide` (1.0−0.8 < 0.2) that mislabeled a clear leader.
+- **Refresh**: verifies the id before writing; `CHANNEL_NOT_FOUND` → no observations (no fabricated
+  zeros) + identity `UNRESOLVED` (`invalidation_reason=PROVIDER_ID_NOT_FOUND`); scheduler enqueues only
+  RESOLVED identities so an invalidated id leaves recurring refresh; `VERIFICATION_UNAVAILABLE`
+  (transient) is retried, never invalidates. No new status enum; no migration.
+- **Live** (docker, real `YOUTUBE_API_KEY`): the production id `UCUEcefFC0sBRZfCTBqcx9jg` verifies
+  `CHANNEL_NOT_FOUND` → not resolved; a real valid channel verifies `FOUND` → RESOLVED with
+  `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
+  suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
+
 ## Phase 4C.1 — Skillbox targeted probe & decision (2026-08-07, live)
 
 Bounded discovery probe + decision gate (see `docs/skillbox-probe.md`). Findings: **no public
@@ -255,9 +280,9 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 = 0 real overlap** (new Skillbox-only venues; no duplicate event fabricated). Boshow/District unaffected.
 
 ## Test status
-crawl **200** · gateway **58** · signal **95** (YouTube search/videos additions covered) · graph **60** ·
+crawl **200** · gateway **58** · signal **99** (YouTube search/videos/verify) · graph **60** ·
 analytics **45** · media **43** · observation **11** · entity **12** ·
-**artist-intelligence 35** (identity, YouTube, Trends, read models, scheduler) — all pass.
+**artist-intelligence 43** (identity, YouTube, Trends, read models, scheduler, verification integrity) — all pass.
 artist-intelligence Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` clean. Lint clean
 except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
 

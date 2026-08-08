@@ -32,20 +32,48 @@ def db(session_factory):
 
 # --------------------------------------------------------------------- fake signal-service client
 class FakeSignal:
-    """Stands in for signal-service acquisition. Configure per test; records call counts."""
+    """Stands in for signal-service acquisition. Configure per test; records call counts.
 
-    def __init__(self, *, search=None, channel=None, videos=None, mock=True):
+    ``found`` controls which channel ids verify FOUND (Phase 5A.1a). Default: every searched candidate
+    id and every ``channel`` stats key exists. Pass an explicit list (e.g. ``[]``) to make a candidate
+    verify CHANNEL_NOT_FOUND. ``fail_verify`` makes verification raise (a transient/network failure)."""
+
+    def __init__(self, *, search=None, channel=None, videos=None, found=None, mock=True):
         self._search = search or {}
         self._channel = channel or {}
         self._videos = videos or {}
+        self._found = found
         self.mock = mock
-        self.calls = {"search": 0, "channel": 0, "videos": 0}
+        self.calls = {"search": 0, "channel": 0, "videos": 0, "verify": 0}
         self.fail_channel = False
+        self.fail_verify = False
+        self.fail_videos = False
+
+    def _found_ids(self):
+        if self._found is not None:
+            return set(self._found)
+        ids = set(self._channel.keys())
+        for rows in self._search.values():
+            for c in rows:
+                ids.add(c["channel_id"])
+        return ids
 
     async def youtube_search(self, query, *, limit):
         self.calls["search"] += 1
         cands = self._search.get(query.strip().lower(), [])
         return {"query": query, "candidates": cands[:limit], "mock": self.mock}
+
+    async def youtube_verify(self, channel_id):
+        self.calls["verify"] += 1
+        if self.fail_verify:
+            raise RuntimeError("signal-service verify failed (transient)")
+        if channel_id in self._found_ids():
+            stats = self._channel.get(channel_id) or {}
+            return {"status": "FOUND", "channel_id": channel_id, "title": None, "handle": None,
+                    "subscriber_count": stats.get("subscriber_count"),
+                    "total_view_count": stats.get("total_view_count"),
+                    "video_count": stats.get("video_count"), "mock": self.mock}
+        return {"status": "CHANNEL_NOT_FOUND", "channel_id": channel_id, "mock": self.mock}
 
     async def youtube_channel(self, channel_id):
         self.calls["channel"] += 1
@@ -57,6 +85,8 @@ class FakeSignal:
 
     async def youtube_videos(self, channel_id, *, limit):
         self.calls["videos"] += 1
+        if self.fail_videos:
+            raise RuntimeError("signal-service video fetch failed")
         return {"channel_id": channel_id, "videos": (self._videos.get(channel_id) or [])[:limit],
                 "mock": self.mock}
 

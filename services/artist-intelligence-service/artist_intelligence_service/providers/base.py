@@ -64,6 +64,16 @@ class ProviderAccessUnavailable(RuntimeError):
     The caller surfaces this as ``ACCESS_UNAVAILABLE`` rather than fabricating data."""
 
 
+class ChannelNotFound(RuntimeError):
+    """Raised when an authoritative channels.list lookup confirms a channel id does not exist
+    (empty ``items``). This is a definitive NOT_FOUND — never a transient/network failure — so it may
+    block resolution and invalidate a stale identity. Carries the provider_id for provenance."""
+
+    def __init__(self, provider_id: str) -> None:
+        super().__init__(f"channel not found: {provider_id}")
+        self.provider_id = provider_id
+
+
 @dataclass
 class ArtistCandidate:
     """A ranked identity candidate from a bounded search — evidence, not a decision."""

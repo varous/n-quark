@@ -34,6 +34,34 @@ def test_entity_id_is_type_neutral() -> None:
     assert entity_id_for_youtube_channel("abc123") == "youtube:channel:abc123"
 
 
+# ---- Phase 5A.1a: authoritative channel verification primitive -------------------------------
+async def test_verify_channel_mock_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    from signal_service.adapters.youtube import YouTubeClient
+    v = await YouTubeClient().verify_channel(DEFAULT_MOCK_CHANNEL_ID)
+    assert v.status == "FOUND" and v.channel_id == DEFAULT_MOCK_CHANNEL_ID
+
+
+async def test_verify_channel_mock_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    from signal_service.adapters.youtube import YouTubeClient
+    v = await YouTubeClient().verify_channel("UCdefinitely_stale_00")
+    assert v.status == "CHANNEL_NOT_FOUND"
+
+
+def test_verify_route_found(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    r = client.get(f"/v1/signals/youtube/channels/{DEFAULT_MOCK_CHANNEL_ID}/verify")
+    assert r.status_code == 200 and r.json()["status"] == "FOUND"
+
+
+def test_verify_route_not_found_is_200_not_error(client: TestClient,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    r = client.get("/v1/signals/youtube/channels/UCstale_missing_000/verify")
+    assert r.status_code == 200 and r.json()["status"] == "CHANNEL_NOT_FOUND"
+
+
 async def test_classify_tseries_resolves_label_via_tiebreak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

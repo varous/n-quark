@@ -15,6 +15,7 @@ from signal_service.graph_projection import project_entity_graph
 from signal_service.identity import mbid_alias
 from signal_service.schemas import (
     YouTubeChannelSignals,
+    YouTubeChannelVerification,
     YouTubeSearchResult,
     YouTubeVideoSignals,
 )
@@ -47,6 +48,17 @@ async def search_youtube_channels(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
                             detail=f"YouTube search failed: {exc}") from exc
+
+
+@router.get("/channels/{channel_id}/verify", response_model=YouTubeChannelVerification)
+async def verify_youtube_channel(channel_id: str) -> YouTubeChannelVerification:
+    """Authoritative channels.list existence check for a known channel id (Phase 5A.1a). Returns
+    FOUND / CHANNEL_NOT_FOUND (200); a provider/network failure returns 502 (never NOT_FOUND)."""
+    try:
+        return await YouTubeClient().verify_channel(channel_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube channel verification failed: {exc}") from exc
 
 
 @router.get("/channels/{channel_id}/videos/preview", response_model=YouTubeVideoSignals)

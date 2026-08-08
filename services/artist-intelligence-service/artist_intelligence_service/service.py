@@ -19,10 +19,13 @@ from sqlalchemy.orm import Session
 from artist_intelligence_service import identity as idlib
 from artist_intelligence_service.config import settings
 from artist_intelligence_service.models import ArtistDemandObservation, ArtistExternalIdentity
+from artist_intelligence_service.providers import youtube as ytprov
 from artist_intelligence_service.providers.base import (
+    AMBIGUOUS,
     PROVIDER_GOOGLE_TRENDS,
     PROVIDER_YOUTUBE,
     RESOLVED,
+    UNRESOLVED,
     DemandDatum,
 )
 from artist_intelligence_service.providers.google_trends import (
@@ -71,7 +74,8 @@ class DemandService:
     def _upsert_identity(self, db: Session, *, canonical_artist_id: str, provider: str,
                          identity_type: str, provider_id: str, status: str, display_name: str | None,
                          canonical_url: str | None, resolution_method: str | None, confidence: float,
-                         metadata: dict[str, Any]) -> ArtistExternalIdentity:
+                         metadata: dict[str, Any], provenance: dict[str, Any] | None = None,
+                         last_verified_at: datetime | None = None) -> ArtistExternalIdentity:
         now = _now()
         row = self.get_identity(db, provider, identity_type, provider_id)
         if row is None:
@@ -90,18 +94,26 @@ class DemandService:
         row.resolution_method = resolution_method
         row.confidence = confidence
         row.identity_metadata = metadata
+        if provenance is not None:
+            row.provenance = provenance
+        # last_verified_at means "successfully verified against the provider at this time" — it is
+        # populated ONLY by a caller that actually performed provider verification, never by status.
+        if last_verified_at is not None:
+            row.last_verified_at = last_verified_at
         row.updated_at = now
-        if status == RESOLVED:
-            row.last_verified_at = now
         db.flush()
         return row
 
     async def resolve_youtube(self, db: Session, canonical_artist_id: str, *, query: str,
                               hints: dict | None = None, limit: int = 5) -> dict[str, Any]:
-        """Bounded search → deterministic decision → persist identity. Refuses search past the budget.
+        """Bounded search → deterministic decision → AUTHORITATIVE channels.list verification → persist.
 
-        Does NOT create a canonical artist. AMBIGUOUS/UNRESOLVED are recorded on a per-artist pending
-        slot so the state is auditable and re-resolution is idempotent."""
+        A CHANNEL_ID may become RESOLVED only if channels.list confirms it exists at resolution time
+        (Phase 5A.1a): search is candidate discovery only. If the deterministic leader is not found, its
+        rejection is recorded and the next ranked candidate is considered — but it must still satisfy
+        the deterministic thresholds/ambiguity policy on its own. A transient verification failure never
+        resolves and never invalidates. Never creates a canonical artist; `last_verified_at` is set only
+        on a successful verification."""
         if not settings.youtube_search_enabled:
             raise QuotaExhausted("YouTube search disabled (NQUARK_YOUTUBE_SEARCH_ENABLED=false)")
         if search_calls_today(db, PROVIDER_YOUTUBE) >= settings.youtube_max_searches_per_day:
@@ -110,43 +122,86 @@ class DemandService:
 
         meter = QuotaMeter()
         self.youtube.meter = meter
+        rejected: list[dict[str, Any]] = []
+        verification_unavailable = False
         try:
-            resolution = await self.youtube.resolve_identity(query, hints=hints or {}, limit=limit)
+            candidates = await self.youtube.search_artist(query, limit=limit)
+            for c in candidates:
+                c.score, c.signals = ytprov._score_candidate(query, c, hints or {})
+            candidates.sort(key=lambda c: c.score, reverse=True)
+
+            # Consider ranked candidates: each must clear the deterministic policy AND verify.
+            remaining = list(candidates)
+            chosen = None
+            verified = None
+            while remaining:
+                decision = ytprov._decide(remaining)
+                if decision.status != RESOLVED or decision.chosen is None:
+                    break  # no remaining candidate is a clear deterministic leader
+                cand = decision.chosen
+                try:
+                    v = await self.youtube.verify_channel(cand.provider_id)
+                except Exception:  # noqa: BLE001 — network/provider failure: cannot verify, cannot resolve
+                    verification_unavailable = True
+                    break
+                if v.get("status") == "FOUND":
+                    chosen, verified = cand, v
+                    break
+                # authoritative CHANNEL_NOT_FOUND → record + drop this candidate, re-decide on the rest
+                rejected.append({"provider_id": cand.provider_id, "score": cand.score,
+                                 "signals": cand.signals, "verification_result": "CHANNEL_NOT_FOUND"})
+                remaining = [r for r in remaining if r.provider_id != cand.provider_id]
         finally:
             record_meter(db, PROVIDER_YOUTUBE, meter)
 
         cand_meta = {"query": query, "candidates": [
             {"provider_id": c.provider_id, "display_name": c.display_name, "score": c.score,
-             "signals": c.signals, "canonical_url": c.canonical_url} for c in resolution.candidates]}
+             "signals": c.signals, "canonical_url": c.canonical_url} for c in candidates]}
 
-        if resolution.status == RESOLVED and resolution.chosen is not None:
-            chosen = resolution.chosen
+        now = _now()
+        if chosen is not None:
+            provenance = {"candidate_score": chosen.score, "candidate_signals": chosen.signals,
+                          "verification_method": "channels.list", "verified_provider_id": chosen.provider_id,
+                          "verified_at": now.isoformat(),
+                          "verified_title": verified.get("title"), "verified_handle": verified.get("handle")}
             identity = self._upsert_identity(
                 db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
                 identity_type="CHANNEL_ID", provider_id=chosen.provider_id, status=RESOLVED,
                 display_name=chosen.display_name, canonical_url=chosen.canonical_url,
-                resolution_method=resolution.method, confidence=chosen.score,
-                metadata={**cand_meta, "reason": resolution.reason})
-            # Retire any leftover pending slot for this artist.
+                resolution_method="deterministic-evidence+channels.list-verified", confidence=chosen.score,
+                metadata={**cand_meta, "reason": "verified_clear_leader", "rejected_candidates": rejected},
+                provenance=provenance, last_verified_at=now)
             pending = self.get_identity(db, PROVIDER_YOUTUBE, "CHANNEL_ID",
                                         idlib.pending_identity_id(canonical_artist_id))
             if pending is not None and pending.id != identity.id:
                 pending.status = "REJECTED"
-                pending.updated_at = _now()
+                pending.updated_at = now
                 db.flush()
-        else:
-            identity = self._upsert_identity(
-                db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
-                identity_type="CHANNEL_ID", provider_id=idlib.pending_identity_id(canonical_artist_id),
-                status=resolution.status, display_name=None, canonical_url=None,
-                resolution_method=resolution.method,
-                confidence=(resolution.candidates[0].score if resolution.candidates else 0.0),
-                metadata={**cand_meta, "reason": resolution.reason})
+            return {"canonical_artist_id": canonical_artist_id, "status": RESOLVED,
+                    "reason": "verified_clear_leader", "method": identity.resolution_method,
+                    "identity_id": identity.id, "provider_id": identity.provider_id,
+                    "verified": True, "rejected_candidates": rejected, "candidates": cand_meta["candidates"]}
 
-        return {"canonical_artist_id": canonical_artist_id, "status": resolution.status,
-                "reason": resolution.reason, "method": resolution.method,
-                "identity_id": identity.id, "provider_id": identity.provider_id,
-                "candidates": cand_meta["candidates"]}
+        # Nothing verified: reason reflects why (unverifiable transient vs no deterministic/verified leader).
+        if verification_unavailable:
+            status, reason = AMBIGUOUS, "verification_unavailable"
+        elif rejected:
+            status, reason = UNRESOLVED, "all_leaders_provider_not_found"
+        else:
+            decision = ytprov._decide(candidates)  # AMBIGUOUS/UNRESOLVED per the pure policy
+            status, reason = decision.status, decision.reason
+        identity = self._upsert_identity(
+            db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+            identity_type="CHANNEL_ID", provider_id=idlib.pending_identity_id(canonical_artist_id),
+            status=status, display_name=None, canonical_url=None,
+            resolution_method="deterministic-evidence-v1",
+            confidence=(candidates[0].score if candidates else 0.0),
+            metadata={**cand_meta, "reason": reason, "rejected_candidates": rejected})
+        # a non-resolved outcome never sets last_verified_at (search alone is not verification)
+        return {"canonical_artist_id": canonical_artist_id, "status": status, "reason": reason,
+                "method": "deterministic-evidence-v1", "identity_id": identity.id,
+                "provider_id": identity.provider_id, "verified": False,
+                "rejected_candidates": rejected, "candidates": cand_meta["candidates"]}
 
     # ---- observation ingest ------------------------------------------------------------------
     def _ingest(self, db: Session, *, canonical_artist_id: str, provider: str,
@@ -191,8 +246,25 @@ class DemandService:
 
         meter = QuotaMeter()
         self.youtube.meter = meter
+        # Authoritative existence check BEFORE writing anything — a channel that has disappeared must
+        # never silently produce observations or fabricated zeros. A transient/network failure raises
+        # and is handled below WITHOUT invalidating the identity.
         try:
-            channel_data = await self.youtube.get_global_snapshot(cid) if include_channel else []
+            verification = await self.youtube.verify_channel(cid)
+        except Exception as exc:  # noqa: BLE001 — transient: do not invalidate; surface as retryable
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+            return {"status": "VERIFICATION_UNAVAILABLE", "canonical_artist_id": canonical_artist_id,
+                    "channel_id": cid, "error": f"{type(exc).__name__}: {exc}"}
+        if verification.get("status") != "FOUND":
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+            self._invalidate_youtube_identity(db, identity, reason="PROVIDER_ID_NOT_FOUND",
+                                              at=observed_at)
+            return {"status": "PROVIDER_ID_NOT_FOUND", "canonical_artist_id": canonical_artist_id,
+                    "channel_id": cid}
+
+        try:
+            channel_data = self.youtube.channel_demand_from_verification(cid, verification) \
+                if include_channel else []
             video_data = await self.youtube.get_content_snapshot(
                 cid, limit=settings.youtube_recent_video_limit) if include_videos else []
         finally:
@@ -204,11 +276,26 @@ class DemandService:
         vids = self._ingest(db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
                            external_identity_id=identity.id, data=video_data,
                            observed_at=observed_at, bucket=bucket)
+        # channel confirmed present via channels.list → this IS a real provider verification
         identity.last_verified_at = observed_at
         identity.updated_at = _now()
         db.flush()
         return {"status": "OK", "canonical_artist_id": canonical_artist_id, "channel_id": cid,
                 "channel_observations": chan, "video_observations": vids}
+
+    def _invalidate_youtube_identity(self, db: Session, identity: ArtistExternalIdentity, *,
+                                     reason: str, at: datetime) -> None:
+        """Authoritative NOT_FOUND → mark the identity UNRESOLVED with a reason, so it leaves normal
+        recurring refresh (the scheduler only enqueues RESOLVED identities) until it is re-resolved.
+        Reuses existing status semantics — no new enum. Does NOT touch last_verified_at (no successful
+        verification occurred) and writes no observations."""
+        identity.status = UNRESOLVED
+        identity.resolution_method = "provider_verification"
+        identity.identity_metadata = {**(identity.identity_metadata or {}),
+                                      "invalidation_reason": reason,
+                                      "invalidated_at": at.isoformat()}
+        identity.updated_at = _now()
+        db.flush()
 
     def _resolved_youtube_identity(self, db: Session, canonical_artist_id: str,
                                    channel_id: str | None) -> ArtistExternalIdentity | None:

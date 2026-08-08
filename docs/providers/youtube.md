@@ -16,10 +16,44 @@ or logs.
 
 Runs in a deterministic mock when no API key is set, so the whole pipeline is demonstrable offline.
 
+## Identity verification invariant (Phase 5A.1a)
+
+> **YouTube search is candidate discovery only. A CHANNEL_ID may transition to RESOLVED only after an
+> authoritative `channels.list` lookup confirms that exact provider id exists at resolution time.**
+
+Search-result evidence (title, topic signal, handle) is never sufficient on its own — a search hit can
+reference a channel that no longer exists (`channels.list` → `items: []`). Every resolution therefore
+ends with an authoritative verification via signal-service's `/channels/{id}/verify` primitive
+(`FOUND` / `CHANNEL_NOT_FOUND`; a network/provider failure is surfaced as an error, never NOT_FOUND):
+
+- deterministic leader **verified FOUND** → RESOLVED;
+- deterministic leader **CHANNEL_NOT_FOUND** → rejection recorded, and the next ranked candidate is
+  considered — but it must independently satisfy the same thresholds/ambiguity policy, then verify too;
+- **no candidate both satisfies the policy and verifies** → AMBIGUOUS / UNRESOLVED;
+- **verification unavailable (transient)** → not resolved, nothing invalidated.
+
+### `last_verified_at` semantics
+
+`last_verified_at` means **the identity was successfully verified against the provider at that time** —
+nothing else. A search-only or unverified candidate has `last_verified_at = NULL`; it is stamped only
+after a successful `channels.list` verification (at resolution and on each successful refresh), and a
+failed/transient verification never updates it. Bounded verification provenance
+(`candidate_score`, `candidate_signals`, `verification_method = channels.list`, `verified_provider_id`,
+`verified_at`) is retained on the resolved identity; rejected stale candidates retain their
+`provider_id` + score/signals + `verification_result = CHANNEL_NOT_FOUND`.
+
+### Refresh + invalidation
+
+Refresh verifies the channel id before writing anything. If `channels.list` returns `CHANNEL_NOT_FOUND`
+the refresh writes **no** observations (never fabricated zeros), marks the identity `UNRESOLVED` with
+`invalidation_reason = PROVIDER_ID_NOT_FOUND`, and — because the scheduler only enqueues RESOLVED
+identities — it leaves normal recurring refresh until re-resolved. A transient/network failure
+(`VERIFICATION_UNAVAILABLE`) is retried and never invalidates.
+
 ## Identity resolution
 
-`canonical artist → bounded search → ranked candidates → deterministic evidence → RESOLVED / AMBIGUOUS /
-UNRESOLVED`. Transparent additive scoring:
+`canonical artist → bounded search → ranked candidates → deterministic evidence → authoritative
+channels.list verification → RESOLVED / AMBIGUOUS / UNRESOLVED`. Transparent additive scoring:
 
 | signal | weight |
 |---|---|
