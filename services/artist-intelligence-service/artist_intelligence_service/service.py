@@ -34,7 +34,14 @@ from artist_intelligence_service.providers.google_trends import (
     parse_trends_csv,
 )
 from artist_intelligence_service.providers.youtube import YouTubeProvider
-from artist_intelligence_service.quota import QuotaMeter, record_meter, search_calls_today
+from artist_intelligence_service.quota import (
+    BUCKET_SEARCH,
+    YT_SEARCH_UNITS,
+    QuotaMeter,
+    can_spend,
+    record_meter,
+    search_calls_today,
+)
 
 
 class QuotaExhausted(RuntimeError):
@@ -43,6 +50,15 @@ class QuotaExhausted(RuntimeError):
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def yt_observation_bucket(observed_at: datetime) -> str:
+    """Idempotency bucket for a YouTube live-metric observation. Phase 5A.3 raises the temporal
+    resolution to HOURLY (``YYYY-MM-DDTHH``) when enabled — a same-hour rerun is one logical
+    observation, the next hour is new history. Old DAILY records stay valid (different key)."""
+    if settings.youtube_hourly_observations:
+        return observed_at.strftime("%Y-%m-%dT%H")
+    return observed_at.date().isoformat()
 
 
 class DemandService:
@@ -242,7 +258,7 @@ class DemandService:
         if identity is None:
             return {"status": "NO_RESOLVED_IDENTITY", "canonical_artist_id": canonical_artist_id}
         cid = identity.provider_id
-        bucket = observed_at.date().isoformat()
+        bucket = yt_observation_bucket(observed_at)
 
         meter = QuotaMeter()
         self.youtube.meter = meter
@@ -306,6 +322,95 @@ class DemandService:
                     and row.status == RESOLVED:
                 return row
         return None
+
+    # ---- Phase 5A.3: identity discovery (quota-guarded), catalogue backfill, registry video snapshot ----
+    async def discover_identity_for_artist(self, db: Session, canonical_artist_id: str, *,
+                                           display_name: str,
+                                           hints: dict | None = None) -> dict[str, Any]:
+        """Quota-guarded wrapper over resolve_youtube for the identity-resolution queue. Refuses to spend
+        a SEARCH when the bucket/reserve is reached (QUOTA_EXHAUSTED → defer, never invalidate)."""
+        if not can_spend(db, PROVIDER_YOUTUBE, BUCKET_SEARCH, YT_SEARCH_UNITS):
+            return {"status": "QUOTA_EXHAUSTED", "canonical_artist_id": canonical_artist_id}
+        return await self.resolve_youtube(db, canonical_artist_id, query=display_name, hints=hints or {})
+
+    async def backfill_catalogue(self, db: Session, canonical_artist_id: str, *,
+                                 depth: int | None = None,
+                                 observed_at: datetime | None = None) -> dict[str, Any]:
+        """One-time bounded catalogue backfill into the video REGISTRY (metadata only; observations are a
+        separate job). Idempotent on video_id. Verifies the channel first (5A.1a) — a dead channel never
+        fabricates a registry."""
+        from artist_intelligence_service import videos as vids
+        observed_at = observed_at or _now()
+        depth = depth or settings.youtube_catalogue_backfill_depth
+        identity = self._resolved_youtube_identity(db, canonical_artist_id, None)
+        if identity is None:
+            return {"status": "NO_RESOLVED_IDENTITY", "canonical_artist_id": canonical_artist_id}
+        cid = identity.provider_id
+        meter = QuotaMeter()
+        self.youtube.meter = meter
+        try:
+            verification = await self.youtube.verify_channel(cid)
+        except Exception as exc:  # noqa: BLE001 — transient: defer, never invalidate
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+            return {"status": "VERIFICATION_UNAVAILABLE", "canonical_artist_id": canonical_artist_id,
+                    "channel_id": cid, "error": f"{type(exc).__name__}: {exc}"}
+        if verification.get("status") != "FOUND":
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+            self._invalidate_youtube_identity(db, identity, reason="PROVIDER_ID_NOT_FOUND", at=observed_at)
+            return {"status": "PROVIDER_ID_NOT_FOUND", "canonical_artist_id": canonical_artist_id,
+                    "channel_id": cid}
+        try:
+            uploads = await self.youtube.list_uploads(cid, limit=depth)
+        finally:
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+        created = 0
+        for v in uploads.get("videos") or []:
+            vid = v.get("video_id")
+            if not vid:
+                continue
+            _, is_new = vids.upsert_video(
+                db, video_id=vid, channel_id=cid, canonical_artist_id=canonical_artist_id,
+                external_identity_id=identity.id, title=v.get("title"),
+                published_at=ytprov._parse_ts(v.get("published_at")),
+                duration_seconds=None, category=None, live_status=None,
+                metadata={"source": "uploads_playlist"}, now=observed_at)
+            created += 1 if is_new else 0
+        return {"status": "OK", "canonical_artist_id": canonical_artist_id, "channel_id": cid,
+                "videos_seen": len(uploads.get("videos") or []), "videos_registered": created}
+
+    async def snapshot_videos_registry(self, db: Session, canonical_artist_id: str, *,
+                                       observed_at: datetime | None = None,
+                                       use_batch: bool = True) -> dict[str, Any]:
+        """Refresh video demand observations for the artist's REGISTERED videos using the quota-efficient
+        batch primitive (falls back to the recent-videos path if the registry is empty). Hourly buckets."""
+        from artist_intelligence_service import videos as vids
+        observed_at = observed_at or _now()
+        identity = self._resolved_youtube_identity(db, canonical_artist_id, None)
+        if identity is None:
+            return {"status": "NO_RESOLVED_IDENTITY", "canonical_artist_id": canonical_artist_id}
+        bucket = yt_observation_bucket(observed_at)
+        registered = vids.videos_for_artist(db, canonical_artist_id)
+        meter = QuotaMeter()
+        self.youtube.meter = meter
+        try:
+            if registered and use_batch:
+                ids = [v.video_id for v in registered][:settings.youtube_catalogue_backfill_depth]
+                # batch in chunks of 50 (the videos.list id limit)
+                data = []
+                for i in range(0, len(ids), 50):
+                    data.extend(await self.youtube.get_video_stats_batch(ids[i:i + 50]))
+                path = "batch"
+            else:
+                data = await self.youtube.get_content_snapshot(
+                    identity.provider_id, limit=settings.youtube_recent_video_limit)
+                path = "recent_fallback"
+        finally:
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+        counts = self._ingest(db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+                              external_identity_id=identity.id, data=data, observed_at=observed_at,
+                              bucket=bucket)
+        return {"status": "OK", "canonical_artist_id": canonical_artist_id, "path": path,
+                "video_observations": counts}
 
     # ---- Trends import -----------------------------------------------------------------------
     def import_trends(self, db: Session, canonical_artist_id: str, *, csv_text: str,

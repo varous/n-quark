@@ -29,22 +29,28 @@ class DemandAdminService:
 
     # ---- operations / diagnostics ---------------------------------------------------------------
     async def overview(self) -> dict[str, Any]:
-        """Coverage + YouTube provider health (REAL/MOCK) + quota + scheduler + Trends status."""
+        """Coverage + YouTube provider health (REAL/MOCK) + quota buckets + scheduler + artist universe
+        + Trends status. Phase 5A.3 adds the artist-universe + per-bucket quota diagnostics."""
         cov = await self.gw.get(DEMAND, "/v1/internal/demand/coverage")
         health = await self.gw.get(DEMAND, "/v1/internal/demand/provider-health")
         quota = await self.gw.get(DEMAND, "/v1/internal/demand/quota")
         sched = await self.gw.get(DEMAND, "/v1/internal/demand/scheduler")
+        universe = await self.gw.get(DEMAND, "/v1/internal/demand/artist-universe")
+        buckets = await self.gw.get(DEMAND, "/v1/internal/demand/quota-buckets")
         # "available" means the demand service answered at least one call — the console degrades the
         # whole panel (not the app) when this is false.
-        available = any(r.available for r in (cov, health, quota, sched))
+        parts = (cov, health, quota, sched, universe, buckets)
         return {
-            "available": available,
+            "available": any(r.available for r in parts),
             "coverage": cov.data if cov.ok else None,
             "provider_health": health.data if health.ok else None,
             "quota": quota.data if quota.ok else None,
+            "quota_buckets": buckets.data if buckets.ok else None,
             "scheduler": sched.data if sched.ok else None,
-            "downstream": {"coverage": cov.ok, "provider_health": health.ok,
-                           "quota": quota.ok, "scheduler": sched.ok},
+            "artist_universe": universe.data if universe.ok else None,
+            "downstream": {"coverage": cov.ok, "provider_health": health.ok, "quota": quota.ok,
+                           "scheduler": sched.ok, "artist_universe": universe.ok,
+                           "quota_buckets": buckets.ok},
         }
 
     async def summary(self) -> dict[str, Any]:

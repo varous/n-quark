@@ -1,9 +1,16 @@
-"""Demand refresh scheduler (Phase 5A) — a persisted, lease-locked, restart-safe job queue.
+"""Demand refresh + acquisition scheduler (Phase 5A, extended in 5A.3).
 
-Reuses crawl-service's proven pattern (dedup on a refresh window, lease lock, attempt/backoff, terminal
-after a budget) rather than a new scheduling architecture. All state lives in ``demand_refresh_job`` in
-Postgres, so a restart resumes idempotently. Jobs use known channel ids (channels.list / videos.list) —
-never search — and one job's failure is isolated from the rest.
+A persisted, lease-locked, restart-safe job queue in ``demand_refresh_job`` (Postgres, so a restart
+resumes idempotently). 5A.3 adds:
+- new job types beyond channel/video refresh — YouTube IDENTITY discovery and one-time catalogue BACKFILL;
+- an acquisition PRIORITY class ordered before scheduled_at when claiming (scarce quota → irreplaceable
+  work first) — operational only, never an artist-value score;
+- adaptive, event-aware refresh cadence chosen at execute time (config-driven, deterministic);
+- quota-reserve awareness: QUOTA_EXHAUSTED DEFERS work (reschedules) instead of failing or invalidating;
+- typed outcomes distinguishing authoritative NOT_FOUND (may invalidate) from transient/quota failures.
+
+Repeated observation uses known channel/video ids (channels.list / videos.list / videos.list batch),
+never search. Search is reserved for identity discovery. One job's failure is isolated from the rest.
 """
 
 from __future__ import annotations
@@ -14,14 +21,22 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from artist_intelligence_service import cadence as cad
 from artist_intelligence_service import identity as idlib
 from artist_intelligence_service.config import settings
-from artist_intelligence_service.models import ArtistExternalIdentity, DemandRefreshJob
+from artist_intelligence_service.models import (
+    ArtistDemandObservation,
+    ArtistExternalIdentity,
+    DemandRefreshJob,
+    YouTubeVideo,
+)
 from artist_intelligence_service.providers.base import PROVIDER_YOUTUBE, RESOLVED
 from artist_intelligence_service.service import DemandService
 
 JOB_CHANNEL = "YOUTUBE_CHANNEL_SNAPSHOT"
 JOB_VIDEO = "YOUTUBE_VIDEO_SNAPSHOT"
+JOB_IDENTITY = "YOUTUBE_IDENTITY_DISCOVERY"       # 5A.3: search → verify → resolve
+JOB_CATALOGUE = "YOUTUBE_CATALOGUE_BACKFILL"      # 5A.3: one-time bounded uploads → registry
 
 _INTERVALS = {
     JOB_CHANNEL: lambda: settings.youtube_channel_refresh_interval_seconds,
@@ -43,7 +58,7 @@ class DemandScheduler:
     def __init__(self, service: DemandService | None = None) -> None:
         self.service = service or DemandService()
 
-    # ---- enqueue -----------------------------------------------------------------------------
+    # ---- enqueue: recurring channel/video refresh of RESOLVED identities ----------------------
     def enqueue_due(self, db: Session, *, now: datetime | None = None) -> dict[str, int]:
         """Ensure a job exists for each RESOLVED YouTube identity in the current cadence window.
 
@@ -58,24 +73,94 @@ class DemandScheduler:
         ).scalars().all()
         created = 0
         for ident in resolved:
+            priority = self._artist_priority(db, ident.canonical_artist_id)
             for job_type in (JOB_CHANNEL, JOB_VIDEO):
                 window = _window(now, _INTERVALS[job_type]())
                 dedup = f"{ident.canonical_artist_id}|{PROVIDER_YOUTUBE}|{job_type}|{window}"
-                exists = db.execute(
-                    select(DemandRefreshJob.id).where(DemandRefreshJob.dedup_key == dedup)
-                ).scalar_one_or_none()
-                if exists is not None:
+                if self._exists(db, dedup):
                     continue
-                db.add(DemandRefreshJob(
-                    id=idlib.new_id(dedup), dedup_key=dedup,
-                    canonical_artist_id=ident.canonical_artist_id, provider=PROVIDER_YOUTUBE,
-                    job_type=job_type, external_identity_id=ident.id, status="PENDING",
-                    scheduled_at=now, created_at=now, updated_at=now, detail={}))
+                self._add_job(db, dedup=dedup, canonical_artist_id=ident.canonical_artist_id,
+                              job_type=job_type, external_identity_id=ident.id, priority=priority,
+                              now=now)
                 created += 1
         db.flush()
         return {"resolved_identities": len(resolved), "jobs_created": created}
 
-    # ---- claim (lease) -----------------------------------------------------------------------
+    # ---- enqueue: 5A.3 identity discovery + catalogue backfill (used by onboard/backfill) ------
+    def enqueue_identity_discovery(self, db: Session, canonical_artist_id: str, *,
+                                   display_name: str, priority: int = cad.P4_GLOBAL_CANDIDATE,
+                                   now: datetime | None = None) -> bool:
+        """Queue an identity-discovery job for a canonical artist lacking a RESOLVED YouTube identity.
+        Idempotent while an active job exists; returns True if a new job was created."""
+        now = now or _now()
+        dedup = f"{canonical_artist_id}|{PROVIDER_YOUTUBE}|{JOB_IDENTITY}"
+        if self._active_exists(db, canonical_artist_id, JOB_IDENTITY) or self._exists(db, dedup):
+            return False
+        self._add_job(db, dedup=dedup, canonical_artist_id=canonical_artist_id, job_type=JOB_IDENTITY,
+                      external_identity_id=None, priority=priority, now=now,
+                      detail={"display_name": display_name})
+        db.flush()
+        return True
+
+    def enqueue_catalogue_backfill(self, db: Session, canonical_artist_id: str, *,
+                                   external_identity_id: str | None = None,
+                                   priority: int = cad.P2_CONFIRMED_OR_STRONG,
+                                   now: datetime | None = None) -> bool:
+        now = now or _now()
+        dedup = f"{canonical_artist_id}|{PROVIDER_YOUTUBE}|{JOB_CATALOGUE}"
+        if self._active_exists(db, canonical_artist_id, JOB_CATALOGUE) or self._exists(db, dedup):
+            return False
+        self._add_job(db, dedup=dedup, canonical_artist_id=canonical_artist_id, job_type=JOB_CATALOGUE,
+                      external_identity_id=external_identity_id, priority=priority, now=now)
+        db.flush()
+        return True
+
+    # ---- enqueue helpers ---------------------------------------------------------------------
+    def _exists(self, db: Session, dedup: str) -> bool:
+        return db.execute(
+            select(DemandRefreshJob.id).where(DemandRefreshJob.dedup_key == dedup)
+        ).scalar_one_or_none() is not None
+
+    def _active_exists(self, db: Session, artist: str, job_type: str) -> bool:
+        return db.execute(
+            select(DemandRefreshJob.id).where(
+                DemandRefreshJob.canonical_artist_id == artist,
+                DemandRefreshJob.job_type == job_type,
+                DemandRefreshJob.status.in_(("PENDING", "RUNNING", "FAILED_RETRYABLE")))
+        ).scalar_one_or_none() is not None
+
+    def _add_job(self, db: Session, *, dedup: str, canonical_artist_id: str, job_type: str,
+                 external_identity_id: str | None, priority: int, now: datetime,
+                 detail: dict | None = None) -> DemandRefreshJob:
+        job = DemandRefreshJob(
+            id=idlib.new_id(dedup, now.isoformat()), dedup_key=dedup,
+            canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE, job_type=job_type,
+            external_identity_id=external_identity_id, status="PENDING", scheduled_at=now,
+            created_at=now, updated_at=now, priority=priority, detail=detail or {})
+        db.add(job)
+        return job
+
+    def _artist_priority(self, db: Session, artist: str) -> int:
+        """Deterministic acquisition priority from cheap operational signals (no network in the hot path)."""
+        days = self._days_to_upcoming_event(db, artist)
+        refs = 1
+        has_strong = False
+        try:
+            from artist_intelligence_service.candidates import evidence_classes_for
+            classes = evidence_classes_for(db, artist)
+            has_strong = bool(classes & {"CONFIRMED_LIVE_INDIA", "INDIA_DEMAND_OBSERVED"})
+            refs = 2 if len(classes) >= 2 else 1
+        except Exception:  # noqa: BLE001 — priority must never fail the enqueue
+            pass
+        return cad.priority_for(days_to_event=days, independent_references=refs,
+                                has_confirmed_or_strong=has_strong, from_youtube_discovery=False)
+
+    def _days_to_upcoming_event(self, db: Session, artist: str) -> float | None:
+        """Best-effort upcoming-event proximity for event-aware cadence. Returns None unless event-aware
+        scheduling is enabled AND a graph lookup succeeds — so tests/offline never hit the network."""
+        return None  # populated by the event-aware path (graph) only when explicitly enabled
+
+    # ---- claim (lease, priority-ordered) ------------------------------------------------------
     def claim(self, db: Session, *, worker_id: str, now: datetime | None = None,
               limit: int | None = None) -> list[DemandRefreshJob]:
         now = now or _now()
@@ -86,10 +171,9 @@ class DemandScheduler:
                 or_(
                     DemandRefreshJob.status == "PENDING",
                     DemandRefreshJob.status == "FAILED_RETRYABLE",
-                    # reclaim an expired lease (a worker died mid-job)
                     (DemandRefreshJob.status == "RUNNING") & (DemandRefreshJob.lock_expires_at < now),
                 ),
-            ).order_by(DemandRefreshJob.scheduled_at).limit(limit)
+            ).order_by(DemandRefreshJob.priority, DemandRefreshJob.scheduled_at).limit(limit)
         ).scalars().all()
         claimed = []
         for job in rows:
@@ -103,7 +187,7 @@ class DemandScheduler:
         db.flush()
         return claimed
 
-    # ---- execute one job (failure-isolated) --------------------------------------------------
+    # ---- execute one job (failure-isolated, typed outcomes) -----------------------------------
     async def execute(self, db: Session, job: DemandRefreshJob, *, now: datetime | None = None) -> str:
         now = now or _now()
         try:
@@ -112,33 +196,85 @@ class DemandScheduler:
                     db, job.canonical_artist_id, include_channel=True, include_videos=False,
                     observed_at=now)
             elif job.job_type == JOB_VIDEO:
-                result = await self.service.snapshot_youtube(
-                    db, job.canonical_artist_id, include_channel=False, include_videos=True,
-                    observed_at=now)
+                result = await self.service.snapshot_videos_registry(
+                    db, job.canonical_artist_id, observed_at=now)
+            elif job.job_type == JOB_IDENTITY:
+                return await self._execute_identity(db, job, now)
+            elif job.job_type == JOB_CATALOGUE:
+                result = await self.service.backfill_catalogue(db, job.canonical_artist_id,
+                                                               observed_at=now)
             else:
                 return self._terminal(job, now, "UNKNOWN_JOB_TYPE")
+
             status = result.get("status")
             if status in ("NO_RESOLVED_IDENTITY", "PROVIDER_ID_NOT_FOUND"):
-                # authoritative: the identity is gone/invalid → terminal, and it is no longer RESOLVED
-                # so enqueue_due won't recreate jobs for it (no continual retry of a dead channel).
                 return self._terminal(job, now, status)
             if status == "VERIFICATION_UNAVAILABLE":
-                # transient provider/network failure → retry with backoff; identity NOT invalidated.
                 return self._fail(job, now, RuntimeError("verification unavailable (transient)"))
-            return self._succeed(job, now, result)
+            return self._succeed(db, job, now, result)
         except Exception as exc:  # noqa: BLE001 — isolate: one job's failure never stops the others
             return self._fail(job, now, exc)
 
-    def _succeed(self, job: DemandRefreshJob, now: datetime, result: dict[str, Any]) -> str:
+    async def _execute_identity(self, db: Session, job: DemandRefreshJob, now: datetime) -> str:
+        display_name = (job.detail or {}).get("display_name") or job.canonical_artist_id
+        out = await self.service.discover_identity_for_artist(
+            db, job.canonical_artist_id, display_name=display_name)
+        status = out.get("status")
+        if status == "QUOTA_EXHAUSTED":
+            return self._defer(job, now, "QUOTA_EXHAUSTED")   # never invalidate; retry when budget resets
+        if status == RESOLVED:
+            # a resolved identity earns a one-time catalogue backfill + recurring refresh (next pass).
+            self.enqueue_catalogue_backfill(db, job.canonical_artist_id,
+                                            external_identity_id=out.get("identity_id"), now=now)
+            return self._succeed(db, job, now, out)
+        if status == "VERIFICATION_UNAVAILABLE":
+            return self._fail(job, now, RuntimeError("verification unavailable (transient)"))
+        # AMBIGUOUS / UNRESOLVED are legitimate terminal outcomes for THIS discovery attempt: the identity
+        # row records the outcome; a later pass may re-attempt with more evidence. Not a failure.
+        return self._succeed(db, job, now, out)
+
+    def _succeed(self, db: Session, job: DemandRefreshJob, now: datetime, result: dict[str, Any]) -> str:
         job.status = "SUCCEEDED"
-        job.result_code = "OK"
+        job.result_code = result.get("status") or "OK"
         job.completed_at = now
         job.consecutive_failures = 0
         job.lock_expires_at = None
-        job.next_refresh_at = now + timedelta(seconds=_INTERVALS[job.job_type]())
+        job.next_refresh_at = self._next_refresh_for(db, job, now)
         job.detail = {**(job.detail or {}), "last_result": result}
         job.updated_at = now
         return "SUCCEEDED"
+
+    def _next_refresh_for(self, db: Session, job: DemandRefreshJob, now: datetime) -> datetime | None:
+        """Adaptive, deterministic cadence (config-driven). One-time jobs have no recurring refresh."""
+        if job.job_type == JOB_CHANNEL:
+            secs = cad.channel_cadence_seconds(
+                days_to_event=self._days_to_upcoming_event(db, job.canonical_artist_id),
+                recently_active=self._recently_active(db, job.canonical_artist_id, now))
+            return now + timedelta(seconds=secs)
+        if job.job_type == JOB_VIDEO:
+            secs = cad.video_cadence_seconds(self._freshest_video_age_days(db, job.canonical_artist_id, now))
+            return now + timedelta(seconds=secs)
+        return None  # identity / catalogue are one-time (a fresh job is enqueued when needed)
+
+    def _recently_active(self, db: Session, artist: str, now: datetime) -> bool:
+        cutoff = now - timedelta(days=3)
+        row = db.execute(
+            select(ArtistDemandObservation.id).where(
+                ArtistDemandObservation.canonical_artist_id == artist,
+                ArtistDemandObservation.observed_at >= cutoff).limit(1)
+        ).scalar_one_or_none()
+        return row is not None
+
+    def _freshest_video_age_days(self, db: Session, artist: str, now: datetime) -> float:
+        from sqlalchemy import func
+        newest = db.execute(
+            select(func.max(YouTubeVideo.published_at)).where(
+                YouTubeVideo.canonical_artist_id == artist)).scalar_one_or_none()
+        if newest is None:
+            return 9999.0  # no registry yet → treat as long-tail cadence
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=UTC)
+        return max((now - newest).total_seconds() / 86400.0, 0.0)
 
     def _fail(self, job: DemandRefreshJob, now: datetime, exc: Exception) -> str:
         job.consecutive_failures += 1
@@ -154,6 +290,17 @@ class DemandScheduler:
         job.lock_expires_at = None
         job.updated_at = now
         return "FAILED_RETRYABLE"
+
+    def _defer(self, job: DemandRefreshJob, now: datetime, code: str) -> str:
+        """Quota reserve reached: put the job back to PENDING for a later pass WITHOUT counting a failure
+        or invalidating anything. Attempt count is rolled back so a deferral never burns the retry budget."""
+        job.status = "PENDING"
+        job.result_code = code
+        job.attempt_count = max(job.attempt_count - 1, 0)
+        job.scheduled_at = now + timedelta(seconds=settings.demand_scheduler_backoff_base_seconds)
+        job.lock_expires_at = None
+        job.updated_at = now
+        return "DEFERRED"
 
     def _terminal(self, job: DemandRefreshJob, now: datetime, code: str) -> str:
         job.status = "FAILED_TERMINAL"

@@ -167,6 +167,40 @@ class YouTubeProvider(ArtistIntelligenceProvider):
             raise ChannelNotFound(provider_id)
         return self.channel_demand_from_verification(provider_id, verification)
 
+    async def list_uploads(self, provider_id: str, *, limit: int) -> dict[str, Any]:
+        """Raw uploads (video metadata) for the catalogue registry (Phase 5A.3). Meters a bounded
+        general read (channels.list + playlistItems.list + videos.list ≈ 3 units). Discovers via the
+        official uploads playlist, never search."""
+        payload = await self.signal.youtube_videos(provider_id, limit=limit)
+        self.meter.read(units=3)
+        return {"videos": payload.get("videos") or [], "mock": bool(payload.get("mock"))}
+
+    async def get_video_stats_batch(self, video_ids: list[str]) -> list[DemandDatum]:
+        """Batch video statistics for known ids via signal-service videos.list (Phase 5A.3). Quota-
+        efficient (VIDEO_STATS_BATCH bucket, ~1 unit / 50 ids) for high-volume known-video refreshes."""
+        payload = await self.signal.youtube_videos_batch(video_ids)
+        self.meter.video_batch(units=1)
+        mock = bool(payload.get("mock"))
+        out: list[DemandDatum] = []
+        for v in payload.get("videos") or []:
+            vid = v.get("video_id")
+            if not vid:
+                continue
+            ts = _parse_ts(v.get("published_at"))
+            prov = self._provenance("videos.list:batch", mock,
+                                    {"video_id": vid, "published_at": v.get("published_at"),
+                                     "title": v.get("title")})
+            for metric, key in ((YT_VIDEO_VIEWS, "views"), (YT_VIDEO_LIKES, "likes"),
+                                (YT_VIDEO_COMMENTS, "comments")):
+                val = _as_int(v.get(key))
+                if val is not None:
+                    out.append(DemandDatum(metric=metric, value_numeric=val, unit="count",
+                                           scope_type="CONTENT", scope_id=vid,
+                                           scope_label=v.get("title"), provider_timestamp=ts,
+                                           evidence_status=DIRECT_PROVIDER_VALUE,
+                                           dedup_extra=vid, provenance=prov))
+        return out
+
     async def get_content_snapshot(self, provider_id: str, *, limit: int) -> list[DemandDatum]:
         self._require(CAP_CONTENT_SNAPSHOT)
         payload = await self.signal.youtube_videos(provider_id, limit=limit)

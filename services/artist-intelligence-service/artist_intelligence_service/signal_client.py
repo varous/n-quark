@@ -34,6 +34,19 @@ class SignalClient:
         except httpx.HTTPError as exc:
             raise SignalAcquisitionError(f"signal-service {path} failed: {exc}") from exc
 
+    async def _post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+                resp = await client.post(f"{self.base_url}{path}", json=json)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPError as exc:
+            raise SignalAcquisitionError(f"signal-service {path} failed: {exc}") from exc
+
+    async def youtube_videos_batch(self, video_ids: list[str]) -> dict[str, Any]:
+        """Batch statistics for known video ids (Phase 5A.3; videos.list, 1 unit / 50 ids)."""
+        return await self._post("/v1/signals/youtube/videos/batch", {"video_ids": video_ids})
+
     async def youtube_search(self, query: str, *, limit: int) -> dict[str, Any]:
         """Bounded channel search for identity discovery. Returns {query, candidates[], mock}."""
         return await self._get("/v1/signals/youtube/search", {"q": query, "limit": limit})

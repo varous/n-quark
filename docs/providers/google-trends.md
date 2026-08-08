@@ -77,3 +77,14 @@ from state/subregion data. Unmapped regions keep a slug scope id and a `region_i
 
 `NQUARK_GOOGLE_TRENDS_MODE` (`IMPORT` default / `OFFICIAL_API` / `DISABLED`),
 `NQUARK_GOOGLE_TRENDS_API_KEY`, `NQUARK_GOOGLE_TRENDS_API_BASE`, `NQUARK_GOOGLE_TRENDS_DEFAULT_REGION`.
+
+## Phase 5A.3 — official-API readiness (still gated)
+
+Policy is unchanged: **official API or explicit CSV import only — no scraping fallback**. Production
+normally remains `OFFICIAL_API = ACCESS_UNAVAILABLE` (no alpha creds) with IMPORT available; this is a
+legitimate state, not an error. The official provider now declares the intended collection shape for when
+alpha access is granted — `backfill_historical` (one-time maximum permitted daily window, India +
+sub-regions, SEARCH_TERM/TOPIC preserved) and `incremental` (only newly-available periods) — both **gated**
+(raise `ACCESS_UNAVAILABLE` until access exists). Trends data updates at most daily: `supports_intraday`
+is False and there is **no intraday Trends polling loop**. SEARCH_TERM vs TOPIC stays distinct;
+independently normalised exports are never merged.

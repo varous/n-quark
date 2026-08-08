@@ -101,3 +101,12 @@ class YouTubeVideoSignals(BaseModel):
     videos: list[YouTubeVideoStat]
     fetched_at: datetime
     mock: bool = False
+
+
+class YouTubeVideoBatchResult(BaseModel):
+    """videos.list batch statistics for known video ids (Phase 5A.3). One quota unit for up to 50 ids —
+    far cheaper than per-video reads for high-volume known-video refreshes."""
+    requested: int
+    videos: list[YouTubeVideoStat]
+    fetched_at: datetime
+    mock: bool = False

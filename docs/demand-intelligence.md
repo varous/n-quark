@@ -141,3 +141,58 @@ The browser never calls the demand service directly. A demand-service outage deg
 manifest and `NQUARK_ADMIN_API_ENABLED`/`NQUARK_ADMIN_LOCAL_MODE` stay pinned off on cloud (enforced by
 test). The production artist-intelligence-service remains private Flycast infrastructure; this phase adds
 no cloud surface. `docs/product-spec.md` is untouched.
+
+## Phase 5A.3 — Indian artist universe & demand saturation
+
+Decouples the artist universe from ticketing coverage and maximises irreplaceable temporal collection.
+See ADR-0018. Reuses the existing spine (signal-service = single acquisition path; artist-intelligence =
+stateful demand; entity/graph = canonical ownership). All new behaviour is flag-gated and OFF by default.
+
+**Candidate vs canonical artist.** `artist_candidate` is a *proposed* artist from a discovery surface
+(EVENT / YOUTUBE_SEARCH / YOUTUBE_ECOSYSTEM / IMPORT), idempotent on `(discovery_source,
+discovery_source_id)`. Statuses: NEW → RESOLUTION_PENDING → RESOLVED / AMBIGUOUS / REJECTED. A candidate
+is **never** a canonical artist and never creates one; it links to an existing canonical artist through
+the entity architecture. Arbitrary YouTube results therefore cannot pollute the canonical graph.
+
+**Automatic onboarding + backfill.** `POST /v1/internal/artists/{id}/onboard` records a RESOLVED
+candidate + India market evidence and enqueues identity discovery if no RESOLVED YouTube identity exists.
+`POST /v1/internal/backfill/artists` enumerates the existing canonical cohort (via crawl) and queues those
+lacking an identity — bounded per pass (`ARTIST_BACKFILL_BATCH_SIZE`), persisted, quota-managed. The
+collector runs both automatically when `ARTIST_AUTO_ONBOARD_ENABLED` / `YOUTUBE_DISCOVERY_ENABLED` are on,
+so no manual operator call is needed. Boshow/District historical artists thus enter the pipeline on their
+own; BookMyShow is never a gatekeeper.
+
+**India market-presence evidence** (`artist_market_evidence`) — provenance-bearing *classifications*, not
+a score: `CONFIRMED_LIVE_INDIA` (observed event/lineup/venue/promoter/tour/feed), `INDIA_DEMAND_OBSERVED`
+(India/sub-region Trends — not proof of performing), `INDIA_MARKET_CANDIDATE` (market-relevant, weaker
+evidence). Idempotent on `(canonical_artist_id, evidence_class, source, source_ref)`.
+
+**Quota model.** Per-bucket accounting (`provider_quota_bucket_day`): SEARCH / GENERAL_READ /
+VIDEO_STATS_BATCH, each a configurable fraction of the daily pool. The quota day follows the provider's
+reset timezone (`YOUTUBE_QUOTA_RESET_TZ`, default midnight Pacific), not UTC. Target utilisation
+(`YOUTUBE_QUOTA_TARGET_UTILIZATION`, default 0.95) with a reserve (0.05); the scheduler **defers** work
+(never invalidates identities) once the reserve is reached. Search is allocated across
+unresolved-artist / new-discovery / ambiguity / reserve (`YOUTUBE_SEARCH_ALLOC_*`) and never spent on
+known-id refresh. The legacy `provider_quota_day` aggregate is still written for back-compat.
+
+**Video registry** (`youtube_video`) is separate from time-series observations: a bounded one-time
+catalogue backfill (`YOUTUBE_CATALOGUE_BACKFILL_DEPTH`) captures stable metadata once (title,
+published_at, …); demand metrics live in `artist_demand_observation`.
+
+**Hourly observations.** YouTube live metrics bucket by hour (`YOUTUBE_HOURLY_OBSERVATIONS`, default on);
+Trends stays daily. Idempotent on the observation hour — a same-hour rerun is one logical observation, the
+next hour is new history. Old **daily** records remain valid; hourly precision is never retrofitted.
+
+**Adaptive + event-aware cadence** (config-driven, deterministic): channel cadence by event proximity /
+activity; video cadence by upload age; artist cadence accelerated around Indian events (T-60 → T+3). Values
+are `CADENCE_*` config, bounded by quota. This enriches the event-response read model without changing its
+epistemic claim (temporal co-movement only, no causal inference).
+
+**Acquisition priority** (P0 upcoming event … P4 global candidate) orders the queue — operational urgency,
+not artist value. **Failure semantics** are typed: only authoritative `PROVIDER_ID_NOT_FOUND` invalidates;
+`QUOTA_EXHAUSTED` defers; transient failures retry with backoff (5A.1a preserved).
+
+**Diagnostics.** `GET /v1/internal/demand/artist-universe` (candidate counts, India evidence classes,
+identity coverage, video registry counts, discovery-source contribution, queue depth) and
+`/demand/quota-buckets` (per-bucket used/budget/remaining + reserve), surfaced read-only through the
+existing Demand Intelligence admin screen.

@@ -19,6 +19,20 @@ from artist_intelligence_service.scheduler import DemandScheduler
 async def _tick(scheduler: DemandScheduler) -> None:
     db = SessionLocal()
     try:
+        # Phase 5A.3: keep the universe filling itself — enqueue missing-identity backfill and run
+        # bounded YouTube discovery (both flag-gated, quota-aware, persisted) BEFORE draining, so no
+        # manual operator invocation is needed. Each is best-effort; a failure never stops the drain.
+        if settings.artist_auto_onboard_enabled:
+            import contextlib as _c
+            from artist_intelligence_service import universe
+            with _c.suppress(Exception):
+                await universe.backfill_missing_identities(db, scheduler=scheduler)
+        if settings.youtube_discovery_enabled:
+            import contextlib as _c
+            from artist_intelligence_service import discovery
+            with _c.suppress(Exception):
+                await discovery.run_youtube_discovery(db)
+                db.commit()
         await scheduler.run_once(db, worker_id="demand-collector")
     finally:
         db.close()

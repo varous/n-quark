@@ -192,6 +192,31 @@ class GoogleTrendsProvider(ArtistIntelligenceProvider):
         self._guard()
         raise ProviderAccessUnavailable("official historical interest not implemented (no alpha docs)")
 
+    # ---- Phase 5A.3: official-API collection-mode readiness (gated) --------------------------
+    # Trends data updates at most daily; there is NO value in intraday polling, and the scheduler must
+    # not create an intraday Trends loop. These declare the intended collection shape for when alpha
+    # access is granted; until then every call honestly reports ACCESS_UNAVAILABLE (never fabricated).
+    supports_intraday: bool = False
+    natural_cadence_seconds: int = 86400
+
+    async def backfill_historical(self, provider_id: str, *, region: str = "IN",
+                                  max_days: int | None = None, identity_type: str = "SEARCH_TERM"
+                                  ) -> list[DemandDatum]:
+        """One-time maximum-permitted historical daily window (India + sub-regions) for a resolved
+        Trends identity. Gated: raises ACCESS_UNAVAILABLE until official alpha access exists."""
+        self._require(CAP_HISTORICAL)
+        self._guard()
+        raise ProviderAccessUnavailable("official historical backfill unavailable (no alpha access)")
+
+    async def incremental(self, provider_id: str, *, region: str = "IN",
+                          since: str | None = None, identity_type: str = "SEARCH_TERM"
+                          ) -> list[DemandDatum]:
+        """Collect only newly-available periods at the natural (daily) Trends cadence — never intraday.
+        Gated: raises ACCESS_UNAVAILABLE until official alpha access exists."""
+        self._require(CAP_HISTORICAL)
+        self._guard()
+        raise ProviderAccessUnavailable("official incremental collection unavailable (no alpha access)")
+
 
 def _parse_date(value: str):
     from datetime import UTC, datetime

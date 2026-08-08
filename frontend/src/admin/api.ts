@@ -198,7 +198,9 @@ export type DemandOverview = {
   coverage: Record<string, unknown> | null;
   provider_health: { providers?: { youtube?: Record<string, unknown>; google_trends?: Record<string, unknown> } } | null;
   quota: { days?: Array<Record<string, unknown>>; youtube_max_searches_per_day?: number } | null;
+  quota_buckets: Record<string, unknown> | null;
   scheduler: Record<string, unknown> | null;
+  artist_universe: Record<string, unknown> | null;
   downstream: Record<string, boolean>;
 };
 export type DemandSummary = {

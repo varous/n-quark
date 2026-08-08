@@ -153,3 +153,53 @@ def quota(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.get("/demand/scheduler", summary="Read-only demand refresh scheduler state")
 def scheduler_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     return intelligence.build_scheduler_state(db)
+
+
+@router.get("/demand/quota-buckets", summary="Per-bucket YouTube quota accounting (5A.3)")
+def quota_buckets(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return intelligence.build_quota_buckets(db)
+
+
+@router.get("/demand/artist-universe", summary="Artist-universe coverage diagnostics (5A.3)")
+async def artist_universe(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import universe
+    return await universe.build_artist_universe(db)
+
+
+# ---- artist universe: onboarding + backfill + discovery (Phase 5A.3) ---------------------------
+class OnboardRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=600)
+    source_id: str | None = None
+    evidence_class: str | None = "CONFIRMED_LIVE_INDIA"
+    evidence_source: str = "EVENT"
+    evidence_ref: str | None = None
+
+
+@router.post("/artists/{artist_id}/onboard", summary="Onboard a canonical artist into demand resolution")
+def onboard(artist_id: str, body: OnboardRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import universe
+    out = universe.onboard_artist(
+        db, canonical_artist_id=artist_id, display_name=body.display_name, source_id=body.source_id,
+        evidence_class=body.evidence_class, evidence_source=body.evidence_source,
+        evidence_ref=body.evidence_ref)
+    db.commit()
+    return out
+
+
+@router.post("/backfill/artists", summary="Queue existing canonical artists lacking a YouTube identity")
+async def backfill_artists(limit: int = Query(default=50, ge=1, le=500),
+                           db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import universe
+    out = await universe.backfill_missing_identities(db, limit=limit)
+    db.commit()
+    return out
+
+
+@router.post("/discovery/youtube/run", summary="Run bounded YouTube artist discovery (candidates only)")
+async def run_discovery(max_queries: int | None = Query(default=None, ge=1, le=25),
+                        db: Session = Depends(get_db),
+                        svc: DemandService = Depends(get_service)) -> dict[str, Any]:
+    from artist_intelligence_service import discovery
+    out = await discovery.run_youtube_discovery(db, provider=svc.youtube, max_queries=max_queries)
+    db.commit()
+    return out

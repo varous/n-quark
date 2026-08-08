@@ -209,6 +209,7 @@ from signal_service.schemas import (
     YouTubeChannelVerification,
     YouTubeSearchCandidate,
     YouTubeSearchResult,
+    YouTubeVideoBatchResult,
     YouTubeVideoSignals,
     YouTubeVideoStat,
 )
@@ -424,6 +425,38 @@ class YouTubeClient:
                         comments=_as_int(st.get("commentCount"))))
         return YouTubeVideoSignals(channel_id=channel_id, uploads_playlist_id=uploads,
                                    videos=videos, fetched_at=when, mock=False)
+
+    async def fetch_video_stats_batch(self, video_ids: list[str]) -> "YouTubeVideoBatchResult":
+        """Batch statistics for known video ids via videos.list (Phase 5A.3). One quota unit for up to
+        50 ids — the quota-efficient path for high-volume known-video refreshes. Repeated observation
+        uses known ids, never search. No unofficial scraping."""
+        when = datetime.now(UTC)
+        ids = [v for v in dict.fromkeys(video_ids) if v][:50]   # dedupe, cap at the API's 50-id limit
+        if settings.use_youtube_mock:
+            by_id = {r["video_id"]: r for rows in _MOCK_VIDEOS.values() for r in rows}
+            videos = [YouTubeVideoStat(video_id=vid, title=(by_id.get(vid) or {}).get("title"),
+                                       published_at=_parse_ts((by_id.get(vid) or {}).get("published_at")),
+                                       views=(by_id.get(vid) or {}).get("views"),
+                                       likes=(by_id.get(vid) or {}).get("likes"),
+                                       comments=(by_id.get(vid) or {}).get("comments"))
+                      for vid in ids if vid in by_id]
+            return YouTubeVideoBatchResult(requested=len(ids), videos=videos, fetched_at=when, mock=True)
+        videos = []
+        if ids:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                vresp = await client.get(
+                    f"{settings.youtube_api_base}/videos",
+                    params={"part": "snippet,statistics", "id": ",".join(ids),
+                            "key": settings.youtube_api_key})
+                vresp.raise_for_status()
+                for v in vresp.json().get("items") or []:
+                    snip, st = v.get("snippet") or {}, v.get("statistics") or {}
+                    videos.append(YouTubeVideoStat(
+                        video_id=v.get("id"), title=snip.get("title"),
+                        published_at=_parse_ts(snip.get("publishedAt")),
+                        views=_as_int(st.get("viewCount")), likes=_as_int(st.get("likeCount")),
+                        comments=_as_int(st.get("commentCount"))))
+        return YouTubeVideoBatchResult(requested=len(ids), videos=videos, fetched_at=when, mock=False)
 
     async def fetch_channel(self, channel_id: str) -> YouTubeChannelSignals:
         if settings.use_youtube_mock:

@@ -158,6 +158,135 @@ class DemandRefreshJob(Base):
     result_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Acquisition priority class (Phase 5A.3): lower = more urgent (P0=0 … P4=40). Ordered before
+    # scheduled_at when claiming, so scarce quota goes to the most irreplaceable work first. This is an
+    # operational priority, NOT an artist-value/popularity score.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
     detail: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArtistCandidate(Base):
+    """Phase 5A.3 — a discovered artist candidate, BEFORE any canonical decision.
+
+    Decouples the artist universe from ticketing coverage: candidates arrive from multiple discovery
+    surfaces (event-derived, YouTube search/ecosystem, future ingestion seams) and only become linked to
+    a canonical ARTIST through the existing entity-resolution semantics. A candidate is NEVER a canonical
+    artist and NEVER creates one. Idempotent on (discovery_source, discovery_source_id): repeated
+    discovery of the same source id merges evidence instead of exploding rows."""
+
+    __tablename__ = "artist_candidate"
+    __table_args__ = (
+        Index("uq_artist_candidate_source", "discovery_source", "discovery_source_id", unique=True),
+        Index("ix_artist_candidate_status", "status"),
+        Index("ix_artist_candidate_canonical", "canonical_artist_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(600), nullable=False)
+    discovery_source: Mapped[str] = mapped_column(String(48), nullable=False)      # EVENT|YOUTUBE_SEARCH|YOUTUBE_ECOSYSTEM|IMPORT
+    discovery_source_id: Mapped[str] = mapped_column(String(600), nullable=False)  # stable id within the source
+    discovery_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    country_hint: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    region_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    language_hint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    genre_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # NEW | RESOLUTION_PENDING | RESOLVED | AMBIGUOUS | REJECTED
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="NEW")
+    canonical_artist_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    evidence_refs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column("evidence_json", _json_type(), nullable=False, default=dict)
+    provenance: Mapped[dict[str, Any]] = mapped_column("provenance_json", _json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArtistMarketEvidence(Base):
+    """Phase 5A.3 — explicit, provenance-bearing evidence of an artist's relationship to the India
+    market. Evidence CLASSIFICATIONS, never a quality/relevance score:
+
+    - ``CONFIRMED_LIVE_INDIA`` — observed Indian ticketed event / lineup / venue calendar / promoter /
+      tour / authorized feed (the artist has demonstrably played, or is booked to play, India);
+    - ``INDIA_DEMAND_OBSERVED`` — India/sub-region demand evidence (Trends) — does NOT imply performing;
+    - ``INDIA_MARKET_CANDIDATE`` — market-relevant candidate lacking stronger India evidence.
+
+    Append-only + idempotent on (canonical_artist_id, evidence_class, source, source_ref)."""
+
+    __tablename__ = "artist_market_evidence"
+    __table_args__ = (
+        Index("uq_artist_market_evidence", "canonical_artist_id", "evidence_class", "source",
+              "source_ref", unique=True),
+        Index("ix_ame_artist", "canonical_artist_id"),
+        Index("ix_ame_class", "evidence_class"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_artist_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    country: Mapped[str] = mapped_column(String(16), nullable=False, default="IN")
+    evidence_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(48), nullable=False)          # EVENT|GOOGLE_TRENDS|YOUTUBE_DISCOVERY|IMPORT
+    source_ref: Mapped[str] = mapped_column(String(600), nullable=False)     # event id / region / query
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provenance: Mapped[dict[str, Any]] = mapped_column("provenance_json", _json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class YouTubeVideo(Base):
+    """Phase 5A.3 — the video REGISTRY for a resolved channel, separate from time-series observations.
+
+    Stable, mostly-static metadata captured once (title, published_at, duration, category, live status);
+    demand metrics (views/likes/comments over time) live in ``artist_demand_observation`` keyed by hour.
+    Idempotent on video_id."""
+
+    __tablename__ = "youtube_video"
+    __table_args__ = (
+        Index("ix_ytv_channel", "channel_id"),
+        Index("ix_ytv_artist", "canonical_artist_id"),
+        Index("ix_ytv_published", "published_at"),
+    )
+
+    video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_artist_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    external_identity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    live_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tracking_status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")  # ACTIVE|DORMANT
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProviderQuotaBucketDay(Base):
+    """Phase 5A.3 — per-bucket daily quota accounting (SEARCH | GENERAL_READ | VIDEO_STATS_BATCH).
+
+    YouTube's real quota model prices calls very differently by endpoint; collapsing everything into one
+    synthetic pool hid where budget goes. ``quota_date`` follows the provider's actual reset timezone
+    (configurable), not UTC. The legacy per-day aggregate (``provider_quota_day``) is still written for
+    back-compat; this table is the granular truth used for allocation + reserve enforcement."""
+
+    __tablename__ = "provider_quota_bucket_day"
+    __table_args__ = (
+        Index("uq_provider_quota_bucket_day", "provider", "quota_date", "bucket", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    quota_date: Mapped[datetime] = mapped_column(Date, nullable=False)   # in the provider's reset tz
+    bucket: Mapped[str] = mapped_column(String(32), nullable=False)
+    requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    successful_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quota_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

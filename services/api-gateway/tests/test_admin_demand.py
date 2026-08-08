@@ -71,7 +71,22 @@ OVERVIEW_RESPONSES = {
     "artist_intelligence:/v1/internal/demand/scheduler": {
         "enabled": True, "queued_due": 0, "running_leased": 0, "retrying": 0, "succeeded": 6,
         "terminal_failures": 1, "latest_successful_refresh": "2026-08-08T00:00:00+00:00",
-        "next_scheduled_refresh": "2026-08-09T00:00:00+00:00"},
+        "next_scheduled_refresh": "2026-08-09T00:00:00+00:00",
+        "due_by_job_type": {"channel_jobs_due": 2, "video_jobs_due": 2, "identity_jobs_due": 5,
+                            "catalogue_backfill_jobs_due": 1}},
+    "artist_intelligence:/v1/internal/demand/artist-universe": {
+        "candidates": {"total": 12, "new": 8, "resolved": 3, "ambiguous": 1, "rejected": 0},
+        "india_market_presence": {"confirmed_live_india": 3, "india_demand_observed": 1,
+                                  "india_market_candidate": 8},
+        "videos": {"videos_discovered": 40, "videos_active": 40},
+        "discovery_contribution_by_source": {"EVENT": 3, "YOUTUBE_SEARCH": 9},
+        "multi_source_artists": 1, "identity_resolution_queue_depth": 5},
+    "artist_intelligence:/v1/internal/demand/quota-buckets": {
+        "provider": "YOUTUBE", "quota_date": "2026-08-08", "reset_tz": "America/Los_Angeles",
+        "daily_quota_units": 10000, "usable_units": 9500, "reserve_units": 500, "used_total": 320,
+        "buckets": {"SEARCH": {"used": 200, "budget": 3500, "remaining": 3300},
+                    "GENERAL_READ": {"used": 100, "budget": 4500, "remaining": 4400},
+                    "VIDEO_STATS_BATCH": {"used": 20, "budget": 1500, "remaining": 1480}}},
 }
 
 
@@ -85,13 +100,18 @@ def test_overview_healthy(local):
     assert body["provider_health"]["providers"]["youtube"]["mode"]["mode"] == "REAL"
     assert body["scheduler"]["terminal_failures"] == 1
     assert body["quota"]["youtube_max_searches_per_day"] == 50
+    # Phase 5A.3 artist-universe + per-bucket quota diagnostics surface through the same BFF
+    assert body["artist_universe"]["candidates"]["total"] == 12
+    assert body["artist_universe"]["india_market_presence"]["confirmed_live_india"] == 3
+    assert body["quota_buckets"]["buckets"]["SEARCH"]["remaining"] == 3300
 
 
 def test_overview_unavailable_degrades_not_500(local):
     # every demand call is down → panel degrades, but the endpoint still returns 200
     down = {f"artist_intelligence:{p}" for p in (
         "/v1/internal/demand/coverage", "/v1/internal/demand/provider-health",
-        "/v1/internal/demand/quota", "/v1/internal/demand/scheduler")}
+        "/v1/internal/demand/quota", "/v1/internal/demand/scheduler",
+        "/v1/internal/demand/artist-universe", "/v1/internal/demand/quota-buckets")}
     app.dependency_overrides[get_demand_service] = lambda: _demand({}, unavailable=down)
     r = local.get("/admin/v1/demand/overview")
     assert r.status_code == 200

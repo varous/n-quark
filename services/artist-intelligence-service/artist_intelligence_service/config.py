@@ -1,8 +1,26 @@
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Version-controlled default India-market discovery queries (evolve via config/env, not code edits).
+# Deliberately India-oriented and genre/region/format-diverse; bounded per run by youtube_discovery_per_run.
+DEFAULT_DISCOVERY_QUERIES: tuple[str, ...] = (
+    "Indian indie artist live",
+    "Bollywood playback singer",
+    "Punjabi live concert India",
+    "Tamil music live performance",
+    "Telugu music concert",
+    "Bengali band live Kolkata",
+    "Indian classical fusion live",
+    "India music festival lineup",
+    "Hindi rap live India",
+    "Malayalam music live",
+    "Marathi live music",
+    "Indian electronic music festival",
+)
 
 
 def detect_network_mode() -> str:
@@ -98,12 +116,80 @@ class Settings(BaseSettings):
     demand_scheduler_backoff_base_seconds: int = 300
     demand_scheduler_backoff_max_seconds: int = 21600
 
+    # --- Phase 5A.3: artist universe & demand saturation (all OFF by default). ---
+    # Automatic onboarding: a canonical ARTIST without a YouTube identity is enqueued for identity
+    # discovery (no manual operator call). Backfill enumerates the existing cohort the same way.
+    artist_auto_onboard_enabled: bool = False
+    artist_backfill_batch_size: int = 50         # canonical artists enqueued per backfill pass
+    # Independent YouTube artist discovery (candidates only — never canonical artists).
+    youtube_discovery_enabled: bool = False
+    youtube_discovery_per_run: int = 3           # bounded discovery queries per scheduler pass
+    youtube_discovery_results_per_query: int = 10
+    # India-market-oriented default discovery queries (overridable; not hardcoded in business logic).
+    # Comma or newline separated; empty => the DEFAULT_DISCOVERY_QUERIES constant below is used.
+    youtube_discovery_queries: str = ""
+
+    # --- Phase 5A.3: YouTube quota buckets (configurable; Google's real model, not one synthetic pool). ---
+    # YouTube Data API v3 default project budget is 10,000 units/day, reset at midnight PROVIDER-TZ.
+    youtube_daily_quota_units: int = 10000
+    youtube_quota_reset_tz: str = "America/Los_Angeles"   # YouTube quota resets midnight Pacific, not UTC
+    youtube_quota_target_utilization: float = 0.95        # intentionally use most of the budget…
+    youtube_quota_reserve_fraction: float = 0.05          # …while keeping an operational reserve
+    # Bucket allocation as a fraction of the daily budget (sum ≤ target utilization).
+    youtube_bucket_fraction_search: float = 0.35
+    youtube_bucket_fraction_general_read: float = 0.45
+    youtube_bucket_fraction_video_batch: float = 0.15
+    # Search sub-allocation (of the SEARCH bucket) across purposes; discovery grows as the backlog drains.
+    youtube_search_alloc_unresolved: float = 0.40
+    youtube_search_alloc_discovery: float = 0.40
+    youtube_search_alloc_ambiguity: float = 0.15
+    youtube_search_alloc_reserve: float = 0.05
+
+    # --- Phase 5A.3: temporal resolution + adaptive cadence (seconds; configurable, not hardcoded). ---
+    youtube_hourly_observations: bool = True      # YouTube live metrics bucket by HOUR (Trends stays daily)
+    youtube_catalogue_backfill_depth: int = 50    # bounded one-time uploads registry backfill per channel
+    # Channel refresh cadence by activity class.
+    cadence_channel_event_imminent_s: int = 4 * 3600
+    cadence_channel_active_s: int = 6 * 3600
+    cadence_channel_standard_s: int = 86400
+    cadence_channel_longtail_s: int = 3 * 86400
+    # Video refresh cadence by upload age.
+    cadence_video_fresh_s: int = 3600             # 0–72h
+    cadence_video_recent_s: int = 4 * 3600        # 3–14d
+    cadence_video_mature_s: int = 86400           # 15–90d
+    cadence_video_old_s: int = 7 * 86400          # >90d
+    # Event-aware artist cadence by T-relative band (days before the event → seconds between refreshes).
+    cadence_event_t60_s: int = 86400              # T-60 … T-30
+    cadence_event_t30_s: int = 6 * 3600           # T-30 … T-14
+    cadence_event_t14_s: int = 4 * 3600           # T-14 … T-3
+    cadence_event_t3_s: int = 2 * 3600            # T-3 … T
+    cadence_event_post_s: int = 2 * 3600          # T … T+3 (high frequency)
+
     # --- Deterministic read-model thresholds (transparent + configurable). ---
     demand_min_observations_for_delta: int = 2   # below this: INSUFFICIENT_HISTORY
     demand_freshness_stale_hours: int = 48       # observation older than this is "stale"
     geo_affinity_high_interest_threshold: int = 60   # relative to analysed cohort (0-100 scale)
     geo_affinity_low_interest_threshold: int = 25
     demand_cohort_max_artists: int = 30          # bounded pilot cohort size
+
+    @property
+    def discovery_queries(self) -> list[str]:
+        """Effective India-market discovery queries — operator override, else the version-controlled
+        default set. Not a permanent hardcoded list in business logic; edit config/env to evolve it."""
+        raw = (self.youtube_discovery_queries or "").replace("\n", ",")
+        override = [q.strip() for q in raw.split(",") if q.strip()]
+        return override or list(DEFAULT_DISCOVERY_QUERIES)
+
+    def youtube_quota_date(self, now: datetime | None = None):
+        """Today's YouTube quota-day in the provider's reset timezone (midnight Pacific by default),
+        NOT UTC — so accounting rolls over when Google's quota actually resets."""
+        from datetime import datetime as _dt
+        now = now or _dt.now(UTC)
+        try:
+            from zoneinfo import ZoneInfo
+            return now.astimezone(ZoneInfo(self.youtube_quota_reset_tz)).date()
+        except Exception:  # noqa: BLE001 — bad tz name must never break accounting; fall back to UTC
+            return now.astimezone(UTC).date()
 
     @property
     def resolved_trends_mode(self) -> str:

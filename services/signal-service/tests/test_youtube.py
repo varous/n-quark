@@ -335,3 +335,29 @@ def test_health_reports_youtube_mock_mode(
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["youtube_mock"] == "true"
+
+
+# ---- Phase 5A.3: batch video statistics (videos.list; mock path) --------------------------------
+def test_batch_video_stats_route_mock(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    monkeypatch.setattr(settings, "youtube_api_key", "")
+    r = client.post("/v1/signals/youtube/videos/batch",
+                    json={"video_ids": ["arjt_v1", "arjt_v2", "does_not_exist"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mock"] is True
+    assert body["requested"] == 3
+    ids = {v["video_id"] for v in body["videos"]}
+    assert ids == {"arjt_v1", "arjt_v2"}          # known ids resolved; unknown id omitted (no fabrication)
+    first = next(v for v in body["videos"] if v["video_id"] == "arjt_v1")
+    assert first["views"] == 4200000
+
+
+def test_batch_video_stats_caps_at_50(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from signal_service.adapters.youtube import YouTubeClient
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    monkeypatch.setattr(settings, "youtube_api_key", "")
+    res = asyncio.run(YouTubeClient().fetch_video_stats_batch([f"v{i}" for i in range(60)]))
+    assert res.requested == 50                      # deduped + capped at the videos.list 50-id limit

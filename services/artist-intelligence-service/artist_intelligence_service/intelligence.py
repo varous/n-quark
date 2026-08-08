@@ -327,9 +327,11 @@ async def build_coverage(db: Session, *, crawl: CrawlServiceClient | None = None
 
 
 def _quota_today(db: Session) -> dict[str, Any]:
+    from artist_intelligence_service.quota import quota_date_for
     row = db.execute(
-        select(ProviderQuotaDay).where(ProviderQuotaDay.provider == PROVIDER_YOUTUBE,
-                                       ProviderQuotaDay.quota_date == _now().date())
+        select(ProviderQuotaDay).where(
+            ProviderQuotaDay.provider == PROVIDER_YOUTUBE,
+            ProviderQuotaDay.quota_date == quota_date_for(PROVIDER_YOUTUBE))
     ).scalar_one_or_none()
     if row is None:
         return {"requests": 0, "search_requests": 0, "search_quota_units": 0,
@@ -411,6 +413,11 @@ def build_scheduler_state(db: Session, *, now: datetime | None = None) -> dict[s
         select(func.min(J.scheduled_at)).where(
             J.status.in_(("PENDING", "FAILED_RETRYABLE")))).scalar_one_or_none()
     total = sum(by_status.values())
+    # per-job-type queue depth (Phase 5A.3): channel / video refresh vs identity discovery / catalogue.
+    due_states = ("PENDING", "FAILED_RETRYABLE", "RUNNING")
+    jt_rows = db.execute(
+        select(J.job_type, func.count()).where(J.status.in_(due_states)).group_by(J.job_type)).all()
+    due_by_job_type = {jt: c for jt, c in jt_rows}
     return {
         "enabled": settings.demand_scheduler_enabled,
         "intelligence_enabled": settings.demand_intelligence_enabled,
@@ -424,8 +431,28 @@ def build_scheduler_state(db: Session, *, now: datetime | None = None) -> dict[s
         "retrying": by_status.get("FAILED_RETRYABLE", 0),
         "succeeded": by_status.get("SUCCEEDED", 0),
         "terminal_failures": by_status.get("FAILED_TERMINAL", 0),
+        "due_by_job_type": {
+            "channel_jobs_due": due_by_job_type.get("YOUTUBE_CHANNEL_SNAPSHOT", 0),
+            "video_jobs_due": due_by_job_type.get("YOUTUBE_VIDEO_SNAPSHOT", 0),
+            "identity_jobs_due": due_by_job_type.get("YOUTUBE_IDENTITY_DISCOVERY", 0),
+            "catalogue_backfill_jobs_due": due_by_job_type.get("YOUTUBE_CATALOGUE_BACKFILL", 0)},
         "latest_successful_refresh": reads._aware(latest_success).isoformat() if latest_success else None,
         "next_scheduled_refresh": reads._aware(next_due).isoformat() if next_due else None,
         "notes": ["read-only scheduler state; the console exposes no scheduler actions",
                   "terminal failures include channels whose id no longer exists (PROVIDER_ID_NOT_FOUND)"],
     }
+
+
+def build_quota_buckets(db: Session) -> dict[str, Any]:
+    """Read-only per-bucket YouTube quota accounting + configured allocation (Phase 5A.3)."""
+    from artist_intelligence_service import quota
+    snap = quota.bucket_snapshot(db, PROVIDER_YOUTUBE)
+    snap["search_allocation"] = {
+        "unresolved_artists": settings.youtube_search_alloc_unresolved,
+        "new_discovery": settings.youtube_search_alloc_discovery,
+        "ambiguity_corroboration": settings.youtube_search_alloc_ambiguity,
+        "reserve": settings.youtube_search_alloc_reserve}
+    snap["notes"] = ["intentional high utilization with an operational reserve; the scheduler defers "
+                     "(never invalidates) when the reserve is reached",
+                     "quota day follows the provider's reset timezone, not UTC"]
+    return snap

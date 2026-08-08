@@ -112,3 +112,19 @@ extrapolated. None of these is called popularity, market value, ticket demand, o
 `NQUARK_YOUTUBE_ENABLED`, `NQUARK_YOUTUBE_SEARCH_ENABLED`, `NQUARK_YOUTUBE_MAX_SEARCHES_PER_DAY`,
 `NQUARK_YOUTUBE_CHANNEL_REFRESH_INTERVAL_SECONDS`, `NQUARK_YOUTUBE_RECENT_VIDEO_LIMIT`. The API key is
 `NQUARK_YOUTUBE_API_KEY` **in signal-service**.
+
+## Phase 5A.3 additions
+
+- **Discovery surface**: bounded `search.list` queries (config `YOUTUBE_DISCOVERY_QUERIES`, India-market
+  defaults) produce `artist_candidate` rows — never canonical artists. SEARCH bucket, quota-guarded.
+- **Batch statistics**: `POST /v1/signals/youtube/videos/batch` (`videos.list`, ~1 unit / 50 ids) for
+  quota-efficient known-video refreshes; the recent-videos path remains the fallback. All calls stay in
+  signal-service; no scraping.
+- **Quota buckets**: SEARCH / GENERAL_READ / VIDEO_STATS_BATCH, configurable fractions of the daily pool;
+  quota day in the provider reset tz (`YOUTUBE_QUOTA_RESET_TZ`); target-utilisation + reserve enforced.
+- **Catalogue backfill + video registry** (`youtube_video`): one-time bounded uploads discovery
+  (`YOUTUBE_CATALOGUE_BACKFILL_DEPTH`), metadata captured once, observations time-series kept separate.
+- **Hourly observations** for live metrics (`YOUTUBE_HOURLY_OBSERVATIONS`); daily records stay valid.
+- **Identity verification integrity (5A.1a) unchanged**: search discovers, `channels.list` verifies,
+  `last_verified_at` only on real verification, only authoritative NOT_FOUND invalidates. Thresholds are
+  never lowered to raise coverage.

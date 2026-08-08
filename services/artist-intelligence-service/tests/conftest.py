@@ -90,6 +90,15 @@ class FakeSignal:
         return {"channel_id": channel_id, "videos": (self._videos.get(channel_id) or [])[:limit],
                 "mock": self.mock}
 
+    async def youtube_videos_batch(self, video_ids):
+        self.calls.setdefault("videos_batch", 0)
+        self.calls["videos_batch"] += 1
+        if self.fail_videos:
+            raise RuntimeError("signal-service batch video fetch failed")
+        by_id = {r["video_id"]: r for rows in self._videos.values() for r in rows}
+        vids = [by_id[v] for v in video_ids if v in by_id]
+        return {"requested": len(video_ids), "videos": vids, "mock": self.mock}
+
 
 def candidate(channel_id, title, *, handle=None, topic=False, description=""):
     return {"channel_id": channel_id, "title": title, "handle": handle,

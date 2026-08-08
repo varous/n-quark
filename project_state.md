@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-08 (Phase 5A.2). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-09 (Phase 5A.3). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -26,6 +26,7 @@ append-only MCP — never overwrite it).
 | 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 | 4B — creative asset observation | Built **media-service** (Phase 4B scaffold): observe public event creatives over time — **content-addressed identity** (SHA-256 → normalized URL → optional phash), **safe SSRF-guarded bounded fetcher** (http(s)-only, private-net/redirect/size/MIME guards, 8 classified outcomes), **content-addressed local storage** (dedup, disable-able, bytes never in PG), dependency-free header **metadata**, deterministic **media transitions** (FIRST_SEEN/CONTENT_CHANGED/URL_CHANGED_SAME_CONTENT/ROLE_CHANGED/DISAPPEARED/REAPPEARED) in a dedicated history, `event -USES_CREATIVE-> media_asset` graph link, bounded internal APIs + coverage/failures + stable creative-summary contract. Best-effort crawl capture hook (never fails capture). No OCR/recognition/embeddings/scoring; flags default off; migration `001` additive/reversible | media-service `identity/metadata/transitions/fetcher/storage/service/reads/routes`, migration 001, crawl `media_notifier.py` + hook, ADR-0014, `docs/media-observation.md` |
 | 5A — public demand intelligence | New **artist-intelligence-service** (port 8010): demand-side layer meeting supply only through `canonical_artist_id`. Own **demand ledger** (`artist_external_identity`, `artist_demand_observation`, `provider_quota_day`, `demand_refresh_job`; separate from the event Shadow Ledger; append-only, idempotent on `observation_key`). **Reuses signal-service for YouTube acquisition** (extended with acquisition-only `search`+`videos`) — no parallel ingestion path, API key stays in signal-service. Provider-neutral contract (capability flags); deterministic YouTube identity resolution (RESOLVED/AMBIGUOUS/UNRESOLVED, name-equality never resolves alone, never creates a canonical artist); rounded-subscriber honesty (`PROVIDER_REPORTED`); per-provider/day **quota accounting** (search 100u vs read 1u, budget-enforced); restart-safe **refresh scheduler** (lease/retry/idempotent, known-id reads only); Google Trends **OFFICIAL_API (gated → ACCESS_UNAVAILABLE) + IMPORT** (labeled CSV, no scraping); first-class **geography** (ISO IN-XX); deterministic **momentum/geography/supply-demand/event-response** read models (no score, no causal claim, `INSUFFICIENT_HISTORY` honesty). Separate service so demand failure never disrupts the crawl→signal spine | artist-intelligence-service `providers/`+`service.py`+`scheduler.py`+`intelligence.py`+`supply.py`+`signal_client.py`, migration 001, signal `adapters/youtube.py`+`routes/youtube.py`, ADR-0017, `docs/demand-intelligence.md`+`docs/providers/{youtube,google-trends}.md` |
+| 5A.3 — Indian artist universe & demand saturation | Decoupled the artist universe from ticketing coverage + maximised irreplaceable temporal collection, **reusing** the 5A spine (signal-service = single acquisition path; artist-intelligence = stateful; entity/graph = canonical owner). Migration **002** (additive/reversible): **`artist_candidate`** ledger (discovery surfaces → candidates, never canonical; idempotent on `(source, source_id)`), **`artist_market_evidence`** (India evidence CLASSES `CONFIRMED_LIVE_INDIA`/`INDIA_DEMAND_OBSERVED`/`INDIA_MARKET_CANDIDATE`, provenance-bearing, not a score), **`youtube_video`** registry (separate from observations), **`provider_quota_bucket_day`** + job `priority`. **Auto-onboard + backfill** (event-derived + whole existing cohort, persisted/quota-managed — no manual op; collector runs them). **Independent YouTube discovery** (bounded config India queries → candidates). **Quota buckets** SEARCH/GENERAL_READ/VIDEO_STATS_BATCH (configurable fractions, provider-tz reset, 95%-target + reserve, defer-not-invalidate; search never on known-id refresh). **Identity-discovery queue** (search→channels.list verify→resolve, 5A.1a preserved). **One-time catalogue backfill** → registry; **hourly** live-metric observations (Trends daily); **adaptive + event-aware cadence**; **batch stats** primitive (`videos.list` 1u/50) in signal-service. Typed failure outcomes. Read-only artist-universe + quota-bucket diagnostics through the 5A.2 admin. No BMS dependency; no new public Fly surface | artist-intelligence `candidates.py`+`videos.py`+`discovery.py`+`cadence.py`+`universe.py`+`scheduler.py`+`service.py`+`quota.py`+migration 002, signal `adapters/youtube.py`+`routes/youtube.py` (batch), gateway `admin/demand.py`, frontend `admin/demand.tsx`, ADR-0018, `docs/{demand-intelligence,providers/youtube,providers/google-trends}.md` |
 | 5A.2 — demand inspection surface | Exposed the Phase 5A demand read models through the existing **local-only inspection console** (observability, not a new model). New `artist_intelligence` gateway downstream (:8010) + **DemandAdminService** BFF (`/admin/v1/demand/*`: overview, summary, artist bundle, bounded observations, event context) — browser talks only to the gateway; every panel degrades to `available:false` (never 500). Frontend **Demand Intelligence** nav screen (coverage / YouTube **REAL-MOCK-UNKNOWN** mode / quota / read-only scheduler / Trends OFFICIAL_API-IMPORT), full **Artist Demand** view (identities w/ explicit verification + `last_verified_at`, YouTube state+deltas, independent momentum, relative-interest Trends, sortable geography, observed live supply, bounded observations), embedded as a section on the ARTIST entity page, an **Event → Demand context** tab (co-movement only), and a dashboard card. Two small read-only backend additions (no migration): `build_scheduler_state`, `youtube_provider_mode` (REAL/MOCK via signal `/health`), + bounded `reason`/`invalidation_reason` on identities. **No mutation controls**; **local-only** boundary preserved (no Fly manifest change) | api-gateway `admin/demand.py`+`routes/admin.py`, frontend `admin/demand.tsx`+`api.ts`, artist-intelligence `intelligence.py`+`routes/demand.py`, `docs/{admin-console,demand-intelligence}.md` |
 | 4C — shared ticketing adapter + Skillbox | One typed **TicketingAdapter contract** (discover/fetch_event/normalize_event/classify_failure/extract_source_handles/extract_asset_references) wrapping the existing providers — Boshow/District/Skillbox conform, no regression. Deterministic **quality validation** before enrollment (12 rejection reasons; verified-city geography, tz-aware date normalization, present/valid/specific field status); **validated discovery** partitions accepted/rejected/out-of-scope; per-source **quality/coverage diagnostics** (`/v1/internal/sources/...`, observed-supply only). Skillbox third-source pilot flag-gated; pipeline parity config-driven (add `skillbox` to crawl source-sets). Bounded **Soundcharts feasibility** (no impl, no fabricated endpoints) + `ArtistIntelligenceProvider` proposal separating ticketing supply from licensed artist intelligence | signal `adapters/contract.py`+`quality.py`+`sources.py`+`routes/sources.py`, ADR-0015, `docs/ticketing-adapters.md`/`skillbox-probe.md`/`soundcharts-feasibility.md` |
 
@@ -265,6 +266,27 @@ Production defect: a search-result candidate could transition a YouTube CHANNEL_
   `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
   suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
 
+## Phase 5A.3 — Indian artist universe & demand saturation (2026-08-09, LIVE VALIDATED, real YouTube API)
+
+signal + artist-intelligence + api-gateway rebuilt/recreated; **migration 002 applied on boot** (all 4
+new tables present, `alembic_version_artist_intel=002_artist_universe`). Real API (`youtube_mock=false`):
+- **Independent discovery**: 1 config query ("Indian indie artist live") → **6 candidates created** (+4
+  merged on rerun — idempotent, no explosion); all `YOUTUBE_SEARCH`, status NEW, **0 canonical artists /
+  0 identities created** (candidates never pollute the graph).
+- **Auto-onboard**: `artist:arijit-singh` (already RESOLVED) → identity_present, no job, CONFIRMED_LIVE_INDIA
+  evidence recorded. A **new** artist `artist:test-newcomer-5a3` (Prateek Kuhad) → identity job queued →
+  scheduler ran real **search + channels.list** → **AMBIGUOUS** (`last_verified_at` false — name-only
+  matched multiple real channels; correctly NOT auto-resolved, stays non-canonical). 5A.1a preserved.
+- **Catalogue backfill** (real): **15 uploads registered** into `youtube_video`; registry snapshot via the
+  **batch** path → **45 CONTENT observations** (15 videos × 3 metrics).
+- **Hourly idempotency**: channel snapshot created 3, same-hour rerun created **0**.
+- **Quota buckets**: `quota_date=2026-08-08` while UTC was 2026-08-09 → **provider-tz reset proven**;
+  SEARCH 300/3500, GENERAL_READ 6/4500, VIDEO_STATS_BATCH 1/1500; usable 9500, reserve 500.
+- **Artist-universe** diag: 18 candidates (16 YouTube_search + 2 event-derived), 2 CONFIRMED_LIVE_INDIA,
+  15 videos, `by_source EVENT 2 / YOUTUBE_SEARCH 16`. **Gateway BFF** `/admin/v1/demand/overview` surfaces
+  artist-universe + quota-buckets (all downstream true); the **Demand Intelligence** admin screen renders
+  both read-only cards. Trends stays `ACCESS_UNAVAILABLE` (import-only) — correct. No fabricated data.
+
 ## Phase 5A.2 — demand inspection surface (2026-08-08, LIVE VALIDATED, docker + browser)
 
 api-gateway + artist-intelligence-service rebuilt/recreated (`ADMIN_API_ENABLED=ADMIN_LOCAL_MODE=true`,
@@ -303,11 +325,12 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 = 0 real overlap** (new Skillbox-only venues; no duplicate event fabricated). Boshow/District unaffected.
 
 ## Test status
-crawl **200** · gateway **70** (+12 demand BFF: healthy/unavailable/degraded/artist/momentum/geo/quota/
-provider-health/scheduler/bounded/event-context/read-only) · signal **99** (YouTube search/videos/verify) ·
-graph **60** · analytics **45** · media **43** · observation **11** · entity **12** ·
-**artist-intelligence 46** (+3: scheduler-state read model, identity reason surfacing) — all pass.
-artist-intelligence Alembic upgrade+downgrade verified. Frontend `tsc -b` + `vite build` + `oxlint` clean
+crawl **200** · gateway **70** (demand BFF incl. 5A.3 artist-universe + quota-buckets in overview) ·
+signal **101** (+2: `videos.list` batch stats mock/cap) · graph **60** · analytics **45** · media **43** ·
+observation **11** · entity **12** · **artist-intelligence 64** (+18: candidate universe, auto-onboard,
+backfill, YouTube discovery, India evidence, quota buckets + provider-tz reset + reserve, hourly
+idempotency, catalogue backfill/registry, batch snapshot, identity-queue, Trends readiness) — all pass.
+artist-intelligence Alembic **001↔002 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` + `oxlint` clean
 (demand.tsx adds no lint warnings). No JS test runner in the repo (Admin A–C convention): the demand UI is
 type-checked + browser-validated, with automated coverage on the BFF/read models it consumes. Lint clean
 except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
@@ -324,6 +347,13 @@ except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in 
   `canonical_artist_id`; demand metrics never enter the event Shadow Ledger; the demand layer never
   creates a canonical artist. No composite popularity/value/booking score; no causal claim from
   co-movement. Google Trends is relative interest (never absolute volume); no unofficial scraping.
+- **(5A.3)** artist discovery produces **candidates**, never canonical artists (the demand layer never
+  creates a canonical ARTIST); India market presence is **evidence-based**, never a single relevance
+  score; identity thresholds are never lowered to raise coverage (false matches are worse than missing
+  data); YouTube search is spent on discovery/resolution, never on known-id refresh; quota targets high
+  utilisation with a reserve and **defers** (never invalidates identities) at the reserve; hourly
+  precision is never retrofitted onto historical daily observations; BookMyShow is never a gatekeeper and
+  is never evasively scraped.
 - API keys: user adds to `.env`; never handled/pasted by the agent.
 - The admin **inspection console is local-only + unauthenticated** (`ADMIN_LOCAL_MODE`) — never enabled
   on a cloud deploy; the admin BFF stays disabled and the frontend is excluded from all Fly manifests

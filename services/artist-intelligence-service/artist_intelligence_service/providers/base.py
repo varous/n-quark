@@ -33,6 +33,23 @@ RESOLVED = "RESOLVED"
 AMBIGUOUS = "AMBIGUOUS"
 UNRESOLVED = "UNRESOLVED"
 
+# ---- typed acquisition outcomes (Phase 5A.3) --------------------------------------------------
+# Distinguish authoritative NOT_FOUND (may invalidate) from transient/quota failures (never invalidate).
+OUTCOME_OK = "OK"
+OUTCOME_PROVIDER_NOT_FOUND = "PROVIDER_NOT_FOUND"          # authoritative channels.list empty
+OUTCOME_PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"      # transient provider/network
+OUTCOME_QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"                # budget/reserve reached → defer, not invalid
+OUTCOME_IDENTITY_AMBIGUOUS = "IDENTITY_AMBIGUOUS"
+OUTCOME_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+OUTCOME_RETRYABLE_PROVIDER_FAILURE = "RETRYABLE_PROVIDER_FAILURE"
+OUTCOME_TERMINAL_PROVIDER_FAILURE = "TERMINAL_PROVIDER_FAILURE"
+
+# ---- India market-presence evidence classes (Phase 5A.3) --------------------------------------
+# Evidence CLASSIFICATIONS, never a quality/relevance score.
+INDIA_CONFIRMED_LIVE = "CONFIRMED_LIVE_INDIA"       # observed Indian event/lineup/venue/promoter/tour/feed
+INDIA_DEMAND_OBSERVED = "INDIA_DEMAND_OBSERVED"     # India/sub-region demand (Trends) — NOT proof of performing
+INDIA_MARKET_CANDIDATE = "INDIA_MARKET_CANDIDATE"   # market-relevant candidate lacking stronger evidence
+
 # ---- metric names (namespaced by provider) ----------------------------------------------------
 YT_CHANNEL_VIEWS = "YOUTUBE_CHANNEL_VIEWS"
 YT_SUBSCRIBERS = "YOUTUBE_SUBSCRIBERS"

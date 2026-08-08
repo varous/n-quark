@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 
 from signal_service.adapters.musicbrainz import (
     MusicBrainzClient,
@@ -17,6 +17,7 @@ from signal_service.schemas import (
     YouTubeChannelSignals,
     YouTubeChannelVerification,
     YouTubeSearchResult,
+    YouTubeVideoBatchResult,
     YouTubeVideoSignals,
 )
 
@@ -72,6 +73,20 @@ async def preview_youtube_videos(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
                             detail=f"YouTube video fetch failed: {exc}") from exc
+
+
+@router.post("/videos/batch", response_model=YouTubeVideoBatchResult)
+async def batch_youtube_video_stats(
+    video_ids: list[str] = Body(..., embed=True, max_length=50,
+                                description="Known video ids (≤50) to fetch statistics for."),
+) -> YouTubeVideoBatchResult:
+    """Batch statistics for known video ids via videos.list (Phase 5A.3). Quota-efficient known-id read
+    (1 unit / 50 ids). Acquisition-only, no persistence; a provider failure returns 502."""
+    try:
+        return await YouTubeClient().fetch_video_stats_batch(video_ids)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube batch stats failed: {exc}") from exc
 
 
 @router.post("/channels/{channel_id}/ingest")

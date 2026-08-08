@@ -66,10 +66,18 @@ export function DemandIntelligence() {
   const ytStatus = (cov.youtube_identity_status ?? {}) as Obj;
   const quotaToday = (g(yt, "quota_today") ?? {}) as Obj;
   const trendsSplit = (cov.trends_api_vs_imported ?? {}) as Obj;
+  const universe = (data.artist_universe ?? {}) as Obj;
+  const buckets = (data.quota_buckets ?? {}) as Obj;
 
   return (
     <div className="space-y-6">
       <IntroLine />
+
+      {/* Artist universe (5A.3) */}
+      {data.artist_universe && <ArtistUniverseCard u={universe} />}
+
+      {/* YouTube quota buckets (5A.3) */}
+      {data.quota_buckets && <QuotaBucketsCard b={buckets} />}
 
       {/* Coverage */}
       <Card title="Coverage" right={<Badge label="Observed" />}>
@@ -150,6 +158,64 @@ export function DemandIntelligence() {
 
       <p className="text-xs text-slate-500">Inspect a specific artist from <Link to="/entities?entity_type=ARTIST">Entities → an artist</Link> (Demand Intelligence section), or open <span className="font-mono">#/demand/artists/&lt;canonical-artist-id&gt;</span>.</p>
     </div>
+  );
+}
+
+function ArtistUniverseCard({ u }: { u: Obj }) {
+  const c = (g(u, "candidates") ?? {}) as Obj;
+  const india = (g(u, "india_market_presence") ?? {}) as Obj;
+  const vids = (g(u, "videos") ?? {}) as Obj;
+  const yt = (g(u, "youtube_identity") ?? {}) as Obj;
+  const bySrc = (g(u, "discovery_contribution_by_source") ?? {}) as Obj;
+  return (
+    <Card title="Artist universe (5A.3)" right={<Badge label="Observed" />}>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
+        <Stat label="Candidates" value={fmt(c.total)} hint={`${fmt(c.new)} new`} />
+        <Stat label="Resolved candidates" value={fmt(c.resolved)} />
+        <Stat label="Ambiguous" value={fmt(c.ambiguous)} />
+        <Stat label="Confirmed live India" value={fmt(india.confirmed_live_india)} />
+        <Stat label="India demand observed" value={fmt(india.india_demand_observed)} />
+        <Stat label="India market candidate" value={fmt(india.india_market_candidate)} />
+        <Stat label="With YT identity" value={fmt(yt.artists_with_youtube_identity)} />
+        <Stat label="With observations" value={fmt(g(u, "artists_with_demand_observation"))} />
+        <Stat label="Videos discovered" value={fmt(vids.videos_discovered)} />
+        <Stat label="Videos tracked" value={fmt(vids.videos_active)} />
+        <Stat label="Identity queue depth" value={fmt(g(u, "identity_resolution_queue_depth"))} />
+        <Stat label="Multi-source artists" value={fmt(g(u, "multi_source_artists"))} />
+      </div>
+      {Object.keys(bySrc).length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+          <span className="text-slate-500">Discovery by source:</span>
+          {Object.entries(bySrc).map(([s, n]) => (
+            <span key={s} className="rounded border border-slate-700 px-2 py-0.5">{s} <span className="tabular-nums">{fmt(n)}</span></span>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-slate-500">India market presence is evidence-based (not a relevance score); candidates are never canonical artists until entity resolution links them.</p>
+    </Card>
+  );
+}
+
+function QuotaBucketsCard({ b }: { b: Obj }) {
+  const buckets = (g(b, "buckets") ?? {}) as Obj;
+  const rows: Obj[] = Object.entries(buckets).map(([name, v]) => ({ name, ...(v as Obj) }));
+  return (
+    <Card title="YouTube quota buckets (5A.3)"
+      right={<span className="text-xs text-slate-500">{fmt(g(b, "quota_date"))} · reset {fmt(g(b, "reset_tz"))}</span>}>
+      <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat label="Daily units" value={fmt(g(b, "daily_quota_units"))} />
+        <Stat label="Usable (target)" value={fmt(g(b, "usable_units"))} />
+        <Stat label="Reserve" value={fmt(g(b, "reserve_units"))} />
+        <Stat label="Used total" value={fmt(g(b, "used_total"))} />
+      </div>
+      <Table rows={rows} columns={[
+        { key: "name", header: "Bucket", render: (r) => <span className="font-mono text-xs">{fmt(r.name)}</span> },
+        { key: "used", header: "Used", render: (r) => <span className="tabular-nums">{fmt(r.used)}</span> },
+        { key: "budget", header: "Budget", render: (r) => <span className="tabular-nums">{fmt(r.budget)}</span> },
+        { key: "remaining", header: "Remaining", render: (r) => <span className="tabular-nums">{fmt(r.remaining)}</span> },
+      ]} />
+      <p className="mt-3 text-xs text-slate-500">Buckets are independent budgets (Google's real quota model). The scheduler targets high utilization but defers — never invalidates — when the reserve is reached. Quota day follows the provider's reset timezone.</p>
+    </Card>
   );
 }
 
