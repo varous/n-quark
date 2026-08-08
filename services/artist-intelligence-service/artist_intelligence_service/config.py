@@ -145,6 +145,21 @@ class Settings(BaseSettings):
     youtube_search_alloc_ambiguity: float = 0.15
     youtube_search_alloc_reserve: float = 0.05
 
+    # --- Phase 5A.3.1: candidate promotion (route canonical creation through the crawl entity owner). ---
+    candidate_promotion_enabled: bool = False
+    candidate_promotion_batch_size: int = 25         # bounded candidates evaluated per pass
+    candidate_promotion_min_sources: int = 2         # ≥N independent discovery sources → MULTI_SOURCE_CONFIRMED
+    # --- Phase 5A.3.1: bounded YouTube ecosystem discovery (seed channels → uploads → candidates). ---
+    youtube_ecosystem_enabled: bool = False
+    youtube_ecosystem_seed_channels: str = ""        # comma/newline channel ids (festival/promoter/venue/media/label)
+    youtube_ecosystem_max_seeds_per_run: int = 2
+    youtube_ecosystem_max_videos_per_seed: int = 10
+    youtube_ecosystem_max_candidates_per_run: int = 25
+    # --- Phase 5A.3.1: dynamic search allocation + live event-proximity cadence. ---
+    youtube_search_allocation_enforced: bool = True  # honor per-purpose splits, borrow unused, keep reserve
+    event_aware_cadence_enabled: bool = False        # read nearest upcoming Indian event from the graph
+    event_proximity_max_days: int = 90               # ignore events further out than this
+
     # --- Phase 5A.3: temporal resolution + adaptive cadence (seconds; configurable, not hardcoded). ---
     youtube_hourly_observations: bool = True      # YouTube live metrics bucket by HOUR (Trends stays daily)
     youtube_catalogue_backfill_depth: int = 50    # bounded one-time uploads registry backfill per channel
@@ -179,6 +194,13 @@ class Settings(BaseSettings):
         raw = (self.youtube_discovery_queries or "").replace("\n", ",")
         override = [q.strip() for q in raw.split(",") if q.strip()]
         return override or list(DEFAULT_DISCOVERY_QUERIES)
+
+    @property
+    def ecosystem_seed_channels(self) -> list[str]:
+        """Operator-configured YouTube ecosystem seed channel ids (festival/promoter/venue/media/label).
+        Empty by default — ecosystem discovery is a no-op until seeds are provided."""
+        raw = (self.youtube_ecosystem_seed_channels or "").replace("\n", ",")
+        return [c.strip() for c in raw.split(",") if c.strip()]
 
     def youtube_quota_date(self, now: datetime | None = None):
         """Today's YouTube quota-day in the provider's reset timezone (midnight Pacific by default),

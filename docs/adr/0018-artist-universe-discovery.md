@@ -61,3 +61,17 @@ new crawler or provider service.
 - More data is preferred over false identity matches: thresholds are never lowered to raise coverage.
 - Migration `002_artist_universe` is additive + reversible; no historical demand row is rewritten.
 - The admin surface stays read-only and local-only; no new public Fly app is introduced.
+
+## Phase 5A.3.1 addendum — promotion & acquisition closure (2026-08-09)
+
+Closed four 5A.3 gaps without redesign:
+- **Candidate → canonical promotion** with a deterministic evidence policy (MATCH_EXISTING_CANONICAL /
+  MULTI_SOURCE_CONFIRMED / INDIA_LIVE_EVIDENCE_PLUS_MUSIC_IDENTITY). Creation is routed through a new
+  crawl-owned `create-artist` governance endpoint, so canonical ownership stays in crawl/graph and a single
+  weak YouTube hit can never canonicalise. Promotion auto-enqueues demand identity resolution and runs as a
+  bounded persisted backlog.
+- **Bounded YouTube ecosystem discovery** (seed channels → one-hop uploads → candidates only).
+- **Dynamic per-purpose search allocation** with borrow-when-idle + near-reset saturation; the global
+  reserve is never borrowable.
+- **Live event-proximity cadence** read from the graph (FEATURES), safe-degrading to normal cadence.
+Also fixed a latent defect where `crawl_client.artists` targeted a 404 path, silently zeroing backfill.

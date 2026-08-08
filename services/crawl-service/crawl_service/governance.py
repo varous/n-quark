@@ -272,6 +272,30 @@ class GovernanceService:
         result["created_canonical_entity_id"] = cid
         return result
 
+    async def create_artist(self, *, canonical_name: str, provenance: dict[str, Any] | None = None,
+                            source: str | None = None) -> dict[str, Any]:
+        """Create (or match) a canonical ARTIST from EXTERNAL evidence (Phase 5A.3.1), owned here in
+        crawl/graph — not in the demand service. Deterministic id, idempotent: if the artist node already
+        exists it is matched, never duplicated. Unlike ``create_entity`` this needs no originating crawl
+        candidate, so an artist discovered off-platform (YouTube etc.) can be canonicalised by the entity
+        owner once the demand layer's evidence policy is satisfied."""
+        norm = N.slug(canonical_name)
+        if not norm:
+            raise GovernanceError("EMPTY_NAME")
+        base = N._base(canonical_name)  # noqa: SLF001 — shared normalizer
+        if base in _GENERIC_NAMES:
+            raise GovernanceError("GENERIC_NAME", f"'{canonical_name}' is too generic to create")
+        cid = _cid("artist", norm.replace("-", " "))
+        exists, _ = await self._node_exists(cid)
+        if exists:
+            return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": False}
+        props: dict[str, Any] = {"display_name": canonical_name,
+                                 "origin": "EXTERNAL_DISCOVERY", "origin_source": source}
+        if provenance:
+            props["external_provenance"] = provenance
+        await self._write([{"id": cid, "type": _NODE_TYPE["ARTIST"], "properties": props}], [])
+        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True}
+
     # ---- supersede legacy projection (ADMIN) ----------------------------------------------------
     async def supersede_legacy(self, *, entity_type: str, legacy_entity_id: str,
                                canonical_entity_id: str, decision_ref: str | None = None) -> dict[str, Any]:

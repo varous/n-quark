@@ -97,7 +97,7 @@ async def backfill_missing_identities(db: Session, *, crawl: CrawlServiceClient 
     scheduler = scheduler or DemandScheduler()
     limit = limit or settings.artist_backfill_batch_size
     try:
-        artists = await crawl.artists(limit=500)
+        artists = await crawl.artists(limit=200)
     except Exception:  # noqa: BLE001 — a crawl outage must not fail backfill; report zero this pass
         return {"status": "CRAWL_UNAVAILABLE", "examined": 0, "queued": 0}
     queued = examined = 0

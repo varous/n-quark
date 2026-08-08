@@ -86,13 +86,14 @@ class YouTubeProvider(ArtistIntelligenceProvider):
                 "mock": mock, **(extra or {})}
 
     # ---- search / identity -------------------------------------------------------------------
-    async def search_artist(self, query: str, *, limit: int) -> list[ArtistCandidate]:
+    async def search_artist(self, query: str, *, limit: int,
+                            purpose: str | None = None) -> list[ArtistCandidate]:
         self._require(CAP_SEARCH)
         try:
             payload = await self.signal.youtube_search(query, limit=limit)
-            self.meter.search(ok=True)
+            self.meter.search(ok=True, purpose=purpose)
         except Exception:
-            self.meter.search(ok=False)
+            self.meter.search(ok=False, purpose=purpose)
             raise
         out = []
         for r in payload.get("candidates") or []:

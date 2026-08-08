@@ -121,7 +121,8 @@ class DemandService:
         return row
 
     async def resolve_youtube(self, db: Session, canonical_artist_id: str, *, query: str,
-                              hints: dict | None = None, limit: int = 5) -> dict[str, Any]:
+                              hints: dict | None = None, limit: int = 5,
+                              search_purpose: str | None = None) -> dict[str, Any]:
         """Bounded search → deterministic decision → AUTHORITATIVE channels.list verification → persist.
 
         A CHANNEL_ID may become RESOLVED only if channels.list confirms it exists at resolution time
@@ -141,7 +142,7 @@ class DemandService:
         rejected: list[dict[str, Any]] = []
         verification_unavailable = False
         try:
-            candidates = await self.youtube.search_artist(query, limit=limit)
+            candidates = await self.youtube.search_artist(query, limit=limit, purpose=search_purpose)
             for c in candidates:
                 c.score, c.signals = ytprov._score_candidate(query, c, hints or {})
             candidates.sort(key=lambda c: c.score, reverse=True)
@@ -325,13 +326,18 @@ class DemandService:
 
     # ---- Phase 5A.3: identity discovery (quota-guarded), catalogue backfill, registry video snapshot ----
     async def discover_identity_for_artist(self, db: Session, canonical_artist_id: str, *,
-                                           display_name: str,
-                                           hints: dict | None = None) -> dict[str, Any]:
-        """Quota-guarded wrapper over resolve_youtube for the identity-resolution queue. Refuses to spend
-        a SEARCH when the bucket/reserve is reached (QUOTA_EXHAUSTED → defer, never invalidate)."""
-        if not can_spend(db, PROVIDER_YOUTUBE, BUCKET_SEARCH, YT_SEARCH_UNITS):
+                                           display_name: str, hints: dict | None = None,
+                                           purpose: str = "unresolved",
+                                           others_have_backlog: bool = True,
+                                           near_reset: bool = False) -> dict[str, Any]:
+        """Quota-guarded wrapper over resolve_youtube for the identity-resolution queue. Honors the
+        dynamic per-purpose SEARCH allocation + global reserve; QUOTA_EXHAUSTED → defer, never invalidate."""
+        from artist_intelligence_service.quota import can_spend_search
+        if not can_spend_search(db, PROVIDER_YOUTUBE, purpose, YT_SEARCH_UNITS,
+                                others_have_backlog=others_have_backlog, near_reset=near_reset):
             return {"status": "QUOTA_EXHAUSTED", "canonical_artist_id": canonical_artist_id}
-        return await self.resolve_youtube(db, canonical_artist_id, query=display_name, hints=hints or {})
+        return await self.resolve_youtube(db, canonical_artist_id, query=display_name, hints=hints or {},
+                                          search_purpose=purpose)
 
     async def backfill_catalogue(self, db: Session, canonical_artist_id: str, *,
                                  depth: int | None = None,

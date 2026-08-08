@@ -203,3 +203,19 @@ async def run_discovery(max_queries: int | None = Query(default=None, ge=1, le=2
     out = await discovery.run_youtube_discovery(db, provider=svc.youtube, max_queries=max_queries)
     db.commit()
     return out
+
+
+@router.post("/discovery/ecosystem/run", summary="Run bounded YouTube ecosystem seed discovery (candidates only)")
+async def run_ecosystem(db: Session = Depends(get_db),
+                        svc: DemandService = Depends(get_service)) -> dict[str, Any]:
+    from artist_intelligence_service import discovery
+    out = await discovery.run_ecosystem_discovery(db, provider=svc.youtube)
+    db.commit()
+    return out
+
+
+@router.post("/candidates/promote", summary="Process candidate promotion backlog (bounded, persisted)")
+async def promote_backlog(limit: int = Query(default=25, ge=1, le=200),
+                          db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import promotion
+    return await promotion.process_backlog(db, limit=limit)

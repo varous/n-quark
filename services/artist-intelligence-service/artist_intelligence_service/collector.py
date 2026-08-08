@@ -33,6 +33,17 @@ async def _tick(scheduler: DemandScheduler) -> None:
             with _c.suppress(Exception):
                 await discovery.run_youtube_discovery(db)
                 db.commit()
+        if settings.youtube_ecosystem_enabled:
+            import contextlib as _c
+            from artist_intelligence_service import discovery
+            with _c.suppress(Exception):
+                await discovery.run_ecosystem_discovery(db)
+                db.commit()
+        if settings.candidate_promotion_enabled:
+            import contextlib as _c
+            from artist_intelligence_service import promotion
+            with _c.suppress(Exception):
+                await promotion.process_backlog(db, scheduler=scheduler)
         await scheduler.run_once(db, worker_id="demand-collector")
     finally:
         db.close()

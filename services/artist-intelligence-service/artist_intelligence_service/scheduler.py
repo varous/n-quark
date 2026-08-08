@@ -30,7 +30,8 @@ from artist_intelligence_service.models import (
     DemandRefreshJob,
     YouTubeVideo,
 )
-from artist_intelligence_service.providers.base import PROVIDER_YOUTUBE, RESOLVED
+from artist_intelligence_service.graph_client import GraphServiceClient
+from artist_intelligence_service.providers.base import AMBIGUOUS, PROVIDER_YOUTUBE, RESOLVED
 from artist_intelligence_service.service import DemandService
 
 JOB_CHANNEL = "YOUTUBE_CHANNEL_SNAPSHOT"
@@ -55,8 +56,10 @@ def _window(now: datetime, interval_s: int) -> str:
 
 
 class DemandScheduler:
-    def __init__(self, service: DemandService | None = None) -> None:
+    def __init__(self, service: DemandService | None = None,
+                 graph: GraphServiceClient | None = None) -> None:
         self.service = service or DemandService()
+        self.graph = graph or GraphServiceClient()
 
     # ---- enqueue: recurring channel/video refresh of RESOLVED identities ----------------------
     def enqueue_due(self, db: Session, *, now: datetime | None = None) -> dict[str, int]:
@@ -211,14 +214,29 @@ class DemandScheduler:
                 return self._terminal(job, now, status)
             if status == "VERIFICATION_UNAVAILABLE":
                 return self._fail(job, now, RuntimeError("verification unavailable (transient)"))
-            return self._succeed(db, job, now, result)
+            days = await self._event_proximity_days(job.canonical_artist_id) \
+                if job.job_type in (JOB_CHANNEL, JOB_VIDEO) else None
+            return self._succeed(db, job, now, result, days_to_event=days)
         except Exception as exc:  # noqa: BLE001 — isolate: one job's failure never stops the others
             return self._fail(job, now, exc)
 
     async def _execute_identity(self, db: Session, job: DemandRefreshJob, now: datetime) -> str:
         display_name = (job.detail or {}).get("display_name") or job.canonical_artist_id
+        # purpose: an already-AMBIGUOUS identity is corroboration ("ambiguity"), else "unresolved".
+        ambiguous = db.execute(
+            select(ArtistExternalIdentity.id).where(
+                ArtistExternalIdentity.canonical_artist_id == job.canonical_artist_id,
+                ArtistExternalIdentity.provider == PROVIDER_YOUTUBE,
+                ArtistExternalIdentity.status == AMBIGUOUS).limit(1)).scalar_one_or_none() is not None
+        from artist_intelligence_service.quota import (
+            SEARCH_AMBIGUITY,
+            SEARCH_UNRESOLVED,
+            near_provider_reset,
+        )
+        purpose = SEARCH_AMBIGUITY if ambiguous else SEARCH_UNRESOLVED
         out = await self.service.discover_identity_for_artist(
-            db, job.canonical_artist_id, display_name=display_name)
+            db, job.canonical_artist_id, display_name=display_name, purpose=purpose,
+            others_have_backlog=(purpose == SEARCH_AMBIGUITY), near_reset=near_provider_reset(now=now))
         status = out.get("status")
         if status == "QUOTA_EXHAUSTED":
             return self._defer(job, now, "QUOTA_EXHAUSTED")   # never invalidate; retry when budget resets
@@ -233,28 +251,60 @@ class DemandScheduler:
         # row records the outcome; a later pass may re-attempt with more evidence. Not a failure.
         return self._succeed(db, job, now, out)
 
-    def _succeed(self, db: Session, job: DemandRefreshJob, now: datetime, result: dict[str, Any]) -> str:
+    def _succeed(self, db: Session, job: DemandRefreshJob, now: datetime, result: dict[str, Any],
+                 *, days_to_event: float | None = None) -> str:
         job.status = "SUCCEEDED"
         job.result_code = result.get("status") or "OK"
         job.completed_at = now
         job.consecutive_failures = 0
         job.lock_expires_at = None
-        job.next_refresh_at = self._next_refresh_for(db, job, now)
+        job.next_refresh_at = self._next_refresh_for(db, job, now, days_to_event=days_to_event)
         job.detail = {**(job.detail or {}), "last_result": result}
         job.updated_at = now
         return "SUCCEEDED"
 
-    def _next_refresh_for(self, db: Session, job: DemandRefreshJob, now: datetime) -> datetime | None:
-        """Adaptive, deterministic cadence (config-driven). One-time jobs have no recurring refresh."""
+    def _next_refresh_for(self, db: Session, job: DemandRefreshJob, now: datetime, *,
+                          days_to_event: float | None = None) -> datetime | None:
+        """Adaptive, deterministic cadence (config-driven). One-time jobs have no recurring refresh.
+
+        An upcoming Indian event (``days_to_event`` from the live graph) tightens the interval via the
+        event bands, taking the min with the base cadence — so event proximity always increases cadence."""
         if job.job_type == JOB_CHANNEL:
-            secs = cad.channel_cadence_seconds(
-                days_to_event=self._days_to_upcoming_event(db, job.canonical_artist_id),
+            base = cad.channel_cadence_seconds(
+                days_to_event=days_to_event,
                 recently_active=self._recently_active(db, job.canonical_artist_id, now))
+            band = cad.event_band_seconds(days_to_event)
+            secs = min(base, band) if band is not None else base
             return now + timedelta(seconds=secs)
         if job.job_type == JOB_VIDEO:
-            secs = cad.video_cadence_seconds(self._freshest_video_age_days(db, job.canonical_artist_id, now))
+            base = cad.video_cadence_seconds(self._freshest_video_age_days(db, job.canonical_artist_id, now))
+            band = cad.event_band_seconds(days_to_event)
+            secs = min(base, band) if band is not None else base
             return now + timedelta(seconds=secs)
         return None  # identity / catalogue are one-time (a fresh job is enqueued when needed)
+
+    async def _event_proximity_days(self, artist: str) -> float | None:
+        """Days to the nearest upcoming Indian event for a canonical artist, read LIVE from the graph
+        (FEATURES neighbours). Bounded, best-effort: disabled by flag → None; any graph failure → None
+        (safe degrade to normal cadence). Event data is never duplicated into this service."""
+        if not settings.event_aware_cadence_enabled:
+            return None
+        try:
+            neighbors = await self.graph.neighbors(artist, direction="in", relationship="FEATURES")
+        except Exception:  # noqa: BLE001 — graph outage must not break scheduling
+            return None
+        from artist_intelligence_service.supply import _parse_dt
+        now = _now()
+        best: float | None = None
+        for nb in neighbors[:200]:
+            props = ((nb.get("node") or {}).get("properties") or {})
+            starts = _parse_dt(props.get("starts_at") or props.get("start_time"))
+            if starts is None:
+                continue
+            days = (starts - now).total_seconds() / 86400.0
+            if -3 <= days <= settings.event_proximity_max_days and (best is None or days < best):
+                best = days
+        return best
 
     def _recently_active(self, db: Session, artist: str, now: datetime) -> bool:
         cutoff = now - timedelta(days=3)

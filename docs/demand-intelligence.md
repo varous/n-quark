@@ -196,3 +196,43 @@ not artist value. **Failure semantics** are typed: only authoritative `PROVIDER_
 identity coverage, video registry counts, discovery-source contribution, queue depth) and
 `/demand/quota-buckets` (per-bucket used/budget/remaining + reserve), surfaced read-only through the
 existing Demand Intelligence admin screen.
+
+## Phase 5A.3.1 — candidate promotion & acquisition closure
+
+Closes the four 5A.3 gaps without redesign. See ADR-0018.
+
+**Candidate → canonical promotion** (`promotion.py`). Deterministic, auditable, and canonical ownership
+stays OUTSIDE the demand service:
+- `MATCH_EXISTING_CANONICAL` — the candidate's normalized name matches an existing canonical ARTIST
+  (crawl `/entity-resolution/entities`) → **link** (no create);
+- `MULTI_SOURCE_CONFIRMED` — the same artist seen from ≥`CANDIDATE_PROMOTION_MIN_SOURCES` independent
+  discovery sources → **create via the crawl owner** (`POST /v1/internal/governance/create-artist`, which
+  writes the `artist:<slug>` graph node in crawl/graph);
+- `INDIA_LIVE_EVIDENCE_PLUS_MUSIC_IDENTITY` — an EVENT-sourced sibling (India live) + a music identity
+  signal → create via the crawl owner.
+A single YouTube search hit satisfies none of these, so weak evidence never canonicalises; insufficient
+candidates stay `RESOLUTION_PENDING`. After link/create, demand identity resolution is enqueued
+automatically (idempotent). The demand service **never writes a canonical id to its own DB**. Backlog is
+drained in bounded persisted passes (`candidate_promotion_batch_size`) by the collector +
+`POST /v1/internal/candidates/promote`.
+
+**Bounded YouTube ecosystem discovery** (`YOUTUBE_ECOSYSTEM`). Configured seed channels
+(`YOUTUBE_ECOSYSTEM_SEED_CHANNELS`: festival/promoter/venue/media/label) → their recent uploads (official
+API, one hop, no recursive crawl) → `artist_candidate` evidence only. Bounded by `…MAX_SEEDS_PER_RUN` /
+`…MAX_VIDEOS_PER_SEED` / `…MAX_CANDIDATES_PER_RUN`.
+
+**Dynamic search-quota allocation.** Search spend is sub-accounted by purpose
+(`SEARCH:unresolved|discovery|ambiguity` rows in `provider_quota_bucket_day`). A purpose may always use its
+configured slice; it may **borrow** unused allocation only when other purposes have no pending work, or the
+provider day is **near reset** (`near_provider_reset`) so otherwise-idle budget is used before it is lost.
+The global reserve is never borrowable. Diagnostics expose configured fraction, used, remaining, borrowed
+per purpose (`/demand/quota-buckets` → `search_allocation`).
+
+**Live event-proximity cadence** (`EVENT_AWARE_CADENCE_ENABLED`). The scheduler reads the nearest upcoming
+Indian event for a canonical artist LIVE from the graph (FEATURES neighbours), bounded + best-effort, and
+feeds the distance into the existing cadence bands (min with the base cadence → event proximity always
+increases cadence). Event data is never duplicated into the demand service; a graph failure degrades safely
+to normal cadence.
+
+Also fixed a latent 5A.3 defect: `crawl_client.artists` targeted `/v1/internal/entities` (404) instead of
+`/v1/internal/entity-resolution/entities`, so backfill/coverage silently saw zero canonical artists.

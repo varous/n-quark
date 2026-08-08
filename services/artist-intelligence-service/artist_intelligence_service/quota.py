@@ -36,6 +36,13 @@ BUCKET_GENERAL_READ = "GENERAL_READ"
 BUCKET_VIDEO_BATCH = "VIDEO_STATS_BATCH"
 
 
+# Search purposes (5A.3.1) — sub-accounting inside the SEARCH bucket for dynamic allocation.
+SEARCH_UNRESOLVED = "unresolved"
+SEARCH_DISCOVERY = "discovery"
+SEARCH_AMBIGUITY = "ambiguity"
+SEARCH_PURPOSES = (SEARCH_UNRESOLVED, SEARCH_DISCOVERY, SEARCH_AMBIGUITY)
+
+
 @dataclass
 class QuotaCall:
     kind: str            # "search" | "read" | "video_batch"
@@ -43,6 +50,7 @@ class QuotaCall:
     units: int
     ok: bool = True
     quota_error: bool = False
+    purpose: str | None = None   # for search calls: unresolved | discovery | ambiguity
 
 
 @dataclass
@@ -57,8 +65,10 @@ class QuotaMeter:
     def read(self, *, units: int = YT_READ_UNITS, ok: bool = True) -> None:
         self.record("read", units, bucket=BUCKET_GENERAL_READ, ok=ok)
 
-    def search(self, *, ok: bool = True, quota_error: bool = False) -> None:
-        self.record("search", YT_SEARCH_UNITS, bucket=BUCKET_SEARCH, ok=ok, quota_error=quota_error)
+    def search(self, *, ok: bool = True, quota_error: bool = False,
+               purpose: str | None = None) -> None:
+        self.calls.append(QuotaCall("search", BUCKET_SEARCH, YT_SEARCH_UNITS, ok=ok,
+                                    quota_error=quota_error, purpose=purpose))
 
     def video_batch(self, *, units: int = YT_READ_UNITS, ok: bool = True) -> None:
         """videos.list batch statistics — 1 unit for up to 50 ids (far cheaper than per-video reads)."""
@@ -160,6 +170,14 @@ def record_meter(db: Session, provider: str, meter: QuotaMeter, *, on: date | No
         bucket.failed_calls += 0 if c.ok else 1
         bucket.quota_errors += 1 if c.quota_error else 0
         bucket.updated_at = _now()
+        # 5A.3.1: sub-account search spend by purpose (SEARCH:<purpose>) for dynamic allocation.
+        if c.kind == "search" and c.purpose:
+            sub = get_or_create_bucket(db, provider, f"{BUCKET_SEARCH}:{c.purpose}", on=on)
+            sub.requests += 1
+            sub.units += c.units
+            sub.successful_calls += 1 if c.ok else 0
+            sub.failed_calls += 0 if c.ok else 1
+            sub.updated_at = _now()
     agg.updated_at = _now()
     db.flush()
 
@@ -184,6 +202,19 @@ def reserve_units() -> int:
 def usable_units() -> int:
     """Daily units the scheduler may intentionally spend (target utilization ⇒ keeps the reserve)."""
     return int(settings.youtube_daily_quota_units * settings.youtube_quota_target_utilization)
+
+
+def near_provider_reset(*, within_hours: float = 2.0, now: datetime | None = None) -> bool:
+    """True when the provider quota day is within ``within_hours`` of resetting (in its reset tz), so
+    otherwise-idle budget can be usefully saturated before it is lost. Never touches the reserve."""
+    now = now or _now()
+    try:
+        from zoneinfo import ZoneInfo
+        local = now.astimezone(ZoneInfo(settings.youtube_quota_reset_tz))
+    except Exception:  # noqa: BLE001
+        local = now.astimezone(UTC)
+    seconds_into_day = local.hour * 3600 + local.minute * 60 + local.second
+    return (86400 - seconds_into_day) <= within_hours * 3600
 
 
 def bucket_used(db: Session, provider: str, bucket: str, *, on: date | None = None) -> int:
@@ -217,6 +248,53 @@ def can_spend(db: Session, provider: str, bucket: str, units: int, *, on: date |
     return True
 
 
+def _search_alloc_fraction(purpose: str) -> float:
+    return {
+        SEARCH_UNRESOLVED: settings.youtube_search_alloc_unresolved,
+        SEARCH_DISCOVERY: settings.youtube_search_alloc_discovery,
+        SEARCH_AMBIGUITY: settings.youtube_search_alloc_ambiguity,
+    }.get(purpose, 0.0)
+
+
+def search_purpose_budget(purpose: str) -> int:
+    """A purpose's configured slice of the SEARCH bucket budget."""
+    return int(bucket_budget(BUCKET_SEARCH) * _search_alloc_fraction(purpose))
+
+
+def search_purpose_used(db: Session, provider: str, purpose: str, *, on: date | None = None) -> int:
+    return bucket_used(db, provider, f"{BUCKET_SEARCH}:{purpose}", on=on)
+
+
+def can_spend_search(db: Session, provider: str, purpose: str, units: int, *,
+                     others_have_backlog: bool = True, near_reset: bool = False,
+                     on: date | None = None) -> bool:
+    """Dynamic per-purpose SEARCH allocation (5A.3.1).
+
+    Always requires the SEARCH bucket cap + the global reserve to hold (``can_spend``). Within that, a
+    purpose may always use its own configured slice; it may BORROW beyond the slice only when other
+    purposes have no pending work (unused allocation is transferable) or the provider day is near reset
+    (use otherwise-idle budget). The reserve is never borrowable."""
+    if not settings.youtube_search_allocation_enforced:
+        return can_spend(db, provider, BUCKET_SEARCH, units, on=on)
+    if not can_spend(db, provider, BUCKET_SEARCH, units, on=on):
+        return False
+    used = search_purpose_used(db, provider, purpose, on=on)
+    if used + units <= search_purpose_budget(purpose):
+        return True            # within the purpose's own allocation
+    return near_reset or not others_have_backlog   # borrow only when idle elsewhere / near reset
+
+
+def search_allocation_snapshot(db: Session, provider: str, *, on: date | None = None) -> dict:
+    out = {}
+    for p in SEARCH_PURPOSES:
+        used = search_purpose_used(db, provider, p, on=on)
+        budget = search_purpose_budget(p)
+        out[p] = {"configured_fraction": _search_alloc_fraction(p), "budget": budget,
+                  "used": used, "remaining": max(budget - used, 0),
+                  "borrowed": max(used - budget, 0)}
+    return out
+
+
 def bucket_snapshot(db: Session, provider: str, *, on: date | None = None) -> dict:
     """Read-only per-bucket accounting for diagnostics (used / budget / remaining + reserve)."""
     day = quota_date_for(provider, on=on)
@@ -240,4 +318,5 @@ def bucket_snapshot(db: Session, provider: str, *, on: date | None = None) -> di
         "usable_units": usable_units(), "reserve_units": reserve_units(),
         "used_total": used_total, "remaining_usable": max(usable_units() - used_total, 0),
         "buckets": buckets,
+        "search_allocation": search_allocation_snapshot(db, provider, on=on),
     }

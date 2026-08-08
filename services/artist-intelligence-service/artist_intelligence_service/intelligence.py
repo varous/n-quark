@@ -447,7 +447,9 @@ def build_quota_buckets(db: Session) -> dict[str, Any]:
     """Read-only per-bucket YouTube quota accounting + configured allocation (Phase 5A.3)."""
     from artist_intelligence_service import quota
     snap = quota.bucket_snapshot(db, PROVIDER_YOUTUBE)
-    snap["search_allocation"] = {
+    # snap["search_allocation"] already carries the OPERATIONAL per-purpose usage (5A.3.1); keep it and
+    # add the configured fractions separately (do not clobber the operational view).
+    snap["search_allocation_config"] = {
         "unresolved_artists": settings.youtube_search_alloc_unresolved,
         "new_discovery": settings.youtube_search_alloc_discovery,
         "ambiguity_corroboration": settings.youtube_search_alloc_ambiguity,

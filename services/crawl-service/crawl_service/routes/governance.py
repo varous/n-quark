@@ -71,6 +71,17 @@ async def create_entity(payload: dict = Body(...), svc: GovernanceService = Depe
         _handle(exc)
 
 
+@router.post("/create-artist")
+async def create_artist(payload: dict = Body(...),
+                        svc: GovernanceService = Depends(get_governance_service)) -> dict[str, Any]:
+    """Phase 5A.3.1 — create/match a canonical ARTIST from external discovery evidence (crawl-owned)."""
+    _guard()
+    try:
+        return await svc.create_artist(**payload)
+    except GovernanceError as exc:
+        _handle(exc)
+
+
 @router.post("/link-handle")
 async def link_handle(payload: dict = Body(...), svc: GovernanceService = Depends(get_governance_service)) -> dict[str, Any]:
     _guard()
