@@ -8,6 +8,10 @@ primary_region = "sin"
 [env]
   NQUARK_PORT = "8003"
   NQUARK_NETWORK_MODE = "docker"
+  # NQUARK_YOUTUBE_API_KEY is a SECRET, not an env var here — set it with:
+  #   fly secrets set NQUARK_YOUTUBE_API_KEY=<key> -a nquark-signal-service
+  # Without it, use_youtube_mock falls back to mock ("mock": true) regardless of MOCK_MODE. The key is
+  # never in git or the image (.env is gitignored + .dockerignore'd). MOCK_MODE defaults false in code.
   NQUARK_SHADOW_LEDGER_ENABLED = "true"
   NQUARK_SKILLBOX_ENABLED = "false"            # Skillbox stays disabled (Phase 4C.1 decision)
   NQUARK_SKILLBOX_DISCOVERY_ENABLED = "false"

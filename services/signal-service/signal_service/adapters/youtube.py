@@ -218,12 +218,12 @@ def _norm_name(value: str) -> str:
     return _re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
-# Real Google channel ids so the demo reads truthfully; statistics/videos are illustrative and are
-# clearly flagged mock via ``mock=true``. A confusable pair ("the local train") lets the demand
-# layer's resolver return AMBIGUOUS rather than guess.
+# Clearly-fake channel ids (UCmock_*) so mock data can never be mistaken for a real channel — never
+# reuse a real/production id here. Statistics/videos are illustrative and flagged via ``mock=true``.
+# A confusable pair ("the local train") lets the demand layer's resolver return AMBIGUOUS not guess.
 _MOCK_SEARCH: dict[str, list[dict[str, Any]]] = {
     "arijit singh": [
-        {"channel_id": "UCUEcefFC0sBRZfCTBqcx9jg", "title": "Arijit Singh",
+        {"channel_id": "UCmock_arijit_singh_0000", "title": "Arijit Singh",
          "description": "Official channel of Arijit Singh. Music and live performances.",
          "handle": "@arijitsingh", "topic_signal": True},
     ],
@@ -245,11 +245,11 @@ _MOCK_SEARCH: dict[str, list[dict[str, Any]]] = {
     ],
 }
 _MOCK_UPLOADS: dict[str, str] = {
-    "UCUEcefFC0sBRZfCTBqcx9jg": "UUUEcefFC0sBRZfCTBqcx9jg",
+    "UCmock_arijit_singh_0000": "UUmock_arijit_singh_0000",
     "UCT9zcQNlyht7fRlcjmflRSA": "UUT9zcQNlyht7fRlcjmflRSA",
 }
 _MOCK_VIDEOS: dict[str, list[dict[str, Any]]] = {
-    "UCUEcefFC0sBRZfCTBqcx9jg": [
+    "UCmock_arijit_singh_0000": [
         {"video_id": "arjt_v1", "title": "Arijit Singh — Live in Mumbai 2026",
          "published_at": "2026-07-20T12:00:00Z", "views": 4200000, "likes": 310000, "comments": 12000},
         {"video_id": "arjt_v2", "title": "Arijit Singh — Studio Session",
