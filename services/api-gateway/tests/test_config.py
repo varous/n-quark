@@ -5,7 +5,9 @@ def test_local_downstream_services_use_localhost() -> None:
     settings = Settings(network_mode="local")
     urls = settings.downstream_services.values()
     assert all("localhost" in url for url in urls)
-    assert len(settings.downstream_services) == 9
+    # 9 core services + artist-intelligence-service (Phase 5A.2 demand BFF downstream)
+    assert len(settings.downstream_services) == 10
+    assert LOCAL_DOWNSTREAM_SERVICES["artist_intelligence"] == "http://localhost:8010"
 
 
 def test_docker_downstream_services_use_service_hostnames() -> None:

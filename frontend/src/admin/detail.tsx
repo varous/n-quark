@@ -2,8 +2,9 @@ import { useState } from "react";
 import { api, type Subgraph } from "./api";
 import { Badge, Card, Empty, ErrorBox, Link, Loading, Table, Unavailable, useAsync, useDrawer, fmt } from "./ui";
 import { Pager } from "./screens";
+import { DemandSection, EventDemandContext } from "./demand";
 
-const TABS = ["Current", "Source records", "Timeline", "Evidence", "Entities", "Relationships", "Capture status"];
+const TABS = ["Current", "Source records", "Timeline", "Evidence", "Entities", "Relationships", "Demand context", "Capture status"];
 
 export function EventDetail({ id }: { id: string }) {
   const [tab, setTab] = useState("Current");
@@ -26,6 +27,7 @@ export function EventDetail({ id }: { id: string }) {
           {tab === "Evidence" && <EvidenceTab id={id} />}
           {tab === "Entities" && <EntitiesTab entities={data.resolved_entities} />}
           {tab === "Relationships" && <RelationshipsTab rels={data.relationships} />}
+          {tab === "Demand context" && <EventDemandContext eventId={id} />}
           {tab === "Capture status" && <CaptureStatus id={id} d={data} />}
         </>
       )}
@@ -271,6 +273,7 @@ export function EntityDetail({ type, id }: { type: string; id: string }) {
           </div>
         )}
       </Card>
+      {type === "ARTIST" && <DemandSection artistId={data.canonical_entity_id ?? id} />}
       {(aliases.length > 0 || supersedes.length > 0 || history.length > 0) && (
         <div className="grid gap-4 lg:grid-cols-3">
           <Card title="Aliases">

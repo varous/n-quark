@@ -114,6 +114,13 @@ export const api = {
   // Bounded export honouring active filters. Returns the BFF href (opened as a download link).
   exportHref: (table: string, format: "csv" | "json", f: Record<string, unknown>) =>
     `${API_BASE}/export/${table}${qs({ ...f, format })}`,
+  // ---- demand intelligence (Phase 5A.2; read-only) ----
+  demandOverview: () => req<DemandOverview>("/demand/overview"),
+  demandSummary: () => req<DemandSummary>("/demand/summary"),
+  demandArtist: (id: string) => req<ArtistDemand>(`/demand/artists/${encodeURIComponent(id)}`),
+  demandArtistObservations: (id: string, f: Record<string, unknown>) =>
+    req<DemandObservations>(`/demand/artists/${encodeURIComponent(id)}/observations${qs(f)}`),
+  demandEvent: (id: string) => req<EventDemand>(`/demand/events/${encodeURIComponent(id)}`),
 };
 
 // ---- types (loose; the BFF is the source of truth) ----
@@ -183,3 +190,50 @@ export type SystemHealth = {
   canonical_counts?: Record<string, number | null>;
 };
 export type SearchResult = { query: string; results: { events: Array<Record<string, unknown>>; entities: Array<Record<string, unknown>> } };
+
+// ---- demand intelligence types (loose; the BFF is the source of truth) ----
+export type ProviderMode = { mode: "REAL" | "MOCK" | "UNKNOWN"; source: string; available: boolean };
+export type DemandOverview = {
+  available: boolean;
+  coverage: Record<string, unknown> | null;
+  provider_health: { providers?: { youtube?: Record<string, unknown>; google_trends?: Record<string, unknown> } } | null;
+  quota: { days?: Array<Record<string, unknown>>; youtube_max_searches_per_day?: number } | null;
+  scheduler: Record<string, unknown> | null;
+  downstream: Record<string, boolean>;
+};
+export type DemandSummary = {
+  available: boolean; resolved_youtube_artists?: number | null;
+  artists_with_youtube_identity?: number | null; artists_with_demand_observation?: number | null;
+  stale_demand_artists?: number | null; youtube_mode?: string | null;
+  scheduler_enabled?: boolean | null; scheduler_terminal_failures?: number | null;
+};
+export type ExternalIdentity = {
+  id: string; provider: string; identity_type: string; provider_id: string;
+  display_name: string | null; canonical_url: string | null; status: string;
+  resolution_method: string | null; confidence: number; first_seen_at: string;
+  last_verified_at: string | null; reason?: string | null; invalidation_reason?: string | null;
+};
+export type ArtistDemand = {
+  canonical_artist_id: string; available: boolean;
+  external_identities: ExternalIdentity[];
+  youtube: Record<string, unknown> | null;
+  google_trends: Record<string, unknown> | null;
+  observed_live_supply: Record<string, unknown> | null;
+  momentum: { components?: Record<string, unknown>; coverage?: Record<string, unknown>; notes?: string[] } | null;
+  geography: { regions?: Array<Record<string, unknown>>; notes?: string[] } | null;
+  notes: string[];
+  downstream: Record<string, boolean>;
+};
+export type DemandObservations = {
+  available: boolean; total?: number; limit?: number; offset?: number;
+  items?: Array<Record<string, unknown>>;
+};
+export type EventDemand = {
+  canonical_event_id: string; available: boolean; resolved_artist_count: number; capped: boolean;
+  artists: Array<{
+    canonical_artist_id: string; raw_name: string | null; available: boolean;
+    youtube: Record<string, unknown> | null; google_trends: Record<string, unknown> | null;
+    momentum: Record<string, unknown> | null; event_response: Record<string, unknown> | null;
+  }>;
+  notes: string[];
+};

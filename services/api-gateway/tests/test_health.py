@@ -29,4 +29,5 @@ def test_platform_status_aggregates_services() -> None:
     body = response.json()
     assert "services" in body
     assert body["status"] == "ok"
-    assert len(body["services"]) == 9
+    # 9 core services + artist-intelligence-service (Phase 5A.2 demand BFF downstream)
+    assert len(body["services"]) == 10

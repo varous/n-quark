@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "./api";
 import { Badge, Card, Empty, ErrorBox, ExportButtons, Link, Loading, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
+import { DemandSummaryCard } from "./demand";
 
 const CARD_LABELS: Record<string, string> = {
   active_tracked_events: "Active tracked events",
@@ -57,6 +58,7 @@ export function Overview() {
         <AttentionQueue title="Events without geography" items={data.attention_queues.events_without_geography}
           render={(q) => <Link to={`/events/${q.canonical_event_id}`}>{fmt(q.source_record_id)}</Link>} />
       </div>
+      <DemandSummaryCard />
     </div>
   );
 }

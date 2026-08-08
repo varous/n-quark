@@ -140,11 +140,16 @@ async def coverage(db: Session = Depends(get_db)) -> dict[str, Any]:
     return await intelligence.build_coverage(db)
 
 
-@router.get("/demand/provider-health", summary="Provider health + Trends mode")
-def provider_health(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return intelligence.build_provider_health(db)
+@router.get("/demand/provider-health", summary="Provider health + Trends mode + YouTube REAL/MOCK")
+async def provider_health(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return await intelligence.build_provider_health_full(db)
 
 
 @router.get("/demand/quota", summary="Per-provider/day quota accounting")
 def quota(db: Session = Depends(get_db)) -> dict[str, Any]:
     return intelligence.build_quota(db)
+
+
+@router.get("/demand/scheduler", summary="Read-only demand refresh scheduler state")
+def scheduler_state(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return intelligence.build_scheduler_state(db)

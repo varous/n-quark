@@ -100,3 +100,44 @@ restart resumes idempotently. One artist/provider failure is isolated from the r
 - Coverage is **observed public demand for a bounded pilot cohort — not complete market demand coverage**.
 - Momentum deltas need ≥2 snapshots across days; a single snapshot honestly reports `INSUFFICIENT_HISTORY`.
 - The supply/demand geography join relies on region-label alignment between Trends and the graph.
+
+## Phase 5A.2 — inspection surface (read-only, local-only)
+
+The Phase 5A read models are exposed through the existing local admin **inspection console** — no SQL,
+curl, or Fly logs needed for routine inspection. This is an observability phase, not a new intelligence
+model: no metric is computed in the gateway or the browser; the gateway BFF only fetches, bounds, and
+normalises presentation, and analytics stay in artist-intelligence-service.
+
+**Topology** (unchanged from Admin C): `React admin → api-gateway /admin/v1 → artist-intelligence-service`.
+The browser never calls the demand service directly. A demand-service outage degrades the relevant panel
+(`available: false`) and never breaks the rest of the console.
+
+**Surfaces**
+- **Demand Intelligence** screen (nav): coverage, YouTube provider health with a **REAL / MOCK / UNKNOWN**
+  mode badge (MOCK is rendered as an unmissable alert; mode is never assumed REAL — UNKNOWN if
+  signal-service health can't be read), today's quota counters, read-only scheduler state, and Google
+  Trends OFFICIAL_API / IMPORT status.
+- **Artist Demand** (`#/demand/artists/<canonical-artist-id>`, also embedded as a section on the ARTIST
+  entity page): external identities with explicit verification (`RESOLVED` + provider-verified +
+  `last_verified_at`; `UNRESOLVED`/`REJECTED` + reason), YouTube current state + deltas + recent-video
+  context, independent momentum components, Google Trends (relative interest + regional distribution +
+  normalization context), a sortable geography table, observed live supply, and bounded observation history.
+- **Event → Demand context** tab: per-resolved-artist YouTube freshness + 7d/30d momentum + the
+  event-relative co-movement timeline (T-60…T+7), labelled *temporal co-movement only — no causal inference*.
+- **Dashboard**: a compact demand summary card.
+
+**Read-only + epistemic display rules enforced in the UI**
+- No mutation controls exist anywhere (no resolve / refresh / import / retry / scheduler actions).
+- `confidence` is labelled the identity-resolution match strength — **not** popularity, reach, or quality.
+- Subscriber counts carry the provider-reported/rounded caveat; rounded deltas are not shown as exact.
+- `INSUFFICIENT_HISTORY` and Trends `ACCESS_UNAVAILABLE` are shown as legitimate evidence states in a
+  neutral tone, never as errors.
+- Google Trends values are labelled **relative search interest** (0–100 within a pull), never volume;
+  independently normalised exports are never compared on one scale.
+- Supply is labelled **observed live supply** (not total activity); underlying values are always shown and
+  no composite demand×supply score is introduced in the frontend.
+
+**Boundary**: the admin frontend and the admin BFF remain **local-only** — the frontend is in no Fly
+manifest and `NQUARK_ADMIN_API_ENABLED`/`NQUARK_ADMIN_LOCAL_MODE` stay pinned off on cloud (enforced by
+test). The production artist-intelligence-service remains private Flycast infrastructure; this phase adds
+no cloud surface. `docs/product-spec.md` is untouched.

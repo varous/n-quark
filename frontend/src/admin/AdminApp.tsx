@@ -5,11 +5,12 @@ import { DrawerProvider, Link, Loading, useHashRoute } from "./ui";
 import { Captures, Diagnostics, Events, Health, Overview, Sources } from "./screens";
 import { Resolution } from "./workbench";
 import { EntityDetail, Entities, EventDetail, Graph } from "./detail";
+import { ArtistDemand, DemandIntelligence } from "./demand";
 
 const NAV = [
   ["/overview", "Overview"], ["/sources", "Sources"], ["/events", "Events"],
-  ["/entities", "Entities"], ["/resolution", "Resolution"], ["/graph", "Graph"],
-  ["/captures", "Captures"], ["/diagnostics", "Diagnostics"], ["/health", "Health"],
+  ["/entities", "Entities"], ["/demand", "Demand Intelligence"], ["/resolution", "Resolution"],
+  ["/graph", "Graph"], ["/captures", "Captures"], ["/diagnostics", "Diagnostics"], ["/health", "Health"],
 ];
 
 function parse(hash: string): { path: string; parts: string[]; params: URLSearchParams } {
@@ -26,6 +27,10 @@ function Router({ hash }: { hash: string }) {
     case "sources": return <Sources />;
     case "events": return a ? <EventDetail id={decodeURIComponent(parts.slice(1).join("/"))} /> : <Events />;
     case "entities": return a && b ? <EntityDetail type={a} id={decodeURIComponent(parts.slice(2).join("/"))} /> : <Entities />;
+    case "demand":
+      return a === "artists" && b
+        ? <ArtistDemand id={decodeURIComponent(parts.slice(2).join("/"))} />
+        : <DemandIntelligence />;
     case "resolution": return <Resolution />;
     case "graph": return <Graph initialRoot={params.get("root") ?? undefined} />;
     case "captures": return <Captures />;

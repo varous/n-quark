@@ -18,6 +18,7 @@ DOCKER_DOWNSTREAM_SERVICES: dict[str, str] = {
     "analytics": "http://analytics-service:8007",
     "feature": "http://feature-service:8008",
     "intelligence": "http://intelligence-service:8009",
+    "artist_intelligence": "http://artist-intelligence-service:8010",
 }
 
 LOCAL_DOWNSTREAM_SERVICES: dict[str, str] = {
@@ -30,6 +31,7 @@ LOCAL_DOWNSTREAM_SERVICES: dict[str, str] = {
     "analytics": "http://localhost:8007",
     "feature": "http://localhost:8008",
     "intelligence": "http://localhost:8009",
+    "artist_intelligence": "http://localhost:8010",
 }
 
 
@@ -87,6 +89,7 @@ class Settings(BaseSettings):
     analytics_service_url: str | None = None
     feature_service_url: str | None = None
     intelligence_service_url: str | None = None
+    artist_intelligence_service_url: str | None = None
 
     @property
     def downstream_services(self) -> dict[str, str]:
@@ -105,6 +108,7 @@ class Settings(BaseSettings):
             "analytics": self.analytics_service_url,
             "feature": self.feature_service_url,
             "intelligence": self.intelligence_service_url,
+            "artist_intelligence": self.artist_intelligence_service_url,
         }
         for key, url in overrides.items():
             if url:

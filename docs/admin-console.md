@@ -126,3 +126,30 @@ Extra flags: `ADMIN_OPERATIONAL_ACTIONS_ENABLED` also gates all governance comma
 - The graph explorer is a compact SVG renderer (dependency-light); Cytoscape.js is a documented drop-in.
 - `system-health` reports downstream `/health` payloads + data-quality aggregates; per-service migration
   versions are not yet surfaced.
+
+## Phase 5A.2 — Demand Intelligence inspection (read-only)
+
+A new **Demand Intelligence** domain in the same local console exposes the Phase 5A demand read models
+(YouTube identity/observations, deterministic momentum, Google Trends, observed-supply context). It is
+inspection-first, read-only, and local-only — see `docs/demand-intelligence.md` for the demand semantics.
+
+BFF (`/admin/v1`, VIEWER, all degrade gracefully to `available:false` — never 500):
+- `GET /demand/overview` — coverage + YouTube provider health (REAL/MOCK/UNKNOWN mode) + today's quota +
+  read-only scheduler state + Google Trends OFFICIAL_API/IMPORT status.
+- `GET /demand/summary` — compact dashboard headline.
+- `GET /demand/artists/{artist_id}` — identities + YouTube + Trends + supply + momentum + geography bundle.
+- `GET /demand/artists/{artist_id}/observations` — bounded, filterable observation history (limit ≤ 200).
+- `GET /demand/events/{event_id}` — per-resolved-artist demand context + event-relative co-movement.
+
+These proxy artist-intelligence-service (a new `artist_intelligence` downstream, port 8010); the browser
+never calls it directly. There are **no demand mutation routes** — the whole surface is GET-only.
+
+UI: a **Demand Intelligence** nav screen (coverage / provider / quota / scheduler / Trends), a full
+**Artist Demand** view (also embedded as a section on the ARTIST entity page), an **Event → Demand
+context** tab, and a dashboard summary card. Epistemic display rules are enforced (verification-explicit
+identities, `confidence` ≠ popularity, subscriber rounding caveat, `INSUFFICIENT_HISTORY` /
+`ACCESS_UNAVAILABLE` as legitimate states, Trends labelled relative-not-volume, "observed live supply").
+A MOCK provider mode is rendered as an unmissable alert. No scheduler/resolve/refresh/import controls exist.
+
+Boundary is unchanged: the frontend and admin BFF stay **local-only** (no Fly manifest references the
+frontend; the admin flags stay off on cloud, enforced by test).

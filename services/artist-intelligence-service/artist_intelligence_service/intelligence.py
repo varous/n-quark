@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from artist_intelligence_service import readmodels, reads
@@ -43,11 +43,15 @@ def _now() -> datetime:
 
 
 def _identity_dict(i: ArtistExternalIdentity) -> dict[str, Any]:
+    # A bounded, non-sensitive slice of the identity's metadata: the short reason code for the current
+    # status and (if invalidated) why — never the raw candidate/provider payloads or any secret.
+    meta = i.identity_metadata or {}
     return {"id": i.id, "provider": i.provider, "identity_type": i.identity_type,
             "provider_id": i.provider_id, "display_name": i.display_name, "status": i.status,
             "confidence": i.confidence, "resolution_method": i.resolution_method,
             "canonical_url": i.canonical_url, "first_seen_at": i.first_seen_at.isoformat(),
-            "last_verified_at": i.last_verified_at.isoformat() if i.last_verified_at else None}
+            "last_verified_at": i.last_verified_at.isoformat() if i.last_verified_at else None,
+            "reason": meta.get("reason"), "invalidation_reason": meta.get("invalidation_reason")}
 
 
 # ---- momentum ---------------------------------------------------------------------------------
@@ -358,4 +362,70 @@ def build_provider_health(db: Session) -> dict[str, Any]:
             "google_trends": svc.trends_official_status() | {
                 "import_enabled": settings.resolved_trends_mode in ("IMPORT", "OFFICIAL_API")},
         },
+    }
+
+
+async def youtube_provider_mode() -> dict[str, Any]:
+    """Best-effort: ask signal-service (the single ingestion path) whether YouTube runs REAL or MOCK.
+
+    The demand layer never holds the YouTube key, so the authoritative mock/real signal lives in
+    signal-service's ``/health``. If signal-service is unreachable the mode is honestly ``UNKNOWN``
+    (never silently reported as REAL) so a mock-mode session can always be made visible in the UI."""
+    import httpx
+    base = settings.signal_service_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+            resp = await client.get(f"{base}/health")
+        if resp.status_code == 200:
+            mock = str(resp.json().get("youtube_mock", "")).strip().lower() == "true"
+            return {"mode": "MOCK" if mock else "REAL", "source": "signal-service", "available": True}
+    except httpx.HTTPError:
+        pass
+    return {"mode": "UNKNOWN", "source": "signal-service", "available": False}
+
+
+async def build_provider_health_full(db: Session) -> dict[str, Any]:
+    """Provider health with the live YouTube REAL/MOCK mode folded in (async best-effort)."""
+    health = build_provider_health(db)
+    health["providers"]["youtube"]["mode"] = await youtube_provider_mode()
+    return health
+
+
+def build_scheduler_state(db: Session, *, now: datetime | None = None) -> dict[str, Any]:
+    """Read-only view of the demand refresh scheduler, derived from ``demand_refresh_job`` rows.
+
+    Descriptive only — no scheduler actions are exposed. ``running_leased`` counts only jobs whose
+    lease has not expired; an expired-lease RUNNING row is reclaimable, not actually running."""
+    now = now or _now()
+    from artist_intelligence_service.models import DemandRefreshJob as J
+    by_status = {s: c for s, c in db.execute(
+        select(J.status, func.count()).group_by(J.status)).all()}
+    running_leased = int(db.execute(
+        select(func.count()).select_from(J).where(
+            J.status == "RUNNING",
+            or_(J.lock_expires_at.is_(None), J.lock_expires_at >= now))
+    ).scalar_one())
+    latest_success = db.execute(
+        select(func.max(J.completed_at)).where(J.status == "SUCCEEDED")).scalar_one_or_none()
+    next_due = db.execute(
+        select(func.min(J.scheduled_at)).where(
+            J.status.in_(("PENDING", "FAILED_RETRYABLE")))).scalar_one_or_none()
+    total = sum(by_status.values())
+    return {
+        "enabled": settings.demand_scheduler_enabled,
+        "intelligence_enabled": settings.demand_intelligence_enabled,
+        "refresh_interval_seconds": settings.demand_refresh_interval_seconds,
+        "batch_size": settings.demand_scheduler_batch_size,
+        "max_attempts": settings.demand_scheduler_max_attempts,
+        "jobs_total": total,
+        "jobs_by_status": by_status,
+        "queued_due": by_status.get("PENDING", 0),
+        "running_leased": running_leased,
+        "retrying": by_status.get("FAILED_RETRYABLE", 0),
+        "succeeded": by_status.get("SUCCEEDED", 0),
+        "terminal_failures": by_status.get("FAILED_TERMINAL", 0),
+        "latest_successful_refresh": reads._aware(latest_success).isoformat() if latest_success else None,
+        "next_scheduled_refresh": reads._aware(next_due).isoformat() if next_due else None,
+        "notes": ["read-only scheduler state; the console exposes no scheduler actions",
+                  "terminal failures include channels whose id no longer exists (PROVIDER_ID_NOT_FOUND)"],
     }

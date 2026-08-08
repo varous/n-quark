@@ -16,7 +16,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
 from api_gateway.admin import auth
-from api_gateway.admin.deps import get_admin_service, get_audit_store
+from api_gateway.admin.demand import DemandAdminService
+from api_gateway.admin.deps import get_admin_service, get_audit_store, get_demand_service
 from api_gateway.admin.service import AdminService
 from api_gateway.config import settings
 
@@ -204,6 +205,42 @@ async def search(q: str = Query(...), limit: int = Query(default=20, ge=1, le=10
                  _: auth.Principal = Depends(auth.require_viewer),
                  svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
     return await svc.search(q, limit=limit)
+
+
+# ---- demand intelligence (Phase 5A.2; read-only; degrades gracefully) ---------------------------
+@router.get("/demand/overview")
+async def demand_overview(_: auth.Principal = Depends(auth.require_viewer),
+                          svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.overview()
+
+
+@router.get("/demand/summary")
+async def demand_summary(_: auth.Principal = Depends(auth.require_viewer),
+                         svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.summary()
+
+
+@router.get("/demand/artists/{artist_id:path}/observations")
+async def demand_artist_observations(artist_id: str,
+                                     provider: str | None = Query(default=None),
+                                     metric: str | None = Query(default=None),
+                                     limit: int = Query(default=100, ge=1, le=200),
+                                     offset: int = Query(default=0, ge=0),
+                                     _: auth.Principal = Depends(auth.require_viewer),
+                                     svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.observations(artist_id, provider=provider, metric=metric, limit=limit, offset=offset)
+
+
+@router.get("/demand/artists/{artist_id:path}")
+async def demand_artist(artist_id: str, _: auth.Principal = Depends(auth.require_viewer),
+                        svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.artist(artist_id)
+
+
+@router.get("/demand/events/{event_id:path}")
+async def demand_event(event_id: str, _: auth.Principal = Depends(auth.require_viewer),
+                       svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.event_context(event_id)
 
 
 # ---- bounded export (VIEWER; respects the same filters as the live view) ------------------------
