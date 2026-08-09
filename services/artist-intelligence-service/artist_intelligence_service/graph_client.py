@@ -25,6 +25,18 @@ class GraphServiceClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def list_artist_nodes(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Canonical ARTIST graph nodes (the graph REPRESENTATION of canonical artists). Read-only; used
+        by 5A.3.2 diagnostics to make registry-vs-graph divergence visible. Never mutates the graph."""
+        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+            resp = await client.get(f"{self.base_url}/v1/graph/nodes",
+                                    params={"type": "artist", "limit": limit})
+            if resp.status_code == 404:
+                return []
+            resp.raise_for_status()
+            body = resp.json()
+        return body.get("nodes", body if isinstance(body, list) else [])
+
     async def neighbors(self, node_id: str, *, direction: str = "both",
                         relationship: str | None = None) -> list[dict[str, Any]]:
         params: dict[str, str] = {"direction": direction}

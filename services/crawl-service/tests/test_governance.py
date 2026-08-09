@@ -196,3 +196,41 @@ def test_edition_title_produces_series_evidence():
     ents = extract_event_entities(canonical_event_id="event:e", source="boshow",
                                   source_record_id="r", node=node, neighbors=neigh, observed_at=NOW)
     assert ents.series is not None and ents.series.evidence["edition_number"] == 12
+
+
+# ---- Phase 5A.3.2: external artist creation registers in the canonical registry ----------------
+def _registry_rows(cid):
+    from sqlalchemy import select
+    with SessionLocal() as s:
+        return s.execute(select(EntityResolutionCandidate).where(
+            EntityResolutionCandidate.candidate_canonical_entity_id == cid,
+            EntityResolutionCandidate.entity_type == "ARTIST")).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_create_artist_registers_in_registry_idempotent():
+    svc = _svc()   # empty graph reader → node doesn't exist
+    a = await svc.create_artist(canonical_name="Prateek Kuhad", source="promotion")
+    assert a["created"] is True and a["registry_registered"] is True
+    cid = a["canonical_entity_id"]
+    rows = _registry_rows(cid)
+    assert len(rows) == 1 and rows[0].resolution_status == "RESOLVED"   # enumerable via /entities
+    # idempotent registry: re-creating the same artist does not duplicate the registry row
+    b = await svc.create_artist(canonical_name="Prateek Kuhad", source="promotion")
+    assert b["registry_registered"] is False
+    assert len(_registry_rows(cid)) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_graph_only_artists_idempotent():
+    reader = MultiStubGraphReader(nodes_by_type={"artist": [
+        {"id": "artist:graph-only-one", "type": "artist", "properties": {"display_name": "Graph Only One"}},
+        {"id": "artist:graph-only-two", "type": "artist", "properties": {"display_name": "Graph Only Two"}},
+    ]})
+    svc = GovernanceService(SessionLocal, reader, StubGraphWriter(), Settings())
+    out = await svc.reconcile_graph_artists()
+    assert out["status"] == "OK" and out["examined"] == 2 and out["registered"] == 2
+    assert len(_registry_rows("artist:graph-only-one")) == 1
+    assert len(_registry_rows("artist:graph-only-two")) == 1
+    again = await svc.reconcile_graph_artists()   # idempotent
+    assert again["registered"] == 0

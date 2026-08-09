@@ -236,3 +236,31 @@ to normal cadence.
 
 Also fixed a latent 5A.3 defect: `crawl_client.artists` targeted `/v1/internal/entities` (404) instead of
 `/v1/internal/entity-resolution/entities`, so backfill/coverage silently saw zero canonical artists.
+
+## Phase 5A.3.2 — canonical artist state reconciliation
+
+**Ownership model (documented).** Canonical ARTIST **identity** is owned by crawl's entity-resolution
+registry (`EntityResolutionCandidate`, enumerated at `/v1/internal/entity-resolution/entities`); the
+graph is the **representation** (artist nodes + FEATURES/IDENTIFIES edges) written by the resolver
+(`_write_graph`) and by governance `create-artist`. artist-intelligence never owns canonical identity —
+it reads the registry (`crawl_client.artists`) and keys demand on `canonical_artist_id`.
+
+**Root cause of the prod "0 artists".** Production had genuinely not accrued canonical artists yet
+(1 tracked event, empty graph, empty registry) — not registry drift and not a hidden graph cohort. The
+lone prod `artist:arijit-singh` demand rows are an **orphan** from earlier manual validation (a
+canonical_artist_id supplied directly, never backed by a registry/graph node).
+
+**Reconciliation.** `create-artist` (governance) now also writes a RESOLVED registry row so
+externally-created (promotion) artists appear in the authoritative `/entities` enumeration — closing a
+5A.3.1 gap where such artists were graph-only and invisible to backfill. `POST
+/v1/internal/governance/reconcile-graph-artists` idempotently registers any pre-existing graph-only
+ARTIST node into the registry (bounded; never creates/duplicates nodes; never rewrites ids).
+
+**Diagnostics + orphan audit.** `/demand/artist-universe` gains a `canonical_reconciliation` block:
+canonical-registry artists, graph ARTIST nodes, artists referenced by demand identities/observations,
+confirmed-live-India count, and **orphan demand references** (demand `canonical_artist_id` values absent
+from the canonical enumeration) — reported for audit, never silently rewritten. Degrades safely when
+crawl/graph are unavailable.
+
+Also fixed: the graph-only existence check tolerates multiple candidate rows per canonical id; graph node
+listing respects the service's 500 cap.

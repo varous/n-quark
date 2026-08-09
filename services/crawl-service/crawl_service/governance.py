@@ -286,15 +286,75 @@ class GovernanceService:
         if base in _GENERIC_NAMES:
             raise GovernanceError("GENERIC_NAME", f"'{canonical_name}' is too generic to create")
         cid = _cid("artist", norm.replace("-", " "))
-        exists, _ = await self._node_exists(cid)
-        if exists:
-            return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": False}
+        node_exists, _ = await self._node_exists(cid)
+        # Register in the entity-resolution registry too, so the artist appears in the AUTHORITATIVE
+        # canonical enumeration (/entities), not just as a graph node (Phase 5A.3.2 reconciliation).
+        registered = self._register_external_artist(cid, canonical_name, source=source)
+        if node_exists:
+            return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": False,
+                    "registry_registered": registered}
         props: dict[str, Any] = {"display_name": canonical_name,
                                  "origin": "EXTERNAL_DISCOVERY", "origin_source": source}
         if provenance:
             props["external_provenance"] = provenance
         await self._write([{"id": cid, "type": _NODE_TYPE["ARTIST"], "properties": props}], [])
-        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True}
+        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True,
+                "registry_registered": registered}
+
+    def _register_external_artist(self, cid: str, canonical_name: str, *,
+                                  source: str | None = None) -> bool:
+        """Idempotently register an externally-created canonical ARTIST in the entity-resolution registry
+        so it is enumerable via /entities (the authoritative canonical read path). Returns True if a new
+        registry row was written. Never rewrites an existing canonical id."""
+        now = datetime.now(UTC)
+        handle = f"external:{cid}"
+        with self._sf() as s, s.begin():
+            # a canonical id may already have several candidate rows (multiple source handles) — any one
+            # means it is already enumerable, so use first() not scalar_one_or_none().
+            existing = s.execute(
+                select(EntityResolutionCandidate.id).where(
+                    EntityResolutionCandidate.entity_type == "ARTIST",
+                    EntityResolutionCandidate.candidate_canonical_entity_id == cid).limit(1)
+            ).first()
+            if existing is not None:
+                return False
+            cand_id = _uuid()
+            s.add(EntityResolutionCandidate(
+                id=cand_id, entity_type="ARTIST", source="external_discovery",
+                source_record_id=cid, canonical_event_id=None, source_entity_handle=handle,
+                raw_name=canonical_name, normalized_name=N.slug(canonical_name),
+                candidate_canonical_entity_id=cid, match_score=1.0, resolution_status="RESOLVED",
+                reason_code="EXTERNAL_DISCOVERY", supporting_signals=[f"external_source:{source or 'unknown'}"],
+                contradicting_signals=[], evidence={"origin": "EXTERNAL_DISCOVERY", "source": source},
+                resolver_version=GOV_VERSION, observed_at=now, created_at=now, updated_at=now))
+            s.add(EntityResolutionHistory(
+                id=_uuid(), candidate_id=cand_id, previous_status=None, new_status="RESOLVED",
+                previous_canonical_entity_id=None, new_canonical_entity_id=cid,
+                reason_code="EXTERNAL_DISCOVERY", resolver_version=GOV_VERSION, created_at=now))
+        return True
+
+    async def reconcile_graph_artists(self, *, limit: int = 500) -> dict[str, Any]:
+        """Reconcile legitimate graph-only ARTIST nodes into the entity-resolution registry (idempotent).
+
+        For any canonical ARTIST graph node that lacks a registry row, write a RESOLVED registry row so the
+        authoritative /entities enumeration reflects it. No node is created or duplicated; ids are never
+        rewritten. Bounded per call. A no-op when the graph has no un-registered artist nodes."""
+        try:
+            nodes = await self._graph.list_nodes(node_type="artist", limit=limit)
+        except AttributeError:
+            return {"status": "GRAPH_LIST_UNSUPPORTED", "examined": 0, "registered": 0}
+        except Exception as exc:  # noqa: BLE001 — a graph outage degrades safely
+            return {"status": "GRAPH_UNAVAILABLE", "error": str(exc)[:200], "examined": 0, "registered": 0}
+        examined = registered = 0
+        for n in nodes:
+            cid = n.get("id")
+            if not cid:
+                continue
+            examined += 1
+            name = (n.get("properties") or {}).get("display_name") or cid
+            if self._register_external_artist(cid, str(name), source="graph_reconcile"):
+                registered += 1
+        return {"status": "OK", "examined": examined, "registered": registered}
 
     # ---- supersede legacy projection (ADMIN) ----------------------------------------------------
     async def supersede_legacy(self, *, entity_type: str, legacy_entity_id: str,

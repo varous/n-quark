@@ -82,6 +82,18 @@ async def create_artist(payload: dict = Body(...),
         _handle(exc)
 
 
+@router.post("/reconcile-graph-artists")
+async def reconcile_graph_artists(payload: dict = Body(default={}),
+                                  svc: GovernanceService = Depends(get_governance_service)) -> dict[str, Any]:
+    """Phase 5A.3.2 — register legitimate graph-only ARTIST nodes into the entity-resolution registry
+    (idempotent, bounded). Never creates/duplicates nodes or rewrites ids."""
+    _guard()
+    try:
+        return await svc.reconcile_graph_artists(limit=int(payload.get("limit", 500)))
+    except GovernanceError as exc:
+        _handle(exc)
+
+
 @router.post("/link-handle")
 async def link_handle(payload: dict = Body(...), svc: GovernanceService = Depends(get_governance_service)) -> dict[str, Any]:
     _guard()

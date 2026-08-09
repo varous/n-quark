@@ -153,6 +153,8 @@ async def build_artist_universe(db: Session, *, crawl: CrawlServiceClient | None
             _JOB.job_type == JOB_IDENTITY,
             _JOB.status.in_(("PENDING", "FAILED_RETRYABLE", "RUNNING")))).scalar_one())
 
+    reconciliation = await _reconciliation_diagnostics(db, crawl=crawl)
+
     return {
         "candidates": candidate_counts,
         "india_market_presence": {
@@ -165,7 +167,71 @@ async def build_artist_universe(db: Session, *, crawl: CrawlServiceClient | None
         "discovery_contribution_by_source": by_source,
         "multi_source_artists": int(resolved_multi),
         "identity_resolution_queue_depth": identity_queue_depth,
+        "canonical_reconciliation": reconciliation,
         "disclaimer": coverage.get("disclaimer"),
+    }
+
+
+async def _reconciliation_diagnostics(db: Session, *, crawl: CrawlServiceClient | None = None) -> dict[str, Any]:
+    """Phase 5A.3.2 — make canonical-artist divergence visible (read-only, bounded).
+
+    Compares the authoritative canonical ARTIST enumeration (crawl entity-resolution registry) against
+    the graph ARTIST-node representation and the artist ids referenced by the demand ledger, and reports
+    orphan demand references (canonical_artist_id values not present in the canonical enumeration)."""
+    from artist_intelligence_service.graph_client import GraphServiceClient
+    crawl = crawl or CrawlServiceClient()
+
+    # authoritative canonical enumeration (registry, via crawl) — bounded pages.
+    canonical_ids: set[str] = set()
+    try:
+        offset = 0
+        for _ in range(10):
+            rows = await crawl.artists(limit=200, offset=offset)
+            if not rows:
+                break
+            for r in rows:
+                cid = r.get("canonical_entity_id") or r.get("canonical_artist_id") or r.get("id")
+                if cid:
+                    canonical_ids.add(cid)
+            if len(rows) < 200:
+                break
+            offset += 200
+        canonical_available = True
+    except Exception:  # noqa: BLE001 — degrade safely; a crawl outage must not break diagnostics
+        canonical_available = False
+
+    # graph ARTIST-node representation.
+    try:
+        graph_nodes = await GraphServiceClient().list_artist_nodes(limit=500)
+        graph_node_count: int | None = len(graph_nodes)
+    except Exception:  # noqa: BLE001
+        graph_node_count = None
+
+    # demand-ledger references.
+    identity_ids = set(db.execute(
+        select(func.distinct(ArtistExternalIdentity.canonical_artist_id))).scalars())
+    from artist_intelligence_service.models import ArtistDemandObservation as _ADO
+    observation_ids = set(db.execute(
+        select(func.distinct(_ADO.canonical_artist_id))).scalars())
+
+    referenced = identity_ids | observation_ids
+    orphans = sorted(referenced - canonical_ids) if canonical_available else []
+    with_evidence = int(db.execute(
+        select(func.count(func.distinct(ArtistMarketEvidence.canonical_artist_id)))
+        .where(ArtistMarketEvidence.evidence_class == "CONFIRMED_LIVE_INDIA")).scalar_one())
+
+    return {
+        "authoritative_source": "crawl entity-resolution registry (/v1/internal/entity-resolution/entities)",
+        "canonical_registry_artists": len(canonical_ids) if canonical_available else None,
+        "canonical_registry_available": canonical_available,
+        "graph_artist_nodes": graph_node_count,
+        "artists_referenced_by_demand_identities": len(identity_ids),
+        "artists_referenced_by_demand_observations": len(observation_ids),
+        "artists_with_confirmed_live_india": with_evidence,
+        "orphan_demand_artist_references": len(orphans),
+        "orphan_sample": orphans[:10],
+        "note": "orphans are demand canonical_artist_id values not present in the authoritative "
+                "canonical enumeration; reported for audit — never silently rewritten.",
     }
 
 

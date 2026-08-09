@@ -46,9 +46,13 @@ class MultiStubGraphReader:
     """Returns a per-event (node, neighbors) from a mapping keyed by canonical_event_id."""
 
     mapping: dict = field(default_factory=dict)  # event_id -> (node, neighbors)
+    nodes_by_type: dict = field(default_factory=dict)  # node_type -> [node dicts] (5A.3.2 reconcile)
 
     async def get_event(self, event_id: str):
         return self.mapping.get(event_id, (None, []))
+
+    async def list_nodes(self, *, node_type: str, limit: int = 500):
+        return list(self.nodes_by_type.get(node_type, []))[:limit]
 
 
 @dataclass

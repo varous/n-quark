@@ -43,6 +43,17 @@ class HttpGraphReader:
             neighbors = r2.json().get("neighbors", []) if r2.status_code == 200 else []
             return node, neighbors
 
+    async def list_nodes(self, *, node_type: str, limit: int = 500) -> list[dict[str, Any]]:
+        """List canonical graph nodes of a type (Phase 5A.3.2 reconciliation of graph-only artists)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.get(f"{self.base}/v1/graph/nodes",
+                                  params={"type": node_type, "limit": limit})
+            if r.status_code == 404:
+                return []
+            r.raise_for_status()
+            body = r.json()
+            return body.get("nodes", body if isinstance(body, list) else [])
+
 
 class HttpGraphWriter:
     """Writes canonical entity nodes + relationships via graph-service's batch upsert (idempotent)."""
