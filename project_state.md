@@ -283,6 +283,13 @@ crawl + artist-intelligence rebuilt/recreated. Live:
   demand-identity refs 30, **3 orphan** demand refs (`__hotfix-stale-demo`, `arijit-singh`,
   `test-newcomer-5a3`) — audited, never rewritten.
 
+**Deployed to private Fly** (crawl + artist-intelligence; both 1/1 passing). **Prod post-fix**: registry
+**0** == graph **0** (genuine — prod has not accrued canonical artists; 1 tracked event; not fabricated),
+`reconcile-graph-artists` safe no-op (examined 0), and the orphan audit now surfaces **1 orphan
+(`artist:arijit-singh`)** in prod for the operator. Collection healthy (`youtube_mock=false`). The
+create-artist→registry + reconcile machinery is proven locally (registry==graph converged, 6 registered)
+and by tests, ready for when prod collection produces canonical artists.
+
 ## Phase 5A.3.1 — candidate promotion & acquisition closure (2026-08-09, LIVE VALIDATED, docker + real API)
 
 crawl + artist-intelligence rebuilt/recreated with promotion/ecosystem/event flags on. Live:
