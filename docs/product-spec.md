@@ -1013,3 +1013,65 @@ unavailable.
   above and never labelled *verified*.
 - **crawl-service scope:** adaptive-frequency scheduling assumes an autonomous crawl-service, which is
   still a scaffold. This is future work, not current capability.
+
+---
+
+# Delivered — Public Demand Intelligence & Indian Artist Universe (Phase 5A → 5A.3.2)  `[CURRENT]`
+
+_Appended 2026-08-09. Additive record of what the moat's **demand side** now actually ships. Existing
+`[PROPOSED]`/`[FUTURE]` entries above are unchanged; items here move from proposed to current. This section
+is append-only like the rest of this MCP._
+
+## What shipped
+
+- **artist-intelligence-service** (port 8010) — the demand-side observation layer, a **separate stateful
+  service** so demand-layer failure never disrupts the crawl→signal collection spine. Demand and supply
+  (the event Shadow Ledger) are two independent evidence systems that meet **only** through
+  `canonical_artist_id`; demand metrics never enter the event ledger.
+- **Own demand ledger** — `artist_external_identity`, `artist_demand_observation` (append-only, idempotent
+  on `observation_key`, provenance + `evidence_status`), `provider_quota_day` / `provider_quota_bucket_day`,
+  `demand_refresh_job`, plus the 5A.3 artist-universe tables (`artist_candidate`, `artist_market_evidence`,
+  `youtube_video`). Migrations additive + reversible.
+- **Single ingestion path** — all YouTube acquisition is delegated to **signal-service** (search / channel
+  verify / recent videos / `videos.list` batch stats); the API key stays there. No parallel YouTube client.
+- **YouTube identity integrity `[INVARIANT]`** — search is candidate discovery only; a CHANNEL_ID becomes
+  `RESOLVED` **only** after an authoritative `channels.list` verification; `last_verified_at` is set only on
+  real provider verification; only an authoritative NOT_FOUND invalidates an identity. Thresholds are never
+  lowered to raise coverage — **a false identity match is worse than missing data**.
+- **Google Trends** — official-API-or-import only, **no scraping**. Values are **relative search interest**
+  (0–100 within a pull), never absolute volume; independently normalised exports are never merged;
+  SEARCH_TERM vs TOPIC kept distinct. Production currently reports `ACCESS_UNAVAILABLE` (IMPORT available) —
+  a legitimate state, not an error.
+- **Deterministic read models** — momentum (independent components, never a composite score),
+  geography (demand × observed supply, transparent labels), supply/demand juxtaposition, and event-response
+  **temporal co-movement only (no causal inference)**. `INSUFFICIENT_HISTORY` is a first-class honest state.
+- **Restart-safe scheduler** — persisted, lease-locked, idempotent; hourly YouTube live-metric buckets
+  (Trends stays daily; historical daily records preserved, hourly precision never retrofitted); adaptive +
+  event-aware cadence; per-provider quota **buckets** (SEARCH / GENERAL_READ / VIDEO_STATS_BATCH) with a
+  configurable target-utilisation + **reserve** (defer, never invalidate, at the reserve) and a
+  provider-timezone reset boundary.
+- **Indian artist universe (decoupled from ticketing) `[INVARIANT]`** — artists enter via multiple
+  discovery surfaces (event-derived, YouTube search/ecosystem, future authorized seams), not only ticketing.
+  Discovery produces **candidates**, never canonical artists. Promotion to canonical requires deterministic,
+  auditable evidence (match an existing canonical / multi-source confirmation / India-live + music identity)
+  and is **routed through the entity/graph owner** — the demand layer never creates or owns canonical
+  identity. India market presence is **evidence-classified** (`CONFIRMED_LIVE_INDIA` / `INDIA_DEMAND_OBSERVED`
+  / `INDIA_MARKET_CANDIDATE`), never a single opaque relevance score. **BookMyShow is never a gatekeeper and
+  is never evasively scraped.**
+- **Canonical ownership + reconciliation `[INVARIANT]`** — canonical ARTIST **identity** is owned by
+  crawl's entity-resolution registry; the graph is its **representation**. Externally/promotion-created
+  artists are registered idempotently so the authoritative enumeration stays single and complete; demand
+  `canonical_artist_id` references are **auditable** against it (orphans reported, never silently rewritten).
+- **Inspection surface** — the demand read models are exposed through the existing **local-only,
+  read-only** admin console (Demand Intelligence screen + artist/event demand context + artist-universe and
+  quota-bucket diagnostics). No mutation controls; the admin BFF/frontend are never exposed on cloud.
+- **Deployment** — runs on the existing private Fly topology (region `sin`, private Flycast, no public IP);
+  no new public surface introduced.
+
+## Reaffirmed invariants (demand side)
+
+- No composite popularity / market-value / booking score; no causal claim from co-movement.
+- Reported ≠ Verified ≠ Estimated ≠ Observed — YouTube subscriber counts are **provider-reported/rounded**,
+  never shown as exact; Trends is relative interest, never volume.
+- Canonical identity is owned by the entity/graph architecture; the demand layer only attaches to it.
+- API keys are operator-set secrets, never handled by tooling, never in git/logs/images.
