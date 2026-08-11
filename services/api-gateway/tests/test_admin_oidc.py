@@ -128,6 +128,35 @@ def test_callback_error_redirects_to_login_error(oidc_client):
     assert "login_error" in r.headers["location"]
 
 
+def test_session_cookie_is_httponly_secure_samesite(oidc_client, monkeypatch):
+    # In production session_cookie_secure=true; the cookie must be HttpOnly + Secure + SameSite=Lax.
+    monkeypatch.setattr(settings, "session_cookie_secure", True)
+
+    async def fake_exchange(code: str, expected_nonce: str):
+        return oidc.OidcResult(email="sourav@clockwork-av.com", hosted_domain="clockwork-av.com")
+
+    monkeypatch.setattr(oidc, "exchange_code", fake_exchange)
+    state = oidc.issue_state("/", nonce="n1")
+    r = oidc_client.get(f"/admin/v1/auth/callback?code=c&state={state}", follow_redirects=False)
+    setc = r.headers.get("set-cookie", "")
+    assert settings.session_cookie_name + "=" in setc
+    assert "HttpOnly" in setc
+    assert "Secure" in setc
+    assert "samesite=lax" in setc.lower()
+    assert "Path=/" in setc
+
+
+def test_expired_state_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "admin_session_secret", "unit-secret")
+    import json
+    import time as _t
+    old = int(_t.time()) - (oidc._STATE_TTL_SECONDS + 60)
+    body = oidc._b64u(json.dumps({"n": "/", "ts": old, "nc": "x"}, separators=(",", ":")).encode())
+    stale = f"{body}.{oidc._sign(body.encode())}"  # correctly signed, but issued too long ago
+    with pytest.raises(oidc.OidcError):
+        oidc.verify_state(stale)
+
+
 def test_logout_clears_cookie(oidc_client):
     token = auth.issue_session("sourav@clockwork-av.com", "VIEWER", auth_mode="oidc")
     oidc_client.cookies.set(settings.session_cookie_name, token)
