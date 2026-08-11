@@ -69,10 +69,19 @@ export function LoginScreen({ status }: { status: AuthStatus | null }) {
   const failed = new URLSearchParams(window.location.search).get("login_error");
   const disabled = status?.auth_mode === "disabled";
   const loginUrl = (status?.login_url ?? "/admin/v1/auth/login") + "?next=/";
+  const env = status?.environment ?? "unknown";
+  const region = (status?.region ?? "").toUpperCase();
+  const prod = env === "production";
   return (
     <div className="grid min-h-screen place-items-center p-6">
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex justify-center"><Mark /></div>
+        <div className="mb-4 flex justify-center"><Mark /></div>
+        <div className="mb-5 flex justify-center">
+          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider ${prod ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-300" : "border-amber-600/40 bg-amber-500/10 text-amber-300"}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${prod ? "bg-emerald-400" : "bg-amber-400"}`} />
+            {prod ? "Production" : env} · Read only{region && region !== "LOCAL" && region !== "UNKNOWN" ? ` · ${region}` : ""}
+          </span>
+        </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl shadow-black/30">
           <h1 className="text-base font-semibold text-slate-100">Sign in</h1>
           <p className="mt-1 text-sm text-slate-400">
