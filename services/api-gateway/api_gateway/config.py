@@ -44,6 +44,23 @@ def detect_network_mode() -> NetworkMode:
     return "local"
 
 
+def normalize_db_url(url: str | None) -> str | None:
+    """Normalize a DB URL to the SQLAlchemy+psycopg driver (Fly Managed Postgres gives postgres://)."""
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
+def default_postgres_url() -> str:
+    # Cloud (Fly Managed Postgres) provides DATABASE_URL (pooled). Local Docker/dev keep the compose default.
+    return normalize_db_url(os.environ.get("DATABASE_URL")) or \
+        "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NQUARK_", env_file=".env", extra="ignore")
 
@@ -62,12 +79,29 @@ class Settings(BaseSettings):
     # no roles). This is a LOCAL-DEVELOPMENT convenience only and must never be enabled on a public
     # cloud deployment — see docs/deployment.md. It still requires admin_api_enabled to be true.
     admin_local_mode: bool = False
-    admin_session_secret: str = "dev-insecure-change-me"  # HMAC signing key for dev sessions
-    admin_session_ttl_seconds: int = 28800     # 8h dev session
+    admin_session_secret: str = "dev-insecure-change-me"  # HMAC signing key for sessions (SET IN PROD)
+    admin_session_ttl_seconds: int = 28800     # 8h session
+
+    # --- Admin D: authenticated public production console (Google Workspace OIDC) ---
+    # When oidc_enabled and NOT admin_local_mode, the console requires a Google sign-in whose verified
+    # email is in the allowed Workspace domain (or the extra allowlist). A signed httpOnly session cookie
+    # carries the principal. All authenticated users get a single read-only role (VIEWER); operational
+    # mutations stay gated by admin_operational_actions_enabled (default off) — the deployed console is
+    # operationally read-only. See docs/deployment.md.
+    oidc_enabled: bool = False
+    oidc_client_id: str | None = None          # Google OAuth 2.0 client id (fly secret in prod)
+    oidc_client_secret: str | None = None      # Google OAuth 2.0 client secret (fly secret in prod)
+    oidc_allowed_domain: str | None = None     # Google Workspace hosted domain (hd) required to sign in
+    oidc_allowed_emails: str = ""              # optional comma-separated extra allowlist
+    public_base_url: str | None = None         # e.g. https://nquark-admin.fly.dev (for the OIDC redirect)
+    session_cookie_name: str = "nq_admin_session"
+    session_cookie_secure: bool = True         # False only for local http testing
+    # If set and the directory exists, the gateway serves the built SPA at / (single-app deployment).
+    admin_frontend_dir: str | None = None
     admin_graph_max_nodes: int = 150           # hard cap on subgraph size
     admin_graph_max_depth: int = 2             # hard cap on subgraph expansion depth
     admin_audit_db_url: str | None = None      # defaults to postgres_url; SQLite in tests
-    postgres_url: str = "postgresql+psycopg://nquark:nquark@postgres:5432/nquark"
+    postgres_url: str = Field(default_factory=default_postgres_url)
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"
@@ -90,6 +124,13 @@ class Settings(BaseSettings):
     feature_service_url: str | None = None
     intelligence_service_url: str | None = None
     artist_intelligence_service_url: str | None = None
+
+    @property
+    def migration_database_url(self) -> str:
+        """DB URL for Alembic/startup migrations: MIGRATION_DATABASE_URL (direct) if set, else the app URL
+        (admin_audit_db_url override, else postgres_url)."""
+        return (normalize_db_url(os.environ.get("MIGRATION_DATABASE_URL"))
+                or self.admin_audit_db_url or self.postgres_url)
 
     @property
     def downstream_services(self) -> dict[str, str]:

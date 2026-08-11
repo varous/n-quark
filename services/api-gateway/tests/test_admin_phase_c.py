@@ -225,25 +225,51 @@ def test_export_bad_format_422(local):
     assert local.get("/admin/v1/export/events?format=xml").status_code == 422
 
 
-# ---- local-only deployment boundary -------------------------------------------------------------
-def test_frontend_absent_from_cloud_deploy_manifests():
-    """No Fly (cloud) manifest may deploy the admin frontend, and none may enable the admin API."""
-    fly_tomls = list(REPO_ROOT.glob("services/*/fly.toml"))
-    assert fly_tomls, "expected service fly.toml manifests"
-    for toml in fly_tomls:
-        text = toml.read_text()
-        assert "ADMIN_API_ENABLED = \"true\"" not in text
-        assert "ADMIN_LOCAL_MODE = \"true\"" not in text
-        # ignore comment lines (a comment documenting exclusion is fine); no *directive* may
-        # reference the frontend as a deployable path/app.
-        directives = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
+# ---- deployment boundary ------------------------------------------------------------------------
+# Admin D introduces ONE deliberate exception: the authenticated public console
+# (deploy/fly/admin-console.toml). Everything else stays as before. The invariant that MUST hold
+# everywhere is that ADMIN_LOCAL_MODE (the unauthenticated single-context bypass) is NEVER enabled on
+# any cloud manifest — that would expose the console with no login.
+
+def _directive_lines(text: str) -> str:
+    return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
+
+
+def test_local_mode_never_enabled_on_any_cloud_manifest():
+    """The unauthenticated local-mode bypass must never be on in any Fly manifest (service or deploy/)."""
+    manifests = list(REPO_ROOT.glob("services/*/fly.toml")) + list(REPO_ROOT.glob("deploy/fly/*.toml"))
+    assert manifests, "expected fly manifests"
+    for toml in manifests:
+        directives = _directive_lines(toml.read_text())
+        assert 'ADMIN_LOCAL_MODE = "true"' not in directives, f"{toml} enables local mode on cloud"
+
+
+def test_private_service_manifests_do_not_enable_admin():
+    """The private service manifests + the crawl-space api-gateway never serve the admin console."""
+    for toml in REPO_ROOT.glob("services/*/fly.toml"):
+        directives = _directive_lines(toml.read_text())
+        assert 'ADMIN_API_ENABLED = "true"' not in directives
         assert "frontend" not in directives.lower()
-    # the frontend has no cloud (Fly) app of its own
+    # the frontend has no cloud (Fly) app of its own — it is baked into the nquark-admin image
     assert not (REPO_ROOT / "frontend" / "fly.toml").exists()
 
 
 def test_gateway_fly_manifest_pins_admin_off():
     text = (REPO_ROOT / "services" / "api-gateway" / "fly.toml").read_text()
-    # explicit belt-and-suspenders: admin surface pinned off in the public cloud app
+    # the crawl-space public API gateway keeps the admin surface pinned off
     assert 'NQUARK_ADMIN_API_ENABLED = "false"' in text
     assert 'NQUARK_ADMIN_LOCAL_MODE = "false"' in text
+
+
+def test_admin_console_manifest_is_authenticated_and_read_only():
+    """The one public console manifest must be authenticated (OIDC on, local-mode off) and read-only."""
+    toml = REPO_ROOT / "deploy" / "fly" / "admin-console.toml"
+    assert toml.exists(), "expected deploy/fly/admin-console.toml"
+    directives = _directive_lines(toml.read_text())
+    assert 'NQUARK_ADMIN_API_ENABLED = "true"' in directives
+    assert 'NQUARK_OIDC_ENABLED = "true"' in directives
+    assert 'NQUARK_ADMIN_LOCAL_MODE = "false"' in directives
+    assert 'NQUARK_ADMIN_OPERATIONAL_ACTIONS_ENABLED = "false"' in directives
+    # secrets must NOT be inlined in the manifest
+    assert "NQUARK_OIDC_CLIENT_SECRET =" not in directives
+    assert "NQUARK_ADMIN_SESSION_SECRET =" not in directives

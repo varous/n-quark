@@ -12,10 +12,10 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from fastapi.responses import Response
+from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Query, Request, status
+from fastapi.responses import RedirectResponse, Response
 
-from api_gateway.admin import auth
+from api_gateway.admin import auth, oidc
 from api_gateway.admin.demand import DemandAdminService
 from api_gateway.admin.deps import get_admin_service, get_audit_store, get_demand_service
 from api_gateway.admin.service import AdminService
@@ -48,6 +48,75 @@ def me(principal: auth.Principal = Depends(auth.require_viewer)) -> dict[str, An
     return {"sub": principal.sub, "role": principal.role, "auth_mode": principal.auth_mode,
             "local_mode": settings.admin_local_mode,
             "mutations_enabled": settings.admin_operational_actions_enabled}
+
+
+# ---- production auth (Google Workspace OIDC) ----------------------------------------------------
+def _auth_mode() -> str:
+    if settings.admin_local_mode:
+        return "local"
+    if oidc.is_configured():
+        return "oidc"
+    return "disabled"
+
+
+@router.get("/auth/status", summary="Public auth status (unauthenticated)")
+def auth_status(authorization: str | None = None,
+                session_cookie: str | None = Cookie(default=None, alias=settings.session_cookie_name),
+                ) -> dict[str, Any]:
+    """Unauthenticated: lets the SPA render the right entry (local / sign-in / disabled) without a 401
+    round-trip. Never leaks anything beyond whether a valid session is already present."""
+    if not settings.admin_api_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="admin api disabled")
+    mode = _auth_mode()
+    principal = auth.internal_user() if settings.admin_local_mode else auth.authenticate(session_cookie)
+    return {"auth_mode": mode, "authenticated": principal is not None,
+            "sub": principal.sub if principal else None,
+            "login_url": "/admin/v1/auth/login"}
+
+
+@router.get("/auth/login", summary="Begin Google sign-in")
+def auth_login(next: str = Query(default="/")) -> Response:
+    if not settings.admin_api_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="admin api disabled")
+    if settings.admin_local_mode:
+        return RedirectResponse(url=next or "/", status_code=status.HTTP_302_FOUND)
+    if not oidc.is_configured():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Google sign-in is not configured on this deployment")
+    try:
+        url = oidc.authorization_url(oidc.issue_state(next))
+    except oidc.OidcError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/auth/callback", summary="Google OIDC redirect target")
+async def auth_callback(code: str | None = Query(default=None), state: str | None = Query(default=None),
+                        error: str | None = Query(default=None)) -> Response:
+    if not settings.admin_api_enabled or settings.admin_local_mode or not oidc.is_configured():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not found")
+    if error:
+        return RedirectResponse(url="/?login_error=access_denied", status_code=status.HTTP_302_FOUND)
+    try:
+        next_path = oidc.verify_state(state)
+        if not code:
+            raise oidc.OidcError("missing authorization code")
+        result = await oidc.exchange_code(code)
+    except oidc.OidcError:
+        # Do not echo internal detail into the URL; the login screen shows a generic message.
+        return RedirectResponse(url="/?login_error=1", status_code=status.HTTP_302_FOUND)
+    token = auth.issue_session(result.email, "VIEWER", auth_mode="oidc")
+    resp = RedirectResponse(url=next_path or "/", status_code=status.HTTP_302_FOUND)
+    resp.set_cookie(settings.session_cookie_name, token, max_age=settings.admin_session_ttl_seconds,
+                    httponly=True, secure=settings.session_cookie_secure, samesite="lax", path="/")
+    return resp
+
+
+@router.post("/auth/logout", summary="Clear the session")
+def auth_logout() -> Response:
+    resp = Response(status_code=status.HTTP_204_NO_CONTENT)
+    resp.delete_cookie(settings.session_cookie_name, path="/")
+    return resp
 
 
 # ---- read models (VIEWER) -----------------------------------------------------------------------

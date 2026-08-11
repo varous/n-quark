@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from api_gateway.config import settings
 from api_gateway.routes.admin import router as admin_router
@@ -47,6 +49,21 @@ async def root() -> dict[str, str]:
     }
 
 
+def _mount_frontend() -> None:
+    """Single-app deployment (Admin D): serve the built SPA at / when a bundle is present.
+
+    Mounted LAST so every explicit API route (/admin/v1, /v1/..., /health) is matched first; the static
+    app only handles /, /assets/* and other bundle files. The SPA uses hash routing, so deep links land
+    on / and route client-side. No-op when the bundle isn't shipped (e.g. the private services)."""
+    directory = settings.admin_frontend_dir
+    if not directory:
+        return
+    index = Path(directory) / "index.html"
+    if not index.is_file():
+        return
+    app.mount("/", StaticFiles(directory=directory, html=True), name="frontend")
+
+
 @app.get("/v1/platform/status")
 async def platform_status() -> dict[str, object]:
     """Aggregate health from all downstream services."""
@@ -71,3 +88,7 @@ async def platform_status() -> dict[str, object]:
         "timestamp": datetime.now(UTC).isoformat(),
         "services": results,
     }
+
+
+# Mount the SPA last, after every API route is registered.
+_mount_frontend()

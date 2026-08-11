@@ -7,8 +7,9 @@ from api_gateway.config import settings
 from api_gateway.db.models import Base
 
 config = context.config
-# Prefer the dedicated admin DB URL when set, else the shared Postgres URL.
-config.set_main_option("sqlalchemy.url", settings.admin_audit_db_url or settings.postgres_url)
+# Prefer MIGRATION_DATABASE_URL (direct endpoint) for DDL, then the dedicated admin DB URL, then the
+# shared Postgres URL (which itself reads DATABASE_URL on Fly).
+config.set_main_option("sqlalchemy.url", settings.migration_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

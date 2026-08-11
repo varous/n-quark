@@ -1,0 +1,63 @@
+app = "nquark-admin"
+# Fly.io — nquark-admin: the ONE PUBLIC, AUTHENTICATED production console (Admin D).
+# Serves the built React SPA + the /admin/v1 read-only BFF from a single image (deploy/fly/admin-console
+# .Dockerfile, repo-root context), reaching the private Flycast services. Google Workspace OIDC gates
+# every request; the console is OPERATIONALLY READ-ONLY (mutations disabled). This is the deliberate
+# authenticated exception to the "admin is local-only" rule — ADMIN_LOCAL_MODE must stay false on cloud
+# (true would expose it unauthenticated). See docs/deployment.md.
+#
+# Deploy:
+#   fly apps create nquark-admin --org nquark          # once
+#   fly mpg attach <cluster-id> -a nquark-admin        # shared PG (sets DATABASE_URL); set MIGRATION_DATABASE_URL to the direct endpoint
+#   fly secrets set -a nquark-admin \
+#       NQUARK_OIDC_CLIENT_ID=... NQUARK_OIDC_CLIENT_SECRET=... NQUARK_ADMIN_SESSION_SECRET=<random-32B>
+#   fly deploy --config deploy/fly/admin-console.toml --dockerfile deploy/fly/admin-console.Dockerfile .
+#   fly ips allocate-v4 --shared -a nquark-admin && fly ips allocate-v6 -a nquark-admin   # the ONLY app with a public IP
+primary_region = "sin"
+
+[build]
+  # Dockerfile + repo-root context are passed on the CLI (--dockerfile ... .); keep this empty.
+
+[env]
+  NQUARK_PORT = "8000"
+  NQUARK_NETWORK_MODE = "docker"                       # base map; the *_SERVICE_URL overrides win per service
+  NQUARK_ADMIN_API_ENABLED = "true"
+  NQUARK_ADMIN_LOCAL_MODE = "false"                    # NEVER true on cloud — would expose the console unauthenticated
+  NQUARK_ADMIN_OPERATIONAL_ACTIONS_ENABLED = "false"   # operationally read-only
+  NQUARK_OIDC_ENABLED = "true"
+  NQUARK_OIDC_ALLOWED_DOMAIN = "clockwork-av.com"      # Google Workspace domain allowed to sign in
+  NQUARK_PUBLIC_BASE_URL = "https://nquark-admin.fly.dev"   # must match the Google OAuth redirect URI + any custom domain
+  NQUARK_SESSION_COOKIE_SECURE = "true"
+  # --- private service discovery (Flycast) ---
+  NQUARK_CRAWL_SERVICE_URL = "http://nquark-crawl-service.flycast"
+  NQUARK_SIGNAL_SERVICE_URL = "http://nquark-signal-service.flycast"
+  NQUARK_OBSERVATION_SERVICE_URL = "http://nquark-observation-service.flycast"
+  NQUARK_GRAPH_SERVICE_URL = "http://nquark-graph-service.flycast"
+  NQUARK_MEDIA_SERVICE_URL = "http://nquark-media-service.flycast"
+  NQUARK_ARTIST_INTELLIGENCE_SERVICE_URL = "http://nquark-artist-intelligence-service.flycast"
+  # entity-service + analytics-service are not deployed; the BFF degrades to available:false for those.
+  # --- SECRETS (fly secrets set, never in git): ---
+  #   NQUARK_OIDC_CLIENT_ID, NQUARK_OIDC_CLIENT_SECRET  — Google OAuth 2.0 web client
+  #   NQUARK_ADMIN_SESSION_SECRET                       — random 32B; signs session + OIDC state
+  #   DATABASE_URL (pooled) + MIGRATION_DATABASE_URL (direct) — shared Managed Postgres (audit tables)
+
+[http_service]
+  internal_port = 8000
+  force_https = true                                   # public app; cookies are Secure
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 150
+    hard_limit = 200
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
