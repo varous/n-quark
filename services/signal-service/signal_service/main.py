@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
+from signal_service.clients.observation_client import ObservationServiceClient
 from signal_service.config import settings
 from signal_service.routes.google_trends import router as google_trends_router
 from signal_service.routes.spotify import router as spotify_router
@@ -33,6 +35,32 @@ async def health() -> dict[str, str]:
         "ticketing_provider": settings.ticketing_provider,
         "timestamp": datetime.now(UTC).isoformat(),
     }
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    """Readiness probe: verifies the observation-service HARD dependency of the capture ingest path.
+
+    The ticketing /ingest write to observation-service is non-optional — if it fails, every capture 502s
+    and the collector silently records SOURCE_UNAVAILABLE (nothing is ever captured PRESENT). This surfaces
+    that failure explicitly as HTTP 503 with the reason, instead of letting the whole pipeline degrade
+    quietly. It is intentionally separate from /health (liveness) so a transient dependency blip does not
+    flap the process's health-gated routing."""
+    reachable, detail = await ObservationServiceClient().ping()
+    body = {
+        "service": settings.service_name,
+        "status": "ready" if reachable else "not_ready",
+        "dependencies": {
+            "observation_service": {
+                "url": settings.observation_service_url,
+                "reachable": reachable,
+                "detail": detail,
+                "required_by": "ticketing /ingest (capture write path)",
+            }
+        },
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    return JSONResponse(status_code=200 if reachable else 503, content=body)
 
 
 @app.get("/")

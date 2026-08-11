@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     graph_service_url: str = Field(default_factory=default_graph_service_url)
     crawl_service_url: str = Field(default_factory=default_crawl_service_url)
     http_timeout_seconds: float = 20.0
+    # Short-TTL process cache for the canonical ARTIST enumeration read from crawl. One collector tick
+    # fans out backfill + per-candidate promotion (find_artist_by_name) + reconciliation, each of which
+    # would otherwise independently re-page /entities — hundreds of identical calls per tick. Caching the
+    # read-only pages for a few seconds collapses that into a single enumeration per window. 0 disables.
+    crawl_artists_cache_ttl_seconds: float = 60.0
 
     # --- Master switch: the demand layer is OFF by default (no migrations, no scheduler). ---
     demand_intelligence_enabled: bool = False

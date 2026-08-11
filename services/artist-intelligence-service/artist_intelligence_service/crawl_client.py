@@ -6,11 +6,20 @@ entities endpoint (the same source analytics-service reads). This service never 
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import httpx
 
 from artist_intelligence_service.config import settings
+
+# Process-wide short-TTL cache of the canonical ARTIST enumeration (read-only). Shared across all
+# CrawlServiceClient instances so a single collector tick — backfill, per-candidate promotion lookups,
+# and reconciliation — reads each /entities page at most once per TTL window instead of re-paging it
+# hundreds of times. Keyed by (base_url, limit, offset). See config.crawl_artists_cache_ttl_seconds.
+_artists_cache: dict[tuple[str, int, int], tuple[float, list[dict[str, Any]]]] = {}
+_artists_cache_lock = asyncio.Lock()
 
 
 class CrawlServiceClient:
@@ -18,6 +27,19 @@ class CrawlServiceClient:
         self.base_url = (base_url or settings.crawl_service_url).rstrip("/")
 
     async def artists(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        ttl = settings.crawl_artists_cache_ttl_seconds
+        key = (self.base_url, limit, offset)
+        if ttl > 0:
+            cached = _artists_cache.get(key)
+            if cached is not None and (time.monotonic() - cached[0]) < ttl:
+                return cached[1]
+        rows = await self._fetch_artists(limit=limit, offset=offset)
+        if ttl > 0:
+            async with _artists_cache_lock:
+                _artists_cache[key] = (time.monotonic(), rows)
+        return rows
+
+    async def _fetch_artists(self, *, limit: int, offset: int) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
             resp = await client.get(f"{self.base_url}/v1/internal/entity-resolution/entities",
                                     params={"entity_type": "ARTIST", "limit": limit, "offset": offset})

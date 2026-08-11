@@ -1,0 +1,38 @@
+app = "nquark-observation-service"
+# Fly.io — observation-service (private; append-only observation store on Postgres).
+# PRIVATE-ONLY: reachable only over the org's private network as <app>.flycast — no public IP.
+# It is a HARD dependency of signal-service's ticketing /ingest (the capture write path): if it is
+# unreachable, every capture ingest returns 502 and the collector records SOURCE_UNAVAILABLE. So it is
+# deployed always-on (min_machines_running = 1, auto_stop off), same as the rest of the collection spine.
+# DATABASE_URL + MIGRATION_DATABASE_URL are SECRETS (fly secrets set) — never in git. The entrypoint
+# runs `alembic upgrade head` (over MIGRATION_DATABASE_URL if set) before boot.
+primary_region = "sin"
+
+[build]
+  # Dockerfile + build context are passed explicitly by scripts/fly-deploy.sh (--dockerfile / context dir),
+  # same as the other services — keep this empty so the config dir isn't used as the build root.
+
+[env]
+  NQUARK_PORT = "8004"
+  NQUARK_NETWORK_MODE = "docker"
+
+[http_service]
+  internal_port = 8004
+  force_https = false            # private Flycast traffic only
+  auto_stop_machines = "off"     # a hard dependency of the always-on capture path — never stop
+  auto_start_machines = false
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 120
+    hard_limit = 180
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

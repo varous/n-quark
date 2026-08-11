@@ -7,7 +7,7 @@ from observation_service.config import settings
 from observation_service.models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.postgres_url)
+config.set_main_option("sqlalchemy.url", settings.migration_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

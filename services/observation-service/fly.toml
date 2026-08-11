@@ -1,5 +1,10 @@
 # Fly.io — observation-service (private; append-only observation store on Postgres).
-# Reachable as nquark-observation-service.flycast. Deploy:  cd services/observation-service && fly deploy
+# Reachable as nquark-observation-service.flycast.
+#
+# The CANONICAL deploy config is deploy/fly/observation-service.toml, used by scripts/fly-deploy.sh
+# (which passes --dockerfile + build context explicitly). This service-local copy is kept in sync for a
+# standalone `cd services/observation-service && fly deploy`. It is a HARD dependency of signal-service's
+# ticketing /ingest, so it runs ALWAYS-ON (min 1, auto_stop off) — never scale-to-zero.
 app = "nquark-observation-service"
 primary_region = "sin"
 
@@ -8,13 +13,26 @@ primary_region = "sin"
 
 [env]
   NQUARK_PORT = "8004"
-  # NQUARK_POSTGRES_URL is a secret. entrypoint runs `alembic upgrade head` before boot.
+  NQUARK_NETWORK_MODE = "docker"
+  # DATABASE_URL + MIGRATION_DATABASE_URL are SECRETS (fly secrets set) — never in git. The entrypoint
+  # runs `alembic upgrade head` (over MIGRATION_DATABASE_URL if set) before boot.
 
 [http_service]
   internal_port = 8004
-  auto_stop_machines = "stop"
-  auto_start_machines = true
-  min_machines_running = 0
+  force_https = false            # private Flycast traffic only
+  auto_stop_machines = "off"     # a hard dependency of the always-on capture path — never stop
+  auto_start_machines = false
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 120
+    hard_limit = 180
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
 
 [[vm]]
   size = "shared-cpu-1x"

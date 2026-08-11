@@ -11,6 +11,19 @@ class ObservationServiceClient:
     def __init__(self, base_url: str | None = None) -> None:
         self.base_url = (base_url or settings.observation_service_url).rstrip("/")
 
+    async def ping(self) -> tuple[bool, str]:
+        """Liveness probe of the observation store (a HARD dependency of the capture ingest path).
+
+        Returns ``(reachable, detail)``. ``detail`` carries the failure reason (e.g. a DNS error when
+        the service is not deployed) so readiness responses can name the actual cause."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/health")
+                response.raise_for_status()
+            return True, "ok"
+        except Exception as exc:  # noqa: BLE001 — any failure means "not ready"; report why, don't raise
+            return False, f"{type(exc).__name__}: {exc}"
+
     async def append_observation(self, observation: NormalizedObservation) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(

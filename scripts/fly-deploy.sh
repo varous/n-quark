@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 4D — deploy the four PRIVATE collection services to Fly.io in dependency order.
-# Deploys graph -> signal -> media -> crawl. NEVER deploys admin/gateway/analytics.
+# Deploys graph -> observation -> signal -> media -> crawl. NEVER deploys admin/gateway/analytics.
 # Does NOT create paid resources (no `apps create`, no `pg create`, no IP allocation) — the operator
 # must have already created the apps + attached Fly Managed Postgres and set DB secrets. Fails on an
 # unhealthy dependency before continuing. Set DRY_RUN=1 to print the commands without executing.
@@ -9,6 +9,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REGION="${FLY_REGION:-sin}"
 GRAPH_APP="${GRAPH_APP:-nquark-graph-service}"
+OBSERVATION_APP="${OBSERVATION_APP:-nquark-observation-service}"
 SIGNAL_APP="${SIGNAL_APP:-nquark-signal-service}"
 MEDIA_APP="${MEDIA_APP:-nquark-media-service}"
 CRAWL_APP="${CRAWL_APP:-nquark-crawl-service}"
@@ -28,10 +29,13 @@ deploy_one() {
 }
 
 deploy_one "${GRAPH_APP}"  graph-service  graph-service.toml  8006
+# observation-service before signal-service: signal's ticketing /ingest (the capture write path) is a
+# HARD dependency on it — if it's absent, every capture 502s and the collector records SOURCE_UNAVAILABLE.
+deploy_one "${OBSERVATION_APP}" observation-service observation-service.toml 8004
 deploy_one "${SIGNAL_APP}" signal-service signal-service.toml 8003
 deploy_one "${MEDIA_APP}"  media-service  media-service.toml  8002
 deploy_one "${CRAWL_APP}"  crawl-service  crawl-service.toml  8001
 
-echo "All four collection services deployed. Verify private-only networking:  fly ips list -a ${CRAWL_APP}"
+echo "All five collection services deployed. Verify private-only networking:  fly ips list -a ${CRAWL_APP}"
 echo "(There must be NO public v4/v6 address — only a private Flycast address.)"
 echo "Next: scripts/fly-bootstrap.sh (seed an empty DB), then scripts/fly-smoke.sh."
