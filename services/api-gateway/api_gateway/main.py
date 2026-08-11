@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api_gateway.config import settings
@@ -41,8 +42,21 @@ async def health() -> dict[str, str]:
     }
 
 
+def _frontend_index() -> Path | None:
+    directory = settings.admin_frontend_dir
+    if not directory:
+        return None
+    index = Path(directory) / "index.html"
+    return index if index.is_file() else None
+
+
 @app.get("/")
-async def root() -> dict[str, str]:
+async def root():
+    """Serve the console SPA at / when a bundle is shipped (the nquark-admin app); otherwise the plain
+    JSON identity (the crawl-space public API gateway has no bundle)."""
+    index = _frontend_index()
+    if index is not None:
+        return FileResponse(index)
     return {
         "service": settings.service_name,
         "message": "n-quark Intelligence Operating System API",

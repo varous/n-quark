@@ -37,11 +37,12 @@ export class ApiError extends Error {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string>) };
-  // Local mode issues no token; a bearer token (dev-auth) is attached only if one is present.
+  // Production uses an httpOnly session cookie (sent automatically). A bearer token is attached only
+  // for the isolated dev-auth path when one is present in localStorage.
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, { credentials: "same-origin", ...init, headers });
   if (res.status === 401) {
-    throw new ApiError(401, "Not authorized — the gateway is not in local mode. See docs/deployment.md.");
+    throw new ApiError(401, "Not authenticated.");
   }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
@@ -70,6 +71,8 @@ export const api = {
       body: JSON.stringify({ username, role }),
     }),
   me: () => req<Me>("/auth/me"),
+  authStatus: () => req<AuthStatus>("/auth/status"),
+  logout: () => req<unknown>("/auth/logout", { method: "POST" }),
   dashboard: () => req<Dashboard>("/dashboard"),
   sources: () => req<{ sources: SourceRow[] }>("/sources"),
   sourceDiagnostics: (source: string) => req<SourceDiagnostics>(`/sources/${encodeURIComponent(source)}/diagnostics`),
@@ -125,6 +128,7 @@ export const api = {
 
 // ---- types (loose; the BFF is the source of truth) ----
 export type Me = { sub: string; role: string; auth_mode: string; local_mode: boolean; mutations_enabled: boolean };
+export type AuthStatus = { auth_mode: "oidc" | "local" | "disabled"; authenticated: boolean; sub: string | null; login_url: string };
 export type Paged<T> = { count: number; limit: number; offset: number; available?: boolean; hydrated?: boolean; capped?: boolean } & Record<string, T[]>;
 export type SourceDiagnostics = {
   source: string; tracked_events: number; last_successful_capture: string | null;
