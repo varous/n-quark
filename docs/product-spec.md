@@ -1075,3 +1075,51 @@ is append-only like the rest of this MCP._
   never shown as exact; Trends is relative interest, never volume.
 - Canonical identity is owned by the entity/graph architecture; the demand layer only attaches to it.
 - API keys are operator-set secrets, never handled by tooling, never in git/logs/images.
+
+# Delivered — Production collection unblock: the append-only observation store is now deployed (Phase 5A.3.3)  `[CURRENT]`
+
+_Appended 2026-08-11. Additive record. Existing entries above are unchanged; this section is append-only
+like the rest of this MCP. It documents a production topology correction, not a model change: the moat's
+irreplaceable **temporal observation layer** was not actually accruing in production, and now is._
+
+## What was wrong, and why it matters to the thesis
+
+The strategic moat is an **independent, cross-platform temporal observation layer** — data whose value
+comes from being captured continuously and never being reconstructable after the fact. In production that
+layer had silently stopped accruing: the always-on collector was discovering and fetching real events
+(Boshow + District, HTTP 200), but **not one observation was being persisted**, so no canonical artists and
+an empty graph. A moat that does not accrue is not a moat. The cause was infrastructural, not conceptual:
+
+- The **capture write path** (signal-service ticketing `/ingest`) persists normalized observations to
+  **observation-service** as a **hard dependency**. That service **was never deployed** in the private Fly
+  collection topology (Phase 4D stood up graph/signal/media/crawl only). Every capture write therefore
+  failed at DNS resolution → **HTTP 502** → the collector recorded the capture as `SOURCE_UNAVAILABLE`
+  (a transport failure), never as an authoritative record. **0** observations, **0** canonical artists,
+  **0/0** graph — while the collector itself looked healthy.
+
+## What shipped (the correction)
+
+- **The observation store is now part of the always-on private spine `[INVARIANT]`** — observation-service
+  is deployed on the org's private network (no public IP, region `sin`), **always-on** (never scale-to-zero)
+  precisely because it is a hard dependency of continuous capture. The collection topology is now
+  graph → **observation** → signal → media → crawl. It shares the one Managed Postgres datastore with its
+  own migration-version namespace (the established per-service pattern), so no second datastore was introduced.
+- **A missing hard dependency must fail loudly, not degrade silently `[INVARIANT]`** — signal-service now
+  exposes an explicit **readiness** signal that verifies the observation-store dependency and reports an
+  unambiguous failure (with the reason) when it is unreachable, kept separate from the liveness signal so a
+  transient blip does not flap routing. The class of failure that caused this outage — a silent transport
+  error masquerading as data absence — is now observable directly. This reinforces the standing invariant
+  that **a failed request is never recorded as record absence**: absence remains an authoritative signal only.
+- **Discovery/observation load stays bounded `[INVARIANT]`** — the demand layer's periodic reconciliation of
+  the canonical-artist enumeration is coalesced so one refresh cycle reads the authoritative listing once,
+  rather than re-enumerating it per candidate. Internal read amplification is treated as a defect.
+
+## Reaffirmed invariants (unchanged, now actually enforced end-to-end in production)
+
+- **Continuous capture is the product.** The temporal observation layer must accrue in production, always-on;
+  its hard dependencies are deployed and monitored as such.
+- **Transport failure ≠ record absence.** A 404 is authoritative absence; a write/fetch failure is
+  `SOURCE_UNAVAILABLE` and never enters the record as evidence.
+- **One datastore, per-service migration namespaces; no new public surface; private Flycast only, no public
+  IP.** Canonical identity remains owned by the entity/graph architecture; observation-service only persists
+  the immutable observations the capture path produces.

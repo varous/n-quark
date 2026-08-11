@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-09 (Phase 5A.3.2). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-11 (Phase 5A.3.3). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -26,6 +26,7 @@ append-only MCP — never overwrite it).
 | 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 | 4B — creative asset observation | Built **media-service** (Phase 4B scaffold): observe public event creatives over time — **content-addressed identity** (SHA-256 → normalized URL → optional phash), **safe SSRF-guarded bounded fetcher** (http(s)-only, private-net/redirect/size/MIME guards, 8 classified outcomes), **content-addressed local storage** (dedup, disable-able, bytes never in PG), dependency-free header **metadata**, deterministic **media transitions** (FIRST_SEEN/CONTENT_CHANGED/URL_CHANGED_SAME_CONTENT/ROLE_CHANGED/DISAPPEARED/REAPPEARED) in a dedicated history, `event -USES_CREATIVE-> media_asset` graph link, bounded internal APIs + coverage/failures + stable creative-summary contract. Best-effort crawl capture hook (never fails capture). No OCR/recognition/embeddings/scoring; flags default off; migration `001` additive/reversible | media-service `identity/metadata/transitions/fetcher/storage/service/reads/routes`, migration 001, crawl `media_notifier.py` + hook, ADR-0014, `docs/media-observation.md` |
 | 5A — public demand intelligence | New **artist-intelligence-service** (port 8010): demand-side layer meeting supply only through `canonical_artist_id`. Own **demand ledger** (`artist_external_identity`, `artist_demand_observation`, `provider_quota_day`, `demand_refresh_job`; separate from the event Shadow Ledger; append-only, idempotent on `observation_key`). **Reuses signal-service for YouTube acquisition** (extended with acquisition-only `search`+`videos`) — no parallel ingestion path, API key stays in signal-service. Provider-neutral contract (capability flags); deterministic YouTube identity resolution (RESOLVED/AMBIGUOUS/UNRESOLVED, name-equality never resolves alone, never creates a canonical artist); rounded-subscriber honesty (`PROVIDER_REPORTED`); per-provider/day **quota accounting** (search 100u vs read 1u, budget-enforced); restart-safe **refresh scheduler** (lease/retry/idempotent, known-id reads only); Google Trends **OFFICIAL_API (gated → ACCESS_UNAVAILABLE) + IMPORT** (labeled CSV, no scraping); first-class **geography** (ISO IN-XX); deterministic **momentum/geography/supply-demand/event-response** read models (no score, no causal claim, `INSUFFICIENT_HISTORY` honesty). Separate service so demand failure never disrupts the crawl→signal spine | artist-intelligence-service `providers/`+`service.py`+`scheduler.py`+`intelligence.py`+`supply.py`+`signal_client.py`, migration 001, signal `adapters/youtube.py`+`routes/youtube.py`, ADR-0017, `docs/demand-intelligence.md`+`docs/providers/{youtube,google-trends}.md` |
+| 5A.3.3 — prod collection unblock (missing observation-service) | **Root cause of the empty prod DB found + fixed.** Prod accrued **0** canonical data despite an always-on collector reaching real Boshow/District (HTTP 200): signal-service's ticketing `/ingest` (the capture write path) HARD-depends on observation-service, but observation-service **was never deployed to Fly** — so every ingest hit `nquark-observation-service.flycast` (DNS-unresolvable) → **502** → the collector classified **285/309 events `SOURCE_UNAVAILABLE`**, 0 PRESENT → 0 entity candidates → 0 canonical artists → empty graph → demand had nothing. **Fix**: deployed observation-service to the private Flycast spine (5th app, region `sin`, no public IP, always-on min-1), attached to the **same** shared Managed Postgres (own `alembic_version_observation` table; migration over the direct endpoint). Adopted the fleet DB-URL convention (`DATABASE_URL` pooled + `MIGRATION_DATABASE_URL` direct, normalized to `postgresql+psycopg://`). Added a **readiness guard** — signal `GET /health/ready` returns **503** naming the reason when observation-service is unreachable (liveness/readiness split so a blip doesn't flap routing). Throttled the **demand→crawl request storm**: a process-wide short-TTL cache on `CrawlServiceClient.artists()` collapses a whole collector tick's backfill + per-candidate promotion + reconciliation into one `/entities` enumeration. **Prod proof (post-deploy)**: observations **0→221→294** (accruing ~70/min), graph **0/0 → 298 nodes/399 edges**, entity-resolution ARTIST rate **1.0**, signal `/health/ready` **200 ready** (observation reachable). No new paid cluster (reused shared PG); private-only invariant verified (`fly ips`) | `deploy/fly/observation-service.toml` (new), observation `config.py`+`alembic/env.py`+`fly.toml`, signal `main.py`+`clients/observation_client.py`, artist-intelligence `crawl_client.py`+`config.py`, `scripts/fly-{deploy,smoke}.sh`, `deploy/fly/README.md` |
 | 5A.3.2 — canonical artist state reconciliation | Resolved the prod "backfill sees 0 canonical artists". **Root cause**: prod genuinely had no accrued canonical artists (1 tracked event, empty graph+registry) — not drift; the lone `artist:arijit-singh` demand rows are an **orphan** from earlier manual validation. Documented ownership: crawl entity-resolution registry owns canonical **identity**; graph is the **representation**. **Fix**: governance `create-artist` now also writes a RESOLVED registry row (closes a 5A.3.1 gap where promotion-created artists were graph-only + invisible to `/entities`); new idempotent `reconcile-graph-artists` registers pre-existing graph-only nodes (no node create/dup, no id rewrite). Extended `/demand/artist-universe` with a `canonical_reconciliation` block (registry vs graph vs demand-referenced counts + **orphan audit**, safe-degrade). Local proof: reconcile registered 6 graph-only artists → registry(84)==graph(84); 3 orphan demand refs audited (not rewritten). Deployed to private Fly | crawl `governance.py`+`routes/governance.py`+`enrichment/clients.py`, artist-intelligence `universe.py`+`graph_client.py`, `docs/demand-intelligence.md` |
 | 5A.3.1 — candidate promotion & acquisition closure | Closed the four 5A.3 gaps (no redesign). **Candidate → canonical promotion** (`promotion.py`): deterministic policy MATCH_EXISTING_CANONICAL (link) / MULTI_SOURCE_CONFIRMED / INDIA_LIVE_EVIDENCE_PLUS_MUSIC_IDENTITY (create) — creation routed through a new crawl-owned `create-artist` governance endpoint (ownership stays in crawl/graph; demand service never writes canonical); weak single-source YouTube evidence never canonicalises; auto-enqueues identity resolution after link/create; bounded persisted backlog drain. **Bounded YouTube ecosystem discovery** (seed channels → one-hop uploads → candidates only). **Dynamic search-quota allocation**: per-purpose sub-accounting (SEARCH:unresolved/discovery/ambiguity), borrow unused when others idle / near reset, global reserve never borrowable, diagnostics expose configured/used/borrowed. **Live event-proximity cadence**: nearest upcoming Indian event read live from the graph (FEATURES), fed into cadence bands, safe-degrade on graph failure. Also fixed a latent 5A.3 defect (`crawl_client.artists` hit `/v1/internal/entities` 404 → silently empty). Deployed to private Fly | artist-intelligence `promotion.py`+`discovery.py`+`quota.py`+`scheduler.py`+`service.py`+`crawl_client.py`+`collector.py`, crawl `governance.py`+`routes/governance.py` (create-artist), `docs/demand-intelligence.md`, ADR-0018 |
 | 5A.3 — Indian artist universe & demand saturation | Decoupled the artist universe from ticketing coverage + maximised irreplaceable temporal collection, **reusing** the 5A spine (signal-service = single acquisition path; artist-intelligence = stateful; entity/graph = canonical owner). Migration **002** (additive/reversible): **`artist_candidate`** ledger (discovery surfaces → candidates, never canonical; idempotent on `(source, source_id)`), **`artist_market_evidence`** (India evidence CLASSES `CONFIRMED_LIVE_INDIA`/`INDIA_DEMAND_OBSERVED`/`INDIA_MARKET_CANDIDATE`, provenance-bearing, not a score), **`youtube_video`** registry (separate from observations), **`provider_quota_bucket_day`** + job `priority`. **Auto-onboard + backfill** (event-derived + whole existing cohort, persisted/quota-managed — no manual op; collector runs them). **Independent YouTube discovery** (bounded config India queries → candidates). **Quota buckets** SEARCH/GENERAL_READ/VIDEO_STATS_BATCH (configurable fractions, provider-tz reset, 95%-target + reserve, defer-not-invalidate; search never on known-id refresh). **Identity-discovery queue** (search→channels.list verify→resolve, 5A.1a preserved). **One-time catalogue backfill** → registry; **hourly** live-metric observations (Trends daily); **adaptive + event-aware cadence**; **batch stats** primitive (`videos.list` 1u/50) in signal-service. Typed failure outcomes. Read-only artist-universe + quota-bucket diagnostics through the 5A.2 admin. No BMS dependency; no new public Fly surface | artist-intelligence `candidates.py`+`videos.py`+`discovery.py`+`cadence.py`+`universe.py`+`scheduler.py`+`service.py`+`quota.py`+migration 002, signal `adapters/youtube.py`+`routes/youtube.py` (batch), gateway `admin/demand.py`, frontend `admin/demand.tsx`, ADR-0018, `docs/{demand-intelligence,providers/youtube,providers/google-trends}.md` |
@@ -268,6 +269,45 @@ Production defect: a search-result candidate could transition a YouTube CHANNEL_
   `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
   suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
 
+## Phase 5A.3.3 — prod collection unblock: the missing observation-service (2026-08-11, LIVE VALIDATED on Fly)
+
+**The definitive answer to "prod DB has nothing and is not accruing."** Not a flags/egress/provider problem
+(all disproven): the always-on prod collector *was* running and reaching real Boshow/District at HTTP 200,
+with 309 tracked events and 24.8k capture jobs.
+
+- **Root cause**: signal-service's ticketing `/ingest` (the capture write path) does `append_observations()`
+  to observation-service as a **HARD dependency** (raises 502 on failure; entity-service + graph projection
+  below it are best-effort). **observation-service was never deployed to Fly** — the Phase 4D deploy stood up
+  only graph/signal/media/crawl. So signal's write to `http://nquark-observation-service.flycast` failed DNS
+  (`[Errno -2] Name or service not known`) → **HTTP 502** on every capture ingest → the collector classified
+  **285/309 `SOURCE_UNAVAILABLE`**, **0 `SUCCESS_RECORD_PRESENT`** (the 24 `RECORD_ABSENT` are genuine 404s) →
+  **0** entity-resolution candidates → **0** canonical artists → graph **0/0** → demand universe empty. Local
+  worked only because docker-compose runs the full service set including observation-service. Confirmed by a
+  one-shot prod ingest returning `502 "Observation service write failed: [Errno -2] …"` and the Fly app list
+  showing observation-service absent.
+- **Fix — deploy observation-service to the private spine** (5th Flycast app, region `sin`, **no public IP**,
+  always-on `min_machines_running=1` / `auto_stop=off` because it's a hard dependency of the capture path).
+  New canonical `deploy/fly/observation-service.toml`; wired into `scripts/fly-deploy.sh` in dependency order
+  (graph → **observation** → signal → media → crawl). **Reused the existing shared Managed Postgres**
+  (`nquark-postgres`) via `fly mpg attach` — **no new paid cluster**; observation coexists in the one DB with
+  its own `alembic_version_observation` table. Adopted the fleet DB-URL convention in observation
+  (`normalize_db_url`, `DATABASE_URL` pooled runtime + `MIGRATION_DATABASE_URL` direct for Alembic DDL over
+  pgbouncer being unreliable). Migration ran on boot (`Running upgrade -> 001`).
+- **Health guard (surfaces this class of failure loudly)**: signal `GET /health/ready` probes the
+  observation-service dependency and returns **503** with the failure detail + `required_by` when unreachable,
+  kept separate from `/health` (liveness) so a transient blip doesn't flap health-gated routing. Added to
+  `fly-smoke.sh`.
+- **Demand→crawl request-storm throttle**: one collector tick fanned out backfill + per-candidate
+  `find_artist_by_name` + reconciliation, each independently re-paging `/entities` — a burst per tick. Added a
+  process-wide short-TTL cache (`crawl_artists_cache_ttl_seconds`, default 60s) on `CrawlServiceClient.artists()`
+  so a tick shares a single enumeration (3 new unit tests prove the collapse; live: new machine 1 call/tick vs
+  old machine's burst).
+- **Prod proof (post-deploy, read-only over Flycast)**: observation total **0 → 221 → 294** (accruing
+  ~70/min); graph `/v1/graph/stats` **0/0 → 298 nodes / 399 edges**; crawl entity-resolution coverage ARTIST
+  **resolution_rate 1.0** (25 mentions, VENUE 74); signal `/health/ready` **200 `ready`**
+  (`observation_service.reachable:true`); observation machine **1/1** checks, **private ingress IP only**
+  (invariant verified via `fly ips`). Tests: signal **103** (+2 readiness), artist-intelligence **87** (+3 cache).
+
 ## Phase 5A.3.2 — canonical artist state reconciliation (2026-08-09, LIVE VALIDATED, docker)
 
 crawl + artist-intelligence rebuilt/recreated. Live:
@@ -378,11 +418,12 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 
 ## Test status
 crawl **202** (+2 in 5A.3.2: create-artist registry write + graph-only reconcile idempotency) ·
-gateway **70** (demand BFF incl. artist-universe + quota-buckets) · signal **101** (`videos.list` batch) ·
-graph **60** · analytics **45** · media **43** · observation **11** · entity **12** ·
-**artist-intelligence 84** (5A.3: candidate universe/quota/hourly/cadence; 5A.3.1: promotion/ecosystem/
+gateway **70** (demand BFF incl. artist-universe + quota-buckets) · signal **103** (+2 in 5A.3.3:
+`/health/ready` observation-dependency guard ok/503) · graph **60** · analytics **45** · media **43** ·
+observation **11** · entity **12** ·
+**artist-intelligence 87** (5A.3: candidate universe/quota/hourly/cadence; 5A.3.1: promotion/ecosystem/
 allocation/event-proximity; +4 in 5A.3.2: canonical-reconciliation diagnostics + orphan audit + safe
-degrade) — all pass.
+degrade; +3 in 5A.3.3: crawl `/entities` TTL-cache collapse / per-page / disable) — all pass.
 artist-intelligence Alembic **001↔002 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` + `oxlint` clean
 (demand.tsx adds no lint warnings). No JS test runner in the repo (Admin A–C convention): the demand UI is
 type-checked + browser-validated, with automated coverage on the BFF/read models it consumes. Lint clean
@@ -413,9 +454,16 @@ except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in 
   (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
 
 ## Recommended next phase
-**Operator executes the Fly deploy** (create 4 apps + Managed Postgres, set `DATABASE_URL`/
-`MIGRATION_DATABASE_URL` secrets, `scripts/fly-deploy.sh` → `fly-bootstrap.sh` → `fly-smoke.sh`, verify
-`fly ips list` is private-only) and lets the collector run; then observe accrued Shadow Ledger history.
+**Prod collection is now unblocked and accruing** (5A.3.3: observation-service deployed; observations,
+graph nodes, and canonical artists growing). **Immediate follow-ups**: (1) **District paged/date-ordered
+discovery** — District's `discover(limit=50)` reads the head of one unordered 24k-URL sitemap (historical
+2022–2025 events), so it enrolls mostly past events that capture `RECORD_ABSENT`; needs city/date-ordered
+paging (same class as the deferred Kolkata-first Skillbox crawl). (2) **Reap the ~24.5k `FAILED_RETRYABLE`
+capture jobs** from the pre-fix 502 era — they now retry against a working ingest and will settle
+(present/absent), but a bounded cleanup avoids churn. (3) Optionally deploy **entity-service** (currently
+best-effort/undeployed; signal's entity resolution degrades gracefully and crawl owns canonical identity —
+so it improves resolution quality but isn't required). Then let the collector run and observe accrued
+Shadow Ledger + demand history.
 Then resume product work: fold media's `creative-summary` into analytics, add perceptual creative
 matching, and (deferred) **paged Kolkata-first Skillbox discovery** (the sitemap head isn't Kolkata-ordered, so a city-targeted
 paged crawl is needed to surface Kolkata inventory and make cross-source convergence non-zero), then run
