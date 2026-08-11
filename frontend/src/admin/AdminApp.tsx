@@ -137,6 +137,21 @@ function GlobalSearch() {
   );
 }
 
+function EnvBadge({ compact }: { compact?: boolean }) {
+  const { me, status } = useAuth();
+  const env = me?.environment ?? status?.environment ?? (status?.auth_mode === "local" ? "local" : "unknown");
+  const region = (me?.region ?? status?.region ?? "").toUpperCase();
+  const prod = env === "production";
+  const showRegion = region && region !== "LOCAL" && region !== "UNKNOWN";
+  const tone = prod ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-300" : "border-amber-600/40 bg-amber-500/10 text-amber-300";
+  return (
+    <div className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-semibold uppercase tracking-wider ${tone} ${compact ? "text-[10px]" : "text-[11px]"}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${prod ? "bg-emerald-400" : "bg-amber-400"}`} />
+      {prod ? "Production" : env} · Read only{showRegion ? ` · ${region}` : ""}
+    </div>
+  );
+}
+
 function Identity() {
   const { me, status, signOut } = useAuth();
   const mode = me?.auth_mode ?? status?.auth_mode ?? "local";
@@ -174,6 +189,7 @@ function Shell() {
             <div className="text-[10px] uppercase tracking-widest text-slate-500">Console</div>
           </div>
         </div>
+        <div className="px-4 pb-3"><EnvBadge /></div>
         <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-2">
           {NAV.map((grp, gi) => (
             <div key={gi}>

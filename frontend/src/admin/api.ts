@@ -127,8 +127,8 @@ export const api = {
 };
 
 // ---- types (loose; the BFF is the source of truth) ----
-export type Me = { sub: string; role: string; auth_mode: string; local_mode: boolean; mutations_enabled: boolean };
-export type AuthStatus = { auth_mode: "oidc" | "local" | "disabled"; authenticated: boolean; sub: string | null; login_url: string };
+export type Me = { sub: string; role: string; auth_mode: string; local_mode: boolean; mutations_enabled: boolean; environment?: string; region?: string; read_only?: boolean };
+export type AuthStatus = { auth_mode: "oidc" | "local" | "disabled"; authenticated: boolean; sub: string | null; login_url: string; environment?: string; region?: string };
 export type Paged<T> = { count: number; limit: number; offset: number; available?: boolean; hydrated?: boolean; capped?: boolean } & Record<string, T[]>;
 export type SourceDiagnostics = {
   source: string; tracked_events: number; last_successful_capture: string | null;

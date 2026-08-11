@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import uuid
 from typing import Any
 
@@ -47,7 +48,8 @@ def login(payload: dict = Body(...)) -> dict[str, Any]:
 def me(principal: auth.Principal = Depends(auth.require_viewer)) -> dict[str, Any]:
     return {"sub": principal.sub, "role": principal.role, "auth_mode": principal.auth_mode,
             "local_mode": settings.admin_local_mode,
-            "mutations_enabled": settings.admin_operational_actions_enabled}
+            "mutations_enabled": settings.admin_operational_actions_enabled,
+            "environment": _environment(), "region": _region(), "read_only": True}
 
 
 # ---- production auth (Google Workspace OIDC) ----------------------------------------------------
@@ -57,6 +59,20 @@ def _auth_mode() -> str:
     if oidc.is_configured():
         return "oidc"
     return "disabled"
+
+
+def _environment() -> str:
+    """A human-facing environment label so the console never looks like local dev. `production` is a
+    real, authenticated cloud deployment; `local` is the developer console."""
+    if settings.admin_local_mode:
+        return "local"
+    if os.environ.get("FLY_APP_NAME") or oidc.is_configured():
+        return "production"
+    return "unknown"
+
+
+def _region() -> str:
+    return os.environ.get("FLY_REGION") or ("local" if settings.admin_local_mode else "unknown")
 
 
 @router.get("/auth/status", summary="Public auth status (unauthenticated)")
@@ -71,7 +87,8 @@ def auth_status(authorization: str | None = None,
     principal = auth.internal_user() if settings.admin_local_mode else auth.authenticate(session_cookie)
     return {"auth_mode": mode, "authenticated": principal is not None,
             "sub": principal.sub if principal else None,
-            "login_url": "/admin/v1/auth/login"}
+            "login_url": "/admin/v1/auth/login",
+            "environment": _environment(), "region": _region(), "read_only": True}
 
 
 @router.get("/auth/login", summary="Begin Google sign-in")
@@ -84,7 +101,7 @@ def auth_login(next: str = Query(default="/")) -> Response:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Google sign-in is not configured on this deployment")
     try:
-        url = oidc.authorization_url(oidc.issue_state(next))
+        url = oidc.build_login_url(next)
     except oidc.OidcError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
@@ -98,10 +115,10 @@ async def auth_callback(code: str | None = Query(default=None), state: str | Non
     if error:
         return RedirectResponse(url="/?login_error=access_denied", status_code=status.HTTP_302_FOUND)
     try:
-        next_path = oidc.verify_state(state)
+        next_path, nonce = oidc.verify_state(state)
         if not code:
             raise oidc.OidcError("missing authorization code")
-        result = await oidc.exchange_code(code)
+        result = await oidc.exchange_code(code, nonce)
     except oidc.OidcError:
         # Do not echo internal detail into the URL; the login screen shows a generic message.
         return RedirectResponse(url="/?login_error=1", status_code=status.HTTP_302_FOUND)

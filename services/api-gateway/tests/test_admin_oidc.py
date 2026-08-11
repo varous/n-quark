@@ -56,8 +56,10 @@ def test_allowlist_fails_closed(monkeypatch):
 # ---- signed state -------------------------------------------------------------------------------
 def test_state_roundtrip_and_tamper(monkeypatch):
     monkeypatch.setattr(settings, "admin_session_secret", "unit-secret")
-    st = oidc.issue_state("/events?source=boshow")
-    assert oidc.verify_state(st) == "/events?source=boshow"
+    st = oidc.issue_state("/events?source=boshow", nonce="nnn")
+    nxt, nonce = oidc.verify_state(st)
+    assert nxt == "/events?source=boshow"
+    assert nonce == "nnn"
     with pytest.raises(oidc.OidcError):
         oidc.verify_state(st + "x")
     with pytest.raises(oidc.OidcError):
@@ -66,8 +68,8 @@ def test_state_roundtrip_and_tamper(monkeypatch):
 
 def test_state_rejects_open_redirect(monkeypatch):
     monkeypatch.setattr(settings, "admin_session_secret", "unit-secret")
-    assert oidc.verify_state(oidc.issue_state("//evil.com")) == "/"
-    assert oidc.verify_state(oidc.issue_state("https://evil.com")) == "/"
+    assert oidc.verify_state(oidc.issue_state("//evil.com"))[0] == "/"
+    assert oidc.verify_state(oidc.issue_state("https://evil.com"))[0] == "/"
 
 
 # ---- entry + login ------------------------------------------------------------------------------
@@ -106,12 +108,13 @@ def test_session_cookie_authenticates(oidc_client):
 
 
 def test_callback_sets_cookie_and_redirects(oidc_client, monkeypatch):
-    async def fake_exchange(code: str):
+    async def fake_exchange(code: str, expected_nonce: str):
         assert code == "auth-code-123"
+        assert expected_nonce == "the-nonce"  # the callback must pass the state's nonce through
         return oidc.OidcResult(email="sourav@clockwork-av.com", hosted_domain="clockwork-av.com")
 
     monkeypatch.setattr(oidc, "exchange_code", fake_exchange)
-    state = oidc.issue_state("/overview")
+    state = oidc.issue_state("/overview", nonce="the-nonce")
     r = oidc_client.get(f"/admin/v1/auth/callback?code=auth-code-123&state={state}",
                         follow_redirects=False)
     assert r.status_code == 302
