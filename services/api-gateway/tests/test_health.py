@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from api_gateway.config import settings
 from api_gateway.main import app
 
 client = TestClient(app)
@@ -15,7 +16,11 @@ def test_health() -> None:
     assert body["service"] == "api-gateway"
 
 
-def test_platform_status_aggregates_services() -> None:
+def test_platform_status_aggregates_services(monkeypatch) -> None:
+    # /v1/platform/status is authenticated (Admin D.2); exercise the aggregation via the local
+    # single-context console so no login is needed to test the fan-out itself.
+    monkeypatch.setattr(settings, "admin_api_enabled", True)
+    monkeypatch.setattr(settings, "admin_local_mode", True)
     mock_response = MagicMock()
     mock_response.json.return_value = {"status": "ok", "service": "crawl-service"}
 

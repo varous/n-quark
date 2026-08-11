@@ -44,9 +44,12 @@ primary_region = "sin"
 [http_service]
   internal_port = 8000
   force_https = true                                   # public app; cookies are Secure
-  auto_stop_machines = "stop"
+  # Admin D.2: this is the operational production observatory — keep one machine always warm so the
+  # console (and its authenticated /v1/platform/status) answers immediately, no cold-start. One always-
+  # on shared-cpu machine is sufficient for an internal read-only console; scale-to-more stays automatic.
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   [http_service.concurrency]
     type = "requests"
     soft_limit = 150

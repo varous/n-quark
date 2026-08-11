@@ -162,3 +162,41 @@ def test_logout_clears_cookie(oidc_client):
     oidc_client.cookies.set(settings.session_cookie_name, token)
     r = oidc_client.post("/admin/v1/auth/logout")
     assert r.status_code == 204
+
+
+# ---- /v1/platform/status is authenticated (Admin D.2) -------------------------------------------
+# The aggregate status enumerates internal service names + health (production topology). It must not
+# be publicly readable: same VIEWER principal as the rest of the console. Downstream fan-out is stubbed
+# to empty so these stay hermetic (no network, no localhost dependency).
+@pytest.fixture()
+def no_downstream(monkeypatch):
+    monkeypatch.setattr(type(settings), "downstream_services", property(lambda self: {}), raising=False)
+
+
+def test_platform_status_requires_auth(oidc_client, no_downstream):
+    r = oidc_client.get("/v1/platform/status")
+    assert r.status_code == 401  # production/OIDC, no cookie -> unauthorized, no topology leaked
+    assert "services" not in r.json()
+
+
+def test_platform_status_authenticated_viewer(oidc_client, no_downstream):
+    token = auth.issue_session("sourav@clockwork-av.com", "VIEWER", auth_mode="oidc")
+    oidc_client.cookies.set(settings.session_cookie_name, token)
+    r = oidc_client.get("/v1/platform/status")
+    assert r.status_code == 200
+    assert "services" in r.json()
+
+
+def test_platform_status_hidden_when_admin_api_disabled(monkeypatch, no_downstream):
+    # A deployment with the admin surface off exposes no topology at all (404, not a public 200).
+    monkeypatch.setattr(settings, "admin_api_enabled", False)
+    with TestClient(app) as c:
+        assert c.get("/v1/platform/status").status_code == 404
+
+
+def test_platform_status_local_mode_open(monkeypatch, no_downstream):
+    # Local single-context console: internal user, no login, reads succeed.
+    monkeypatch.setattr(settings, "admin_api_enabled", True)
+    monkeypatch.setattr(settings, "admin_local_mode", True)
+    with TestClient(app) as c:
+        assert c.get("/v1/platform/status").status_code == 200

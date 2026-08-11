@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api_gateway.admin.auth import Principal, require_viewer
 from api_gateway.config import settings
 from api_gateway.routes.admin import router as admin_router
 from api_gateway.routes.admin_commands import router as admin_commands_router
@@ -79,8 +80,15 @@ def _mount_frontend() -> None:
 
 
 @app.get("/v1/platform/status")
-async def platform_status() -> dict[str, object]:
-    """Aggregate health from all downstream services."""
+async def platform_status(
+    _principal: Principal = Depends(require_viewer),
+) -> dict[str, object]:
+    """Aggregate health from all downstream services.
+
+    Authenticated read-only (Admin D.2): this response enumerates internal service names and their
+    health, which is production topology, so it requires the same VIEWER principal as the rest of the
+    console. Unauthenticated → 401 (production/OIDC), 404 when the admin API is disabled entirely; local
+    mode short-circuits to the internal context. The plain load-balancer probe stays on public /health."""
     results: dict[str, object] = {}
     downstream = settings.downstream_services
 
