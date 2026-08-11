@@ -153,3 +153,43 @@ A MOCK provider mode is rendered as an unmissable alert. No scheduler/resolve/re
 
 Boundary is unchanged: the frontend and admin BFF stay **local-only** (no Fly manifest references the
 frontend; the admin flags stay off on cloud, enforced by test).
+
+## Admin D — authenticated production console (`nquark-admin`)
+
+The console is now also deployed as **one public HTTPS app** (`nquark-admin`, region `sin`) = the same
+`api-gateway` codebase with the React SPA baked in, serving the SPA at `/` and the read-only `/admin/v1`
+BFF same-origin, reaching the private services over Flycast. It is **operationally read-only** and gated
+by **Google Workspace OIDC**. See `docs/deployment.md` for the deploy runbook.
+
+**Google OAuth configuration**
+- OAuth 2.0 **Web** client; consent screen scoped **Internal** (Workspace-only).
+- Authorized redirect URI (exact): `https://nquark-admin.fly.dev/admin/v1/auth/callback`.
+- Allowed sign-in domain: `NQUARK_OIDC_ALLOWED_DOMAIN=clockwork-av.com` (deny-by-default; optional
+  `NQUARK_OIDC_ALLOWED_EMAILS` for named externals).
+- Secrets (fly, never in git): `NQUARK_OIDC_CLIENT_ID`, `NQUARK_OIDC_CLIENT_SECRET`,
+  `NQUARK_ADMIN_SESSION_SECRET`. The **client id must correspond to an existing OAuth client** or Google
+  returns `Error 401: invalid_client` ("OAuth client was not found") at the login redirect.
+
+**Security posture (Admin D.1)**
+- **ID tokens are cryptographically verified**: the RS256 signature is checked against Google's JWKS
+  (`https://www.googleapis.com/oauth2/v3/certs`, cache-controlled, key-rotation refresh); PyJWT enforces
+  `aud`=our client id, `exp`, required claims; `iss` checked against Google's issuers; `alg=none` and
+  unknown key ids rejected. A `nonce` is bound into the signed login `state` and re-checked on the token.
+  Then `email_verified` + the Workspace-domain allowlist (fail-closed; `hd` must corroborate the email
+  domain). Covered by `tests/test_oidc_verification.py` (forged / unknown-key / unknown-kid / alg=none /
+  wrong-iss / wrong-aud / expired / unverified-email / wrong-domain / hd-spoof / nonce-mismatch rejected;
+  valid Workspace identity accepted).
+- **Session**: an httpOnly, `Secure`, `SameSite=Lax` cookie carrying an HMAC-signed principal (8h);
+  stateless, so it survives machine restarts and works across HA machines. Logout clears it. The browser
+  stores **no** token; no client secret / Google token / signing secret / Flycast hostname appears in the
+  bundle, HTML, or API responses.
+- **Hard read-only**: read paths reject POST/PUT/PATCH/DELETE (405); `/operations/*` require OPERATOR
+  (403 for the console's VIEWER) and are additionally flag-disabled (503); governed
+  `/resolution-decisions/*` require ANALYST (403 for VIEWER). Auth endpoints are exempt. Covered by
+  `tests/test_admin_readonly.py`.
+- **Environment identity**: `/auth/{status,me}` report `environment` (production/local) + `region` +
+  `read_only`; the SPA shows a prominent **PRODUCTION · READ ONLY · SIN** badge so it never looks like
+  local dev.
+- **Downstreams**: only the six live Flycast services (crawl/graph/observation/signal/media/
+  artist-intelligence) are wired; no localhost fallback (base map is docker service names in-container,
+  overridden to `.flycast`). Un-deployed services (entity/analytics) degrade to `available:false`.

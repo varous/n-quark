@@ -1167,3 +1167,20 @@ the **primary human interface for observing n-quark in production** — the oper
   co-movement; honest "insufficient history" / "not complete market coverage" labels are preserved.
 - Credentials (OAuth client secret, session-signing secret) are operator-set secrets — never in git, never
   handled by tooling, never inlined in a deploy manifest.
+
+# Delivered — Cryptographically-verified console authentication (Admin D.1)  `[CURRENT]`
+
+_Appended 2026-08-12. Additive record; append-only like the rest of this MCP. It hardens the Admin D
+posture from "authenticated" to "cryptographically authenticated" before the public console went live._
+
+- **A console identity must be cryptographically proven, not merely decoded `[INVARIANT]`** — a Google
+  sign-in is accepted only after the identity token's signature is verified against Google's published
+  signing keys, and its audience, issuer, expiry, verified-email, Workspace-domain, and per-login nonce are
+  all checked. An unsigned token, a token signed by an unknown key, or any claim mismatch is rejected. The
+  console is now **live on the public internet** over HTTPS, reachable only through this gate; the internal
+  collection services remain private.
+- **The public console remains observe-only and faithful to production `[INVARIANT]`** — writes are refused
+  server-side regardless of the interface; the deployed console reads only the live private services (no
+  local data path); and it visibly identifies itself as the production, read-only environment so it can
+  never be mistaken for a development surface. Session material is an httpOnly, secure, same-site cookie;
+  no secret or token is ever exposed to the browser.
