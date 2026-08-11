@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-11 (Phase 5A.3.3). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-11 (Admin D). Branch `main`. Repo: github.com/varous/n-quark._
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -26,6 +26,7 @@ append-only MCP — never overwrite it).
 | 4A — canonical market read models | Deepened analytics-service with a **non-destructive canonical query projection** (fold `SUPERSEDED_BY`/alias, cycle/invalid-chain protection) + deterministic read models: **regional observed-supply**, **artist/venue/organizer/series activity**, **observation-quality**, **commercial-state** (Shadow Ledger facts only, per-source prices separate). Counts by canonical id (legacy/superseded folded, never double-counted); bounded/paginated/stable-sort; `trace=true` explains inclusion/exclusion + folds + metric defs. New `/v1/analytics/market/...` surface; legacy scoring endpoints untouched. No prediction/scores/total-market claim; query-time (no new tables) | analytics-service `projection.py`, `readmodels.py`, `datasource.py`, `crawl_client.py`, `routes/market.py`, ADR-0013, `docs/analytics.md` |
 | 4B — creative asset observation | Built **media-service** (Phase 4B scaffold): observe public event creatives over time — **content-addressed identity** (SHA-256 → normalized URL → optional phash), **safe SSRF-guarded bounded fetcher** (http(s)-only, private-net/redirect/size/MIME guards, 8 classified outcomes), **content-addressed local storage** (dedup, disable-able, bytes never in PG), dependency-free header **metadata**, deterministic **media transitions** (FIRST_SEEN/CONTENT_CHANGED/URL_CHANGED_SAME_CONTENT/ROLE_CHANGED/DISAPPEARED/REAPPEARED) in a dedicated history, `event -USES_CREATIVE-> media_asset` graph link, bounded internal APIs + coverage/failures + stable creative-summary contract. Best-effort crawl capture hook (never fails capture). No OCR/recognition/embeddings/scoring; flags default off; migration `001` additive/reversible | media-service `identity/metadata/transitions/fetcher/storage/service/reads/routes`, migration 001, crawl `media_notifier.py` + hook, ADR-0014, `docs/media-observation.md` |
 | 5A — public demand intelligence | New **artist-intelligence-service** (port 8010): demand-side layer meeting supply only through `canonical_artist_id`. Own **demand ledger** (`artist_external_identity`, `artist_demand_observation`, `provider_quota_day`, `demand_refresh_job`; separate from the event Shadow Ledger; append-only, idempotent on `observation_key`). **Reuses signal-service for YouTube acquisition** (extended with acquisition-only `search`+`videos`) — no parallel ingestion path, API key stays in signal-service. Provider-neutral contract (capability flags); deterministic YouTube identity resolution (RESOLVED/AMBIGUOUS/UNRESOLVED, name-equality never resolves alone, never creates a canonical artist); rounded-subscriber honesty (`PROVIDER_REPORTED`); per-provider/day **quota accounting** (search 100u vs read 1u, budget-enforced); restart-safe **refresh scheduler** (lease/retry/idempotent, known-id reads only); Google Trends **OFFICIAL_API (gated → ACCESS_UNAVAILABLE) + IMPORT** (labeled CSV, no scraping); first-class **geography** (ISO IN-XX); deterministic **momentum/geography/supply-demand/event-response** read models (no score, no causal claim, `INSUFFICIENT_HISTORY` honesty). Separate service so demand failure never disrupts the crawl→signal spine | artist-intelligence-service `providers/`+`service.py`+`scheduler.py`+`intelligence.py`+`supply.py`+`signal_client.py`, migration 001, signal `adapters/youtube.py`+`routes/youtube.py`, ADR-0017, `docs/demand-intelligence.md`+`docs/providers/{youtube,google-trends}.md` |
+| Admin D — authenticated production console (`nquark-admin`) | **The console becomes the primary human interface for observing production** — no more SQL/curl/Fly logs for ordinary inspection. ONE public Fly app: the same `api-gateway` codebase serving the **built React SPA + `/admin/v1` read-only BFF from a single image**, reaching the private Flycast services, gated by **Google Workspace OIDC** (verified email in the allowed domain `clockwork-av.com`; deny-by-default; single read-only role; httpOnly signed session cookie), **operationally read-only**. Slotted OIDC into the pre-existing provider-neutral auth seam (`authenticate()→Principal`, server-side `require_role` now reads the session cookie or a Bearer token) — no auth rearchitecture; added `admin/oidc.py` (auth-code flow, server-to-server TLS token exchange, id_token claim validation, signed anti-CSRF state, same-origin-only redirect — no new deps). Gateway serves the SPA at `/` (assets via a `StaticFiles` mount) and adopted the fleet `DATABASE_URL`/`MIGRATION_DATABASE_URL` convention. **Full clarity frontend redesign** reusing the BFF read models: refined single dark design system (cool-ink neutrals + one indigo brand accent; upgraded shared primitives so reused screens restyle for free), status-aware auth gate + "Sign in with Google" screen + identity/sign-out, grouped-IA shell (Explore/Analyze/Collection/System) with global search, a new **production-state Overview**, and a new **bounded-inference Analysis** screen (deterministic aggregations — integrity as four separate components, supply×demand side-by-side never fused, no scores/prediction/causal claims). **Not yet deployed** — waits on the operator creating the Google OAuth client + setting 3 fly secrets; then `fly deploy` + allocate the public IP. Deploy boundary invariant updated: `ADMIN_LOCAL_MODE` never on any cloud manifest; the console manifest must be authenticated + read-only | api-gateway `admin/oidc.py` (new)+`admin/auth.py`+`routes/admin.py`+`main.py`+`config.py`+`alembic/env.py`, frontend `admin/{AdminApp,auth,api,ui,overview(new),analysis(new)}.tsx`+`index.css`, `deploy/fly/admin-console.{toml,Dockerfile}` (new), `docs/deployment.md`, `tests/{test_admin_oidc(new),test_admin_phase_c}.py` |
 | 5A.3.3 — prod collection unblock (missing observation-service) | **Root cause of the empty prod DB found + fixed.** Prod accrued **0** canonical data despite an always-on collector reaching real Boshow/District (HTTP 200): signal-service's ticketing `/ingest` (the capture write path) HARD-depends on observation-service, but observation-service **was never deployed to Fly** — so every ingest hit `nquark-observation-service.flycast` (DNS-unresolvable) → **502** → the collector classified **285/309 events `SOURCE_UNAVAILABLE`**, 0 PRESENT → 0 entity candidates → 0 canonical artists → empty graph → demand had nothing. **Fix**: deployed observation-service to the private Flycast spine (5th app, region `sin`, no public IP, always-on min-1), attached to the **same** shared Managed Postgres (own `alembic_version_observation` table; migration over the direct endpoint). Adopted the fleet DB-URL convention (`DATABASE_URL` pooled + `MIGRATION_DATABASE_URL` direct, normalized to `postgresql+psycopg://`). Added a **readiness guard** — signal `GET /health/ready` returns **503** naming the reason when observation-service is unreachable (liveness/readiness split so a blip doesn't flap routing). Throttled the **demand→crawl request storm**: a process-wide short-TTL cache on `CrawlServiceClient.artists()` collapses a whole collector tick's backfill + per-candidate promotion + reconciliation into one `/entities` enumeration. **Prod proof (post-deploy)**: observations **0→221→294** (accruing ~70/min), graph **0/0 → 298 nodes/399 edges**, entity-resolution ARTIST rate **1.0**, signal `/health/ready` **200 ready** (observation reachable). No new paid cluster (reused shared PG); private-only invariant verified (`fly ips`) | `deploy/fly/observation-service.toml` (new), observation `config.py`+`alembic/env.py`+`fly.toml`, signal `main.py`+`clients/observation_client.py`, artist-intelligence `crawl_client.py`+`config.py`, `scripts/fly-{deploy,smoke}.sh`, `deploy/fly/README.md` |
 | 5A.3.2 — canonical artist state reconciliation | Resolved the prod "backfill sees 0 canonical artists". **Root cause**: prod genuinely had no accrued canonical artists (1 tracked event, empty graph+registry) — not drift; the lone `artist:arijit-singh` demand rows are an **orphan** from earlier manual validation. Documented ownership: crawl entity-resolution registry owns canonical **identity**; graph is the **representation**. **Fix**: governance `create-artist` now also writes a RESOLVED registry row (closes a 5A.3.1 gap where promotion-created artists were graph-only + invisible to `/entities`); new idempotent `reconcile-graph-artists` registers pre-existing graph-only nodes (no node create/dup, no id rewrite). Extended `/demand/artist-universe` with a `canonical_reconciliation` block (registry vs graph vs demand-referenced counts + **orphan audit**, safe-degrade). Local proof: reconcile registered 6 graph-only artists → registry(84)==graph(84); 3 orphan demand refs audited (not rewritten). Deployed to private Fly | crawl `governance.py`+`routes/governance.py`+`enrichment/clients.py`, artist-intelligence `universe.py`+`graph_client.py`, `docs/demand-intelligence.md` |
 | 5A.3.1 — candidate promotion & acquisition closure | Closed the four 5A.3 gaps (no redesign). **Candidate → canonical promotion** (`promotion.py`): deterministic policy MATCH_EXISTING_CANONICAL (link) / MULTI_SOURCE_CONFIRMED / INDIA_LIVE_EVIDENCE_PLUS_MUSIC_IDENTITY (create) — creation routed through a new crawl-owned `create-artist` governance endpoint (ownership stays in crawl/graph; demand service never writes canonical); weak single-source YouTube evidence never canonicalises; auto-enqueues identity resolution after link/create; bounded persisted backlog drain. **Bounded YouTube ecosystem discovery** (seed channels → one-hop uploads → candidates only). **Dynamic search-quota allocation**: per-purpose sub-accounting (SEARCH:unresolved/discovery/ambiguity), borrow unused when others idle / near reset, global reserve never borrowable, diagnostics expose configured/used/borrowed. **Live event-proximity cadence**: nearest upcoming Indian event read live from the graph (FEATURES), fed into cadence bands, safe-degrade on graph failure. Also fixed a latent 5A.3 defect (`crawl_client.artists` hit `/v1/internal/entities` 404 → silently empty). Deployed to private Fly | artist-intelligence `promotion.py`+`discovery.py`+`quota.py`+`scheduler.py`+`service.py`+`crawl_client.py`+`collector.py`, crawl `governance.py`+`routes/governance.py` (create-artist), `docs/demand-intelligence.md`, ADR-0018 |
@@ -269,6 +270,47 @@ Production defect: a search-result candidate could transition a YouTube CHANNEL_
   `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
   suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
 
+## Admin D — authenticated production console (2026-08-11, BUILT + LOCALLY VERIFIED; deploy pending operator secrets)
+
+The deployed console becomes the **primary human interface for observing n-quark** — the user should not
+need SQL, curl, or Fly logs for ordinary product/data inspection. Design decisions (confirmed with the
+operator): **Google Workspace domain sign-in** (`clockwork-av.com`), **single read-only role**, **full
+clarity redesign**, **build-now / deploy-when-secrets-set**.
+
+- **Architecture (one public app)**: `nquark-admin` = the same `api-gateway` codebase with the built React
+  SPA baked into the image (`deploy/fly/admin-console.Dockerfile`, repo-root context: node build stage →
+  gateway image with `frontend_dist`). FastAPI serves the SPA at `/` (`_frontend_index`/`root()`; assets via
+  a `StaticFiles` mount added last so every API route wins) and the `/admin/v1` BFF same-origin (no CORS).
+  Reaches the private services over `.flycast` (crawl/signal/observation/graph/media/artist-intelligence
+  overrides). `force_https`, operationally read-only (`ADMIN_OPERATIONAL_ACTIONS_ENABLED=false`).
+- **Auth (slots into the existing seam, no rearchitecture)**: `admin/oidc.py` implements the Google
+  authorization-code flow with **no new dependency** — server-to-server TLS token exchange, then id_token
+  claim validation (`iss`/`aud`/`exp`/`email_verified`) with a signed anti-CSRF `state` and same-origin-only
+  `next`. `auth.email_is_allowed` gates on the **verified email domain** (fail-closed; `hd` must corroborate;
+  optional extra allowlist). `require_role` now reads the **httpOnly signed session cookie** (browser) or a
+  Bearer token (dev/tests); all authenticated users get `VIEWER`. Endpoints: `/auth/status` (public entry),
+  `/auth/login` (302→Google), `/auth/callback` (mint cookie), `/auth/logout`. Gateway adopts the fleet
+  `DATABASE_URL`/`MIGRATION_DATABASE_URL` convention so admin migrations target the attached Managed Postgres.
+- **Frontend redesign (reuses BFF read models; do-not-port mandate honored)**: a single deliberate dark
+  design system (`index.css` `@theme` cool-ink neutral ramp app-wide + one indigo brand accent, status hues
+  kept separate; upgraded shared primitives in `ui.tsx` — so reused `screens/detail/demand` restyle for
+  free — plus new StatTile/Bar/Sparkline/Section/KeyValue/Tag). New **status-aware auth gate** + "Sign in
+  with Google" screen (`auth.tsx`); **grouped-IA shell** (`AdminApp.tsx`: Explore/Analyze/Collection/System,
+  global search with `/` focus, identity + sign-out). New **Overview** (`overview.tsx`) = production-state
+  landing (collection-active banner, KPI tiles, per-source table, demand coverage, service strip, attention
+  queues). New **Analysis** (`analysis.tsx`) = bounded deterministic aggregation honoring the invariants
+  (collection integrity as **four separate components, never one score**; **supply × demand side-by-side,
+  never fused**; discovery contribution; coverage-gap backlog; honest disclaimer).
+- **Local verification**: gateway tests **84** (+14: OIDC allowlist/state/status/login/cookie/callback +
+  rewritten deploy-boundary). Frontend `tsc -b` clean, `vite build` ok, `npm run lint` exit 0. Single-app
+  serving smoke-tested (SPA at `/` text/html, assets 200, `/auth/status` disabled/local, `/auth/me` 401 w/o
+  session). In-browser against a local gateway: the login screen (disabled-mode notice), and in local mode
+  the **redesigned shell + Overview + Analysis + reused Events** all render with live data.
+- **Deploy handoff (pending)**: operator creates a Google OAuth web client (redirect
+  `https://nquark-admin.fly.dev/admin/v1/auth/callback`), `fly apps create nquark-admin` + `fly mpg attach`,
+  sets 3 secrets (`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `ADMIN_SESSION_SECRET`), then `fly deploy` (the
+  admin-console toml/Dockerfile) + `fly ips allocate`. See `docs/deployment.md`.
+
 ## Phase 5A.3.3 — prod collection unblock: the missing observation-service (2026-08-11, LIVE VALIDATED on Fly)
 
 **The definitive answer to "prod DB has nothing and is not accruing."** Not a flags/egress/provider problem
@@ -418,14 +460,15 @@ pipeline **proven** on 2 real Mumbai events (`domi-jd-beck…`, `ad-design-show�
 
 ## Test status
 crawl **202** (+2 in 5A.3.2: create-artist registry write + graph-only reconcile idempotency) ·
-gateway **70** (demand BFF incl. artist-universe + quota-buckets) · signal **103** (+2 in 5A.3.3:
+gateway **84** (+14 in Admin D: Google OIDC allowlist/state/status/login/session-cookie/callback + rewritten
+deploy-boundary invariant) · signal **103** (+2 in 5A.3.3:
 `/health/ready` observation-dependency guard ok/503) · graph **60** · analytics **45** · media **43** ·
 observation **11** · entity **12** ·
 **artist-intelligence 87** (5A.3: candidate universe/quota/hourly/cadence; 5A.3.1: promotion/ecosystem/
 allocation/event-proximity; +4 in 5A.3.2: canonical-reconciliation diagnostics + orphan audit + safe
 degrade; +3 in 5A.3.3: crawl `/entities` TTL-cache collapse / per-page / disable) — all pass.
-artist-intelligence Alembic **001↔002 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` + `oxlint` clean
-(demand.tsx adds no lint warnings). No JS test runner in the repo (Admin A–C convention): the demand UI is
+artist-intelligence Alembic **001↔002 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` clean; `npm run lint` exit 0
+(Admin D redesign: only the pre-existing `only-export-components` warnings on the shared primitives module). No JS test runner in the repo (Admin A–D convention): the UI is
 type-checked + browser-validated, with automated coverage on the BFF/read models it consumes. Lint clean
 except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in an alembic migration.
 
@@ -449,9 +492,13 @@ except baseline-tolerated B008 (FastAPI `Depends`) and one pre-existing S110 in 
   precision is never retrofitted onto historical daily observations; BookMyShow is never a gatekeeper and
   is never evasively scraped.
 - API keys: user adds to `.env`; never handled/pasted by the agent.
-- The admin **inspection console is local-only + unauthenticated** (`ADMIN_LOCAL_MODE`) — never enabled
-  on a cloud deploy; the admin BFF stays disabled and the frontend is excluded from all Fly manifests
-  (enforced by test). See `docs/deployment.md`. OIDC is deferred until/if the dashboard is deployed.
+- **Admin surface access (Admin D)**: the **local** console runs unauthenticated only under
+  `ADMIN_LOCAL_MODE`, which is **never** set on any cloud manifest (would expose it with no login — enforced
+  by test). The **one public console** (`nquark-admin`) is exposed only behind **Google Workspace OIDC**
+  (verified-email domain allowlist, deny-by-default, single read-only role, httpOnly signed session cookie)
+  and stays **operationally read-only**; its manifest must have OIDC on + local-mode off + actions off
+  (enforced by test). Secrets are never inlined. The private services + the crawl-space `nquark-api-gateway`
+  never serve the console. See `docs/deployment.md`.
 
 ## Recommended next phase
 **Prod collection is now unblocked and accruing** (5A.3.3: observation-service deployed; observations,

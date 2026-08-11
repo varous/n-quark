@@ -1,26 +1,63 @@
-# Deployment notes — cloud services vs. the local-only inspection console
+# Deployment notes — cloud services, the local console, and the authenticated production console
 
-n-quark has two very different surfaces with two very different deployment stories:
+n-quark has three deployment stories:
 
-1. **The pipeline + events feed** — deployed to the cloud (Fly.io). See
+1. **The pipeline + events feed** — the private collection spine on Fly.io. See
    [`deploy/fly/README.md`](../deploy/fly/README.md).
-2. **The inspection console** (Admin Phases A–C) — a **local-only, unauthenticated** developer
-   dashboard. It is **never** deployed to the cloud.
+2. **The local inspection console** (Admin A–C) — an **unauthenticated developer** dashboard run from a
+   machine in `ADMIN_LOCAL_MODE`. Never deployed.
+3. **The authenticated production console** (Admin D, `nquark-admin`) — the **one public app**: the same
+   React SPA + `/admin/v1` BFF, served from a single image, gated by **Google Workspace OIDC**, reaching
+   the private Flycast services. **Operationally read-only.**
 
-This document covers the boundary between them.
+## The boundary invariants (enforced)
 
-## The local-only boundary (enforced)
+- **`ADMIN_LOCAL_MODE` is never `true` on any cloud manifest.** Local mode is the unauthenticated
+  single-context bypass; on a public app it would expose the console with no login. Enforced by
+  `tests/test_admin_phase_c.py::test_local_mode_never_enabled_on_any_cloud_manifest`.
+- **The private service manifests + the crawl-space `nquark-api-gateway` never serve the console**
+  (`ADMIN_API_ENABLED` stays off; no frontend). Enforced by
+  `::test_private_service_manifests_do_not_enable_admin` and `::test_gateway_fly_manifest_pins_admin_off`.
+- **The one public console (`deploy/fly/admin-console.toml`) is authenticated + read-only**: OIDC on,
+  local mode off, operational actions off — enforced by
+  `::test_admin_console_manifest_is_authenticated_and_read_only`. Secrets are never inlined in the manifest.
 
-- The admin BFF (`/admin/v1`) is gated by `NQUARK_ADMIN_API_ENABLED` (default **false**). Every service
-  `fly.toml` — including the public `nquark-api-gateway` — pins it **off**, plus
-  `NQUARK_ADMIN_LOCAL_MODE = "false"`, so the admin surface returns `404` in the cloud.
-- The Vite/React admin **frontend** has **no Fly app of its own** and is not built into any deployed
-  image (the gateway `Dockerfile` builds only the Python service). It runs only from a developer machine.
-- A test guards this: `tests/test_admin_phase_c.py::test_frontend_absent_from_cloud_deploy_manifests`
-  and `::test_gateway_fly_manifest_pins_admin_off` fail if any manifest enables the admin API/local mode
-  or references the frontend as a deployable path.
+## Admin D — deploying the authenticated production console (`nquark-admin`)
 
-Cloud service deployment therefore continues exactly as before — **without** the dashboard.
+The console is the same `api-gateway` codebase with the SPA baked in (`deploy/fly/admin-console.Dockerfile`,
+repo-root context). Access requires a Google Workspace sign-in whose verified email is in the allowed
+domain (`NQUARK_OIDC_ALLOWED_DOMAIN`, default `clockwork-av.com`; deny-by-default). All authenticated users
+get a single read-only role; the session is an httpOnly signed cookie.
+
+**Operator steps (cost-bearing / secret-bearing — done by a human):**
+
+1. **Create a Google OAuth 2.0 Web client** (Google Cloud console → APIs & Services → Credentials).
+   Authorized redirect URI: `https://nquark-admin.fly.dev/admin/v1/auth/callback` (match `PUBLIC_BASE_URL`;
+   add your custom domain's callback too if you use one).
+2. **Create the app + attach the shared Postgres** (audit tables; no new cluster):
+   ```bash
+   fly apps create nquark-admin --org nquark
+   fly mpg attach <cluster-id> -a nquark-admin          # sets DATABASE_URL (pooled)
+   fly secrets set -a nquark-admin MIGRATION_DATABASE_URL='postgresql://…@direct.<id>.flympg.net/…'
+   ```
+3. **Set the secrets** (never in git):
+   ```bash
+   fly secrets set -a nquark-admin \
+     NQUARK_OIDC_CLIENT_ID=<google-client-id> \
+     NQUARK_OIDC_CLIENT_SECRET=<google-client-secret> \
+     NQUARK_ADMIN_SESSION_SECRET=<random 32+ bytes>
+   ```
+4. **Deploy, then allocate the public IP** (the only app with one):
+   ```bash
+   fly deploy --config deploy/fly/admin-console.toml --dockerfile deploy/fly/admin-console.Dockerfile .
+   fly ips allocate-v4 --shared -a nquark-admin && fly ips allocate-v6 -a nquark-admin
+   ```
+
+To restrict/extend who may sign in: set `NQUARK_OIDC_ALLOWED_DOMAIN` (the Workspace domain) and/or a
+comma-separated `NQUARK_OIDC_ALLOWED_EMAILS` for named external accounts. Rotate
+`NQUARK_ADMIN_SESSION_SECRET` to invalidate all existing sessions.
+
+Cloud pipeline deployment is unchanged — the console is an additive, separate app.
 
 ## Running the local dashboard
 
@@ -68,4 +105,6 @@ shows a `read-only` badge in that state. This is the recommended local default.
 
 ## Reminder
 
-> **This dashboard is local-only and unauthenticated. Do not expose it publicly.**
+> **`ADMIN_LOCAL_MODE` is the unauthenticated single-context bypass — it is for a developer machine only
+> and must never be set on a cloud manifest.** The public production console (`nquark-admin`) is exposed
+> only behind Google Workspace OIDC and stays operationally read-only.

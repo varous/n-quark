@@ -1123,3 +1123,47 @@ an empty graph. A moat that does not accrue is not a moat. The cause was infrast
 - **One datastore, per-service migration namespaces; no new public surface; private Flycast only, no public
   IP.** Canonical identity remains owned by the entity/graph architecture; observation-service only persists
   the immutable observations the capture path produces.
+
+# Delivered — Authenticated Production Intelligence Console (Admin D)  `[CURRENT]`
+
+_Appended 2026-08-11. Additive record. Existing entries above are unchanged; this section is append-only
+like the rest of this MCP. It records a deliberate, bounded change of posture: the console that observes
+n-quark is now exposed to authenticated humans, not only to a developer's machine._
+
+## What shipped
+
+The accumulated observation layer is only valuable if humans can actually see it. Admin D makes the console
+the **primary human interface for observing n-quark in production** — the operator should not need SQL,
+`curl`, or Fly logs for ordinary product/data inspection.
+
+- **One public application `[INVARIANT]`** — a single Fly app (`nquark-admin`) serves the console SPA and its
+  read-only backend-for-frontend from one image and reaches the internal services over the private network.
+  It is the **only** public surface introduced for the console; every collection service stays private.
+- **Authenticated, organization-scoped access `[INVARIANT]`** — access requires a Google Workspace sign-in
+  whose **verified email** is within the allowed organization domain (deny-by-default; an explicit extra
+  allowlist is possible). Authorization is decided server-side on every request from a signed, httpOnly
+  session; the browser never holds a bearer token. The unauthenticated single-context mode remains a
+  developer-machine-only affordance and is never enabled on a public deployment.
+- **Operationally read-only `[INVARIANT]`** — the deployed console exposes inspection only. It renders no
+  mutation controls and the governed/operational write endpoints are disabled, so even a direct request is
+  refused. Observing the system never changes it.
+- **Faithful to live production `[INVARIANT]`** — the console reflects the live production state of the
+  services and datastore. It does not read a local database, and local development data is never migrated
+  into production to make a screen look populated. Panels degrade honestly to "unavailable" rather than
+  fabricating data when a dependency is absent.
+- **Intelligible exploration + bounded analysis** — events, artists, venues, organizers, observations,
+  demand intelligence, and source/service health are explorable without query knowledge; an analysis view
+  presents **deterministic aggregations only**. Consistent with the standing invariants, it shows collection
+  integrity as **separate named components rather than a single opaque score**, places **supply and demand
+  side by side and never fuses them into one index**, and makes **no prediction and no causal claim**.
+
+## Reaffirmed invariants (console)
+
+- The console is a lens, not an actor: read-only in production; identity is owned by the entity/graph
+  architecture; demand and supply remain distinct evidence systems meeting only at `canonical_artist_id`.
+- Authentication and authorization are enforced on the server for every request; the UI never gates access
+  by hiding controls alone.
+- No score that collapses popularity, value, or booking-worthiness into one number; no causal inference from
+  co-movement; honest "insufficient history" / "not complete market coverage" labels are preserved.
+- Credentials (OAuth client secret, session-signing secret) are operator-set secrets — never in git, never
+  handled by tooling, never inlined in a deploy manifest.
