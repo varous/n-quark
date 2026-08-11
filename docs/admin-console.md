@@ -193,3 +193,16 @@ by **Google Workspace OIDC**. See `docs/deployment.md` for the deploy runbook.
 - **Downstreams**: only the six live Flycast services (crawl/graph/observation/signal/media/
   artist-intelligence) are wired; no localhost fallback (base map is docker service names in-container,
   overridden to `.flycast`). Un-deployed services (entity/analytics) degrade to `available:false`.
+
+**Operational closure (Admin D.2)**
+- **`/v1/platform/status` is authenticated.** The aggregate status enumerates internal service names +
+  health (production topology), so it now requires the same read-only **VIEWER** principal as the rest of
+  the console (`require_viewer`). Unauthenticated → **401** (production/OIDC); **404** when the admin API
+  is disabled entirely; local single-context mode short-circuits to the internal user. The public
+  **`/health`** endpoint (used by the Fly load-balancer check) stays open and returns only this app's own
+  liveness — no downstream topology. Covered by `tests/test_admin_oidc.py`
+  (unauth 401 / viewer 200 / admin-disabled 404 / local-mode open).
+- **Always-warm.** As the operational production observatory, `nquark-admin` runs one machine always on
+  (`min_machines_running=1`, `auto_stop_machines=false` in `deploy/fly/admin-console.toml`) so the console
+  answers with no cold start; extra machines still auto-start under load. No collection-service machine
+  config is affected.

@@ -58,6 +58,26 @@ To restrict/extend who may sign in: set `NQUARK_OIDC_ALLOWED_DOMAIN` (the Worksp
 comma-separated `NQUARK_OIDC_ALLOWED_EMAILS` for named external accounts. Rotate
 `NQUARK_ADMIN_SESSION_SECRET` to invalidate all existing sessions.
 
+**Always-warm (Admin D.2).** `admin-console.toml` runs the console with one machine always on
+(`min_machines_running=1`, `auto_stop_machines=false`) so it answers with no cold start — it is the
+operational production observatory. Extra machines still auto-start under load. This is the console app
+only; **do not change collection-service machine configs** for this.
+
+**Restart runbook.** To restart only the console (never the collection fleet):
+```bash
+fly apps restart nquark-admin
+```
+Then re-verify over HTTPS — the gate and auth survive restart (the session cookie is stateless):
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://nquark-admin.fly.dev/                     # 200 (SPA)
+curl -s -o /dev/null -w '%{http_code}\n' https://nquark-admin.fly.dev/health               # 200 (public probe)
+curl -s -o /dev/null -w '%{http_code}\n' https://nquark-admin.fly.dev/v1/platform/status   # 401 (authenticated)
+```
+
+**`/v1/platform/status` is authenticated (Admin D.2).** It lists internal service names + health, so it
+requires the console's read-only VIEWER principal — unauthenticated returns **401**, not a public topology
+dump. Only the plain `/health` liveness probe stays public (that is what the Fly health check hits).
+
 Cloud pipeline deployment is unchanged — the console is an additive, separate app.
 
 ## Running the local dashboard
