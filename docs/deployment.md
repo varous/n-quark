@@ -34,18 +34,19 @@ get a single read-only role; the session is an httpOnly signed cookie.
 1. **Create a Google OAuth 2.0 Web client** (Google Cloud console → APIs & Services → Credentials).
    Authorized redirect URI: `https://nquark-admin.fly.dev/admin/v1/auth/callback` (match `PUBLIC_BASE_URL`;
    add your custom domain's callback too if you use one).
-2. **Create the app + attach the shared Postgres** (audit tables; no new cluster):
+2. **Create the app + set the secrets** (never in git):
    ```bash
    fly apps create nquark-admin --org nquark
-   fly mpg attach <cluster-id> -a nquark-admin          # sets DATABASE_URL (pooled)
-   fly secrets set -a nquark-admin MIGRATION_DATABASE_URL='postgresql://…@direct.<id>.flympg.net/…'
-   ```
-3. **Set the secrets** (never in git):
-   ```bash
    fly secrets set -a nquark-admin \
      NQUARK_OIDC_CLIENT_ID=<google-client-id> \
      NQUARK_OIDC_CLIENT_SECRET=<google-client-secret> \
      NQUARK_ADMIN_SESSION_SECRET=<random 32+ bytes>
+   ```
+3. **(Optional, recommended) attach the shared Postgres** for the access/audit log (no new cluster; the
+   console boots read-only without it — migrations are best-effort):
+   ```bash
+   fly mpg attach <cluster-id> -a nquark-admin          # sets DATABASE_URL (pooled)
+   fly secrets set -a nquark-admin MIGRATION_DATABASE_URL='postgresql://…@direct.<id>.flympg.net/…'
    ```
 4. **Deploy, then allocate the public IP** (the only app with one):
    ```bash
