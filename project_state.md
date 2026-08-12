@@ -1,6 +1,39 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.2 increment 2). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-12 (Phase 5B.2 increment 3 — entity integrity). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 3 — entity-integrity core + data-quality audit (2026-08-12, DEPLOYED)
+
+Entity integrity was the explicit priority. Delivered the deterministic, evidence-bounded interpretation
+core + a read-only production audit; the operator-correction workflow, historical-repair execution, and
+the Part B UX closure (Overview/Events/Venue/Demand) remain follow-ups.
+
+- **Deterministic interpretation library** (crawl `entity_resolution/`): `placeholders.py` (conservative
+  absence classifier — "Venue to be announced"/TBA/TBD/…, never fires on legitimate names with common
+  words), `compound.py` (staged parser — protects known band names with &/+/comma, splits confidently-known
+  or comma-lineup lists, else **AMBIGUOUS_COMPOUND** = no blind split), `interpretation.py` (role-aware
+  orchestrator: placeholder → compound → cross-type/role-conflict → OK; source role kept as evidence;
+  never creates canonicals), `adjudicator.py` (**provider-neutral `EntityAdjudicator` seam +
+  `DisabledAdjudicator`** — AI is runtime-DISABLED, no credential configured; ambiguous → REVIEW_REQUIRED).
+- **Pipeline gating** (`evidence.extract_event_entities`): placeholder venues/organizers/artists are
+  **suppressed** (raw kept for audit), confident **compound artist strings split** into separate mentions,
+  singles unchanged, band names protected. New events now resolve correctly; existing canonicals untouched.
+- **Read-only audit + dry-run manifest** (`service.quality_audit` + `/quality-audit`): classifies every
+  canonical (PLACEHOLDER / COMPOUND / CROSS_TYPE) with proposed action + **auto_safe vs review**. Gateway
+  `/admin/v1/data-quality` + a **Data Quality** screen under Advanced.
+- **Production audit (real, read-only)**: **460 canonical entities, 447 clean (97%)**; flagged **1
+  placeholder** — the exact `"Venue to be announced"` the brief named, AUTO-SAFE — and **12
+  cross-type conflicts** (mostly legitimate dual-role entities: venues that also organize — DORANGOS,
+  Tripbae, The Social House; a comedian who performs + organizes — Abijit Ganguly), correctly **review-gated,
+  not auto-repaired**. No mutation performed.
+- Tests: crawl **221** (+19: placeholder suppression, compound split, band protection, cross-type conflict,
+  adjudicator-disabled, pipeline integration). gateway **125**, frontend tsc/build/lint clean.
+- **Remaining (next increment)**: operator correction workflow (§15), historical-repair execution (§16/17;
+  the placeholder is flagged auto-safe but not yet suppressed via a governed path), live cross-type gating
+  in the resolver + REVIEW_REQUIRED state persistence, and Part B UX (Overview/Events/Venue detail/Demand,
+  §19/23/24/26) + search integrity (§27).
+
+
 
 > **Phase 5B.2 is in progress (multi-increment).** Increment 1 delivered the deterministic content-movement
 > backend + Data Coverage/Market Movement read models + the canonical preflight. **Increment 2 (this update)**

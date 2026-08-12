@@ -1224,3 +1224,25 @@ so a research target can never present a canonical identity the owner does not o
   identity is never promoted into a canonical artist, and a missing canonical is never papered over with a
   fabricated or parallel canonical id. Where the architecture cannot yet bind a provider identity to a
   registry-owned canonical, the honest state is "pending", not a manufactured canonical.
+
+# Delivered — Evidence-bounded entity interpretation (Phase 5B.2.3)  `[CURRENT]`
+
+_Appended 2026-08-12. Additive record; append-only. It makes canonical interpretation role-aware and
+quality-aware so the market-observatory data is trustworthy._
+
+- **A source string is a mention, not automatically a canonical entity `[INVARIANT]`** — the original
+  source string and its source-field role are preserved as evidence; interpretation (placeholder /
+  compound / type) never rewrites that history. Absence markers ("Venue to be announced", TBA/TBD/…) are
+  classified as NOT-PROVIDED and never materialised as canonical entities; a delimiter-bearing string is
+  split into several mentions only on deterministic corroboration (known canonicals / lineup structure) and
+  otherwise held as an ambiguous compound for review — legitimate names containing "&", "+", or commas are
+  protected from naive splitting.
+- **Role and type conflicts are detected, not silently resolved `[INVARIANT]`** — the source field gives an
+  expected role (artist/venue/organizer) that is evidence, not truth; when a mention's identity already
+  exists as a different canonical type, that is a role/cross-type conflict routed to review rather than a
+  silent wrong-type creation.
+- **AI adjudication is bounded evidence, never canonical authority `[INVARIANT]`** — model assistance, when
+  enabled, is used only for narrow ambiguous cases on bounded evidence, returns a structured confidence-
+  scored opinion, and must still clear the existing crawl-owned governance thresholds; it can never directly
+  create canonical truth, and when no provider is configured the deterministic pipeline plus a review queue
+  handle resolution unchanged.
