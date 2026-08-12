@@ -9,7 +9,7 @@ import { ArtistDemand, DemandIntelligence } from "./demand";
 import { Overview } from "./overview";
 import { Analysis } from "./analysis";
 import { Watchlist } from "./watchlist";
-import { ArtistDetail, Artists, Market, VenueDetail, Venues } from "./product";
+import { ArtistDetail, Artists, DataQuality, Market, VenueDetail, Venues } from "./product";
 
 type NavItem = { to: string; label: string; icon: keyof typeof ICONS };
 type NavGroup = { group: string; items: NavItem[] };
@@ -32,6 +32,7 @@ const NAV: NavGroup[] = [
     { to: "/captures", label: "Captures", icon: "camera" },
   ] },
   { group: "Advanced", items: [
+    { to: "/data-quality", label: "Data Quality", icon: "gauge" },
     { to: "/analysis", label: "Analysis", icon: "spark" },
     { to: "/resolution", label: "Resolution", icon: "merge" },
     { to: "/graph", label: "Graph", icon: "share" },
@@ -82,6 +83,7 @@ function Router({ hash }: { hash: string }) {
     case "venues": return a ? <VenueDetail id={decodeURIComponent(parts.slice(1).join("/"))} /> : <Venues />;
     case "organizers": return <Entities />;
     case "market": return <Market />;
+    case "data-quality": return <DataQuality />;
     case "entities": return a && b ? <EntityDetail type={a} id={decodeURIComponent(parts.slice(2).join("/"))} /> : <Entities />;
     case "demand":
       return a === "artists" && b

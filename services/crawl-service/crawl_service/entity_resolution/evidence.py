@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from crawl_service.entity_resolution import interpretation as _I
 from crawl_service.entity_resolution import normalizers as N
+from crawl_service.entity_resolution import placeholders as _P
 
 ARTIST = "ARTIST"
 VENUE = "VENUE"
@@ -53,6 +55,9 @@ class EventEntities:
     venue: EntityEvidence | None = None
     organizer: EntityEvidence | None = None
     series: EntityEvidence | None = None
+    # Phase 5B.2.3 — interpretation side-effects (audit/metrics; raw evidence preserved, never a canonical).
+    suppressed: list[dict[str, Any]] = field(default_factory=list)   # placeholders that did NOT become entities
+    compound_splits: list[dict[str, Any]] = field(default_factory=list)  # compound strings split into mentions
 
     def all(self) -> list[EntityEvidence]:
         out = list(self.artists)
@@ -87,24 +92,40 @@ def extract_event_entities(
     ev = EventEntities(canonical_event_id=canonical_event_id, source=source,
                        source_record_id=source_record_id, city=city, region_id=region_id)
 
-    # ---- artists (FEATURES) ---------------------------------------------------------------------
-    for name in performer_names:
+    # ---- artists (FEATURES) — placeholder-suppressed + compound-split (5B.2.3) -------------------
+    def _emit_artist(name: str, *, split_from: str | None = None) -> None:
         an = N.normalize_artist(name)
         if not an.normalized:
-            continue
+            return
+        extra = {"split_from": split_from} if split_from else {}
         ev.artists.append(EntityEvidence(
             entity_type=ARTIST, source=source, source_record_id=source_record_id,
             canonical_event_id=canonical_event_id, source_entity_handle=_handle(source, ARTIST, name),
             raw_name=an.raw, normalized_name=an.normalized, observed_at=observed_at,
             confidence=0.8, provenance=prov,
             evidence={"is_tribute": an.is_tribute, "is_ambiguous": N.is_ambiguous_artist(an),
-                      "stripped_feat": an.stripped_feat, "city": city},
-        ))
+                      "stripped_feat": an.stripped_feat, "city": city, **extra}))
 
-    # ---- venue (OCCURS_AT) ----------------------------------------------------------------------
+    for name in performer_names:
+        interp = _I.interpret_mention(raw=name, expected_role=ARTIST)
+        if interp.outcome == _I.PLACEHOLDER:
+            ev.suppressed.append({"entity_type": ARTIST, "raw": name, "reason": interp.reason})
+            continue
+        if interp.outcome == _I.COMPOUND_SPLIT and interp.parts:
+            ev.compound_splits.append({"entity_type": ARTIST, "raw": name, "parts": interp.parts})
+            for part in interp.parts:
+                _emit_artist(part, split_from=name)
+            continue
+        # AMBIGUOUS/REVIEW compound and cross-type stay a single mention (never blindly split); OK passes.
+        _emit_artist(name)
+
+    # ---- venue (OCCURS_AT) — placeholder never becomes a Venue ----------------------------------
     if venue_name and venue_name.strip():
+        vph = _P.classify_placeholder(venue_name)
         vn = N.normalize_venue(venue_name)
-        if vn.normalized:
+        if vph.is_placeholder:
+            ev.suppressed.append({"entity_type": VENUE, "raw": venue_name, "reason": f"placeholder:{vph.reason}"})
+        elif vn.normalized:
             ev.venue = EntityEvidence(
                 entity_type=VENUE, source=source, source_record_id=source_record_id,
                 canonical_event_id=canonical_event_id,
@@ -116,7 +137,7 @@ def extract_event_entities(
 
     # ---- organizer (event property, from schema.org organizer / Boshow curator) -----------------
     organizer_name = props.get("organizer")
-    if organizer_name and str(organizer_name).strip():
+    if organizer_name and str(organizer_name).strip() and not _P.classify_placeholder(str(organizer_name)).is_placeholder:
         on = N.normalize_organizer(str(organizer_name))
         if on.normalized:
             ev.organizer = EntityEvidence(

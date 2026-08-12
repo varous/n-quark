@@ -130,6 +130,7 @@ export const api = {
   artistCoverage: (id: string) => req<ArtistCoverage>(`/demand/artists/${encodeURIComponent(id)}/coverage`),
   artistMovement: (id: string) => req<ArtistMovement>(`/demand/artists/${encodeURIComponent(id)}/movement`),
   marketMovement: () => req<MarketMovement>("/market/movement"),
+  dataQuality: () => req<DataQualityAudit>("/data-quality"),
   // ---- research watchlist (Phase 5B.1; controlled write: research configuration) ----
   watchlist: (f: Record<string, unknown>) => req<WatchlistList>(`/research/watchlist${qs(f)}`),
   watchlistDiagnostics: () => req<WatchlistDiagnostics>("/research/watchlist/diagnostics"),
@@ -277,6 +278,8 @@ export type ArtistCoverage = {
 export type MovementItem = { canonical_artist_id?: string; video_id?: string; title?: string | null; relationship_type?: string; classification?: string; comparison_cohort?: string | null; observation_count?: number; baseline_sample_size?: number; supporting_values?: Record<string, number | null>; thresholds?: Record<string, number>; calculated_at?: string };
 export type ArtistMovement = { available?: boolean; canonical_artist_id?: string; videos_considered?: number; counts?: Record<string, number>; moving_owned?: number; moving_ecosystem?: number; highest_velocity_per_hour?: number | null; independent_active_channels?: number; cross_channel_activity?: boolean; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; disclaimer?: string };
 export type MarketMovement = { available?: boolean; artists_considered?: number; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; cross_channel_activity?: Array<Record<string, unknown>>; disclaimer?: string };
+export type DataQualityItem = { canonical_entity_id: string; entity_type: string; name: string; problem_class: string; proposed_action: string; auto_safe: boolean; requires_review: boolean; sources: string[]; evidence: Record<string, unknown> };
+export type DataQualityAudit = { available?: boolean; canonical_entities_audited?: number; clean?: number; counts_by_problem?: Record<string, number>; counts_by_type?: Record<string, Record<string, number>>; manifest?: DataQualityItem[]; manifest_truncated?: boolean; note?: string };
 
 // ---- research watchlist types (loose; the BFF is the source of truth) ----
 export type WatchTarget = {

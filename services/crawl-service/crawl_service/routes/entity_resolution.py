@@ -48,6 +48,14 @@ def coverage(
     return svc.coverage(source=source)
 
 
+@router.get("/quality-audit", summary="Canonical data-quality audit + dry-run manifest (internal, 5B.2.3)")
+def quality_audit(
+    limit: int = Query(default=100, ge=1, le=500),
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    return svc.quality_audit(limit=limit)
+
+
 @router.get("/cross-inventory", summary="Entities shared across sources — convergence proof (internal)")
 def cross_inventory(
     entity_type: str = Query(default="ARTIST"),

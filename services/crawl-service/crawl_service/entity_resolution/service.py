@@ -511,6 +511,72 @@ class EntityResolutionService:
         return {"count": total, "limit": limit, "offset": offset,
                 "entities": rows[offset:offset + limit]}
 
+    def quality_audit(self, *, limit: int = 100) -> dict[str, Any]:
+        """Read-only data-quality audit of the canonical registry (Phase 5B.2.3).
+
+        Classifies each canonical ARTIST/VENUE/ORGANIZER with the deterministic interpretation library and
+        reports problem classes + a bounded dry-run manifest (proposed action, auto-safe vs review). Never
+        mutates. ``auto_safe`` is reserved for exact placeholder phrases with no contradicting evidence."""
+        from crawl_service.entity_resolution import compound as _C
+        from crawl_service.entity_resolution import normalizers as _N
+        from crawl_service.entity_resolution import placeholders as _P
+
+        with self._sf() as s:
+            cands = s.execute(select(EntityResolutionCandidate)).scalars().all()
+        agg: dict[str, dict[str, Any]] = {}
+        for c in cands:
+            cid = c.candidate_canonical_entity_id
+            if not cid:
+                continue
+            a = agg.setdefault(cid, {"id": cid, "type": c.entity_type, "name": c.raw_name,
+                                     "sources": set()})
+            a["sources"].add(c.source)
+        # cross-type index: slug -> set of canonical types it exists as
+        cross: dict[str, set[str]] = {}
+        for a in agg.values():
+            cross.setdefault(_N.slug(a["name"]), set()).add(a["type"])
+        known_artists = frozenset(_N.normalize_artist(a["name"]).normalized
+                                  for a in agg.values() if a["type"] == "ARTIST")
+
+        counts: dict[str, int] = {}
+        by_type: dict[str, dict[str, int]] = {"ARTIST": {}, "VENUE": {}, "ORGANIZER": {}}
+        manifest: list[dict[str, Any]] = []
+
+        def flag(a, problem, action, auto_safe, evidence):
+            counts[problem] = counts.get(problem, 0) + 1
+            by_type.setdefault(a["type"], {})[problem] = by_type.setdefault(a["type"], {}).get(problem, 0) + 1
+            if len(manifest) < limit:
+                manifest.append({"canonical_entity_id": a["id"], "entity_type": a["type"],
+                                 "name": a["name"], "problem_class": problem, "proposed_action": action,
+                                 "auto_safe": auto_safe, "requires_review": not auto_safe,
+                                 "sources": sorted(a["sources"]), "evidence": evidence})
+
+        clean = 0
+        for a in agg.values():
+            name, etype = a["name"], a["type"]
+            ph = _P.classify_placeholder(name)
+            slug = _N.slug(name)
+            other_types = sorted(t for t in cross.get(slug, set()) if t != etype)
+            if ph.is_placeholder:
+                auto_safe = ph.reason in ("exact_placeholder_phrase", "kind_prefixed_placeholder")
+                flag(a, "PLACEHOLDER_ENTITY", "suppress_from_product_and_relink_evidence", auto_safe,
+                     {"placeholder_reason": ph.reason})
+            elif other_types:
+                flag(a, "CROSS_TYPE_CONFLICT", "review_role_conflict", False,
+                     {"also_exists_as": other_types})
+            elif etype == "ARTIST" and _C.parse_compound(name, known_names=known_artists).kind == _C.COMPOUND:
+                parts = _C.parse_compound(name, known_names=known_artists).parts
+                flag(a, "COMPOUND_ENTITY", "split_into_mentions_via_governance", False,
+                     {"parts": parts})
+            else:
+                clean += 1
+
+        return {"canonical_entities_audited": len(agg), "clean": clean,
+                "counts_by_problem": counts, "counts_by_type": by_type,
+                "manifest": manifest, "manifest_truncated": len(manifest) >= limit,
+                "note": "read-only audit; no canonical data mutated. auto_safe items are exact placeholder "
+                        "phrases eligible for deterministic suppression; everything else is review-gated."}
+
     def entity_detail(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         with self._sf() as s:
             cands = s.execute(

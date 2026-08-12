@@ -336,6 +336,15 @@ class AdminService:
             return {"count": 0, "entities": [], "available": r.available}
         return {**(r.data or {}), "available": True}
 
+    async def data_quality(self, *, limit: int = 200) -> dict[str, Any]:
+        """Canonical data-quality audit (5B.2.3): placeholder/compound/cross-type problems + dry-run
+        manifest. Read-only; degrades gracefully."""
+        r = await self.gw.get(CRAWL, "/v1/internal/entity-resolution/quality-audit",
+                              params={"limit": limit})
+        if not r.ok:
+            return {"available": False}
+        return {"available": True, **(r.data or {})}
+
     async def entity_detail(self, entity_type: str, entity_id: str) -> dict[str, Any]:
         r = await self.gw.get(CRAWL, f"/v1/internal/entity-resolution/entities/{entity_type}/{entity_id}")
         handles = await self.gw.get(CRAWL, f"/v1/internal/entities/{entity_type}/{entity_id}/source-handles")

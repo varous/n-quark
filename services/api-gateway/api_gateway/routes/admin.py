@@ -288,6 +288,12 @@ async def subgraph(root: str = Query(...), depth: int = Query(default=1, ge=0),
     return await svc.subgraph(root, depth=depth, rel_types=rels)
 
 
+@router.get("/data-quality")
+async def data_quality(_: auth.Principal = Depends(auth.require_viewer),
+                       svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
+    return await svc.data_quality()
+
+
 @router.get("/system-health")
 async def system_health(_: auth.Principal = Depends(auth.require_viewer),
                         svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:

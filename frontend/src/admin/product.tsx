@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   api, type ArtistCoverage, type ArtistMovement, type CatalogArtist, type CovState,
-  type MovementItem,
+  type DataQualityItem, type MovementItem,
 } from "./api";
 import {
   Card, Empty, ErrorBox, Link, Loading, Section, Table, Unavailable,
@@ -387,6 +387,51 @@ function MarketGroup({ title, items }: { title: string; items?: MovementItem[] }
         ))}
       </div>
     </div>
+  );
+}
+
+// ================================================================================================
+// Data Quality / Identity Review (Advanced)
+// ================================================================================================
+const PROBLEM_LABEL: Record<string, string> = {
+  PLACEHOLDER_ENTITY: "Placeholder (not a real entity)",
+  COMPOUND_ENTITY: "Compound string (several artists)",
+  CROSS_TYPE_CONFLICT: "Possible wrong type",
+};
+
+export function DataQuality() {
+  const { data, loading, error } = useAsync(() => api.dataQuality(), []);
+  return (
+    <Section title="Data Quality" subtitle="Questionable canonical interpretations flagged for review. Read-only audit — nothing is changed automatically.">
+      {loading && <Loading label="Auditing the registry…" />}
+      {error && <ErrorBox message={error} />}
+      {data && data.available === false && <Unavailable what="the data-quality audit" />}
+      {data && data.available !== false && (
+        <>
+          <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Card><div className="text-2xl font-semibold text-slate-100">{data.canonical_entities_audited ?? 0}</div><div className="mt-1 text-xs text-slate-500">Entities audited</div></Card>
+            <Card><div className="text-2xl font-semibold text-emerald-300">{data.clean ?? 0}</div><div className="mt-1 text-xs text-slate-500">Look clean</div></Card>
+            <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.PLACEHOLDER_ENTITY ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Placeholder entities</div></Card>
+            <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.COMPOUND_ENTITY ?? 0) + (data.counts_by_problem?.CROSS_TYPE_CONFLICT ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Need review</div></Card>
+          </div>
+          {(data.manifest?.length ?? 0) === 0 ? <Empty message="No data-quality issues detected." /> : (
+            <Card>
+              <Table<DataQualityItem>
+                rows={data.manifest ?? []}
+                columns={[
+                  { key: "name", header: "Name", render: (r) => <span className="text-slate-100">{r.name}</span> },
+                  { key: "type", header: "Current type", render: (r) => <span className="text-slate-400">{r.entity_type}</span> },
+                  { key: "problem", header: "Issue", render: (r) => <Chip label={PROBLEM_LABEL[r.problem_class] ?? r.problem_class} tone="amber" /> },
+                  { key: "action", header: "Proposed", render: (r) => <span className="text-xs text-slate-400">{r.proposed_action.replace(/_/g, " ")}</span> },
+                  { key: "safe", header: "", render: (r) => r.auto_safe ? <Chip label="Auto-safe" tone="emerald" /> : <Chip label="Review" tone="slate" /> },
+                ]}
+              />
+            </Card>
+          )}
+          <p className="mt-3 text-xs text-slate-600">{data.note}</p>
+        </>
+      )}
+    </Section>
   );
 }
 
