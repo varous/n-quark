@@ -207,6 +207,35 @@ by **Google Workspace OIDC**. See `docs/deployment.md` for the deploy runbook.
   answers with no cold start; extra machines still auto-start under load. No collection-service machine
   config is affected.
 
+## Market Observatory — product-facing UX (Phase 5B.2 increment 2)
+
+The console reads as a market-intelligence terminal, not an entity/graph debugger. The backend ontology is
+unchanged; the frontend simply stops making the operator reason in it.
+
+- **Product-facing entity rule.** In normal screens, **Artist / Venue / Event / Organizer** mean the
+  authoritative **canonical registry** entity. Artists and Venues lists come only from the crawl
+  entity-resolution enumeration — **never raw graph artist-type nodes**. In production the registry has
+  **64 canonical artists** while the graph has **102 artist-type nodes**; the extra 38 are
+  `boshow:artist:*` **source-handle projections** (evidence, not additional artists) and appear only under
+  Evidence/Advanced. A product count never uses a raw graph node-type total.
+- **Navigation.** Explore (Events · **Artists** · **Venues** · Organizers) · Monitor (Watchlist · Market
+  Movement · Demand) · Coverage (Collection · Captures) · Advanced (Analysis · Resolution · Graph ·
+  Diagnostics · All entities · System). Artists and Venues are dedicated first-class screens; Graph /
+  Resolution / raw entities are clearly Advanced.
+- **Artist detail → "What n-quark knows" (Data Coverage).** Identity / Live activity / YouTube / Demand /
+  Evidence in plain language, distinguishing four missing-data meanings the operator must not confuse:
+  **ZERO_OBSERVED** ("No events observed yet"), **NOT_COLLECTED** ("YouTube monitoring has not started"),
+  **UNAVAILABLE** ("Google Trends data is currently unavailable"), **INSUFFICIENT_HISTORY** ("Not enough
+  history yet") — never a bare `0` / `N/A` / `—`.
+- **Market Movement.** Observed abnormal YouTube movement across monitored artists, each card carrying its
+  evidence (what/which artist/owned-or-ecosystem/vs what baseline/how much history). No rank, no virality
+  score. When production has no verified channels (currently true), it shows an honest empty state pointing
+  to the Watchlist rather than looking like a failure.
+- **Terminology.** "Source listings" (not REPRESENTED_BY), "Artists" (not FEATURES / canonical ARTIST),
+  "Related events/venues" (not graph neighbours). Raw ontology + provider ids remain under Evidence/Advanced.
+- **Degraded downstreams** never break a product page: if artist-intelligence is down, Artists/Artist
+  detail still render identity + live activity, with monitoring marked temporarily unavailable.
+
 ## Research configuration — Artist watchlists (Phase 5B.1)
 
 The console is operationally read-only with **one deliberate exception**: RESEARCH CONFIGURATION. An

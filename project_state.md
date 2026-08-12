@@ -1,13 +1,13 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.2 increment 1). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-12 (Phase 5B.2 increment 2). Branch `main`. Repo: github.com/varous/n-quark._
 
-> **Phase 5B.2 is in progress (multi-increment).** Increment 1 (this update) delivered the deterministic
-> content-movement backend + Data Coverage/Market Movement read models + the canonical preflight, deployed
-> and prod-validated. **Not yet done** (subsequent increments): ecosystem content discovery + relevance
-> (spec §11–14), movement-aware scheduler cadence (§6), and the large **frontend redesign** (§19–32:
-> Artist Data Coverage UI, first-class Artists/Venues screens, Market Movement page, ontology
-> simplification, organizer de-clutter) + the production **UI** proof (§35). See the 5B.2 section below.
+> **Phase 5B.2 is in progress (multi-increment).** Increment 1 delivered the deterministic content-movement
+> backend + Data Coverage/Market Movement read models + the canonical preflight. **Increment 2 (this update)**
+> delivered the **Market Observatory frontend** — first-class Artists/Venues from the canonical registry,
+> prominent Artist Data Coverage, honest Market Movement, a product-facing nav, organizer de-clutter — plus
+> the bounded catalog BFF. Both deployed. **Still not done**: ecosystem content discovery + relevance
+> (§11–14) and movement-aware scheduler cadence (§6). See the 5B.2 section below.
 
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
@@ -281,6 +281,36 @@ Production defect: a search-result candidate could transition a YouTube CHANNEL_
   `CHANNEL_NOT_FOUND` → not resolved; a real valid channel verifies `FOUND` → RESOLVED with
   `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
   suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
+
+## Phase 5B.2 increment 2 — Market Observatory UX (2026-08-12, DEPLOYED to Fly)
+
+Made n-quark understandable to a non-developer operator. Backend ontology unchanged; the frontend stops
+exposing it as the primary mental model.
+
+- **Product-facing entity contract**: normal Artists/Venues screens are sourced ONLY from the authoritative
+  canonical registry (crawl entity-resolution), **never raw graph artist-type nodes** — so the 38
+  `boshow:artist:*` source projections (see the §0 preflight) can never inflate the product Artist count
+  (which stays 64, not 102). Source projections live under Evidence/Advanced.
+- **Catalog BFF** (gateway `admin/catalog.py`): `/admin/v1/catalog/{artists,venues}` — canonical rows from
+  crawl, enriched with monitoring state (watch status, YouTube identity state, owned videos, demand,
+  moving count) from artist-intelligence in **one batch call** (`/v1/internal/artists/summaries`) — no
+  per-row N+1. Degrades: identity + live activity still render if artist-intelligence is down.
+- **Frontend `product.tsx`**: first-class **Artists** (list + filters: watching / YouTube verified / needs
+  identity / has events / has demand / moving) → **Artist detail** with a prominent **"What n-quark knows"
+  Data Coverage** (Identity / Live activity / YouTube / Demand / Evidence) that distinguishes
+  **ZERO_OBSERVED / NOT_COLLECTED / UNAVAILABLE / INSUFFICIENT_HISTORY** in plain language (never a bare 0);
+  content-movement cards with evidence; first-class **Venues** (list + detail); **Market Movement** with an
+  honest zero-data empty state linking to the Watchlist. No fused score, no ontology as primary UI.
+- **Navigation redesign**: Explore (Events · Artists · Venues · Organizers) · Monitor (Watchlist · Market
+  Movement · Demand) · Coverage (Collection · Captures) · Advanced (Analysis · Resolution · Graph ·
+  Diagnostics · All entities · System). Artists/Venues are dedicated sidebar items; the generic Entities
+  screen is demoted to Advanced. Watchlist links resolved targets straight to Artist detail.
+- **Deployed + validated**: artist-intel (summaries) + nquark-admin (BFF + new bundle). Gate holds
+  (`/catalog/*`, `/market/movement` → 401 unauth; SPA 200); summaries endpoint live (62 monitored artists);
+  Artists list sources the 64-row canonical registry (not 102 graph nodes) — by construction + tests + the
+  §0 preflight. Market Movement shows the honest zero-content state (prod has 0 verified channels).
+- Tests: gateway **125** (+6 catalog: canonical-only / no graph inflation / monitoring merge / filter /
+  degraded / read-only), artist-intel **121** (+2 summaries + coverage). Frontend tsc + build + lint clean.
 
 ## Phase 5B.2 — YouTube content sensing + market UX (2026-08-12, INCREMENT 1 DEPLOYED; phase in progress)
 
@@ -673,7 +703,9 @@ unknown-key/kid/alg=none/iss/aud/expiry/email/domain/hd-spoof/nonce), hard read-
 session-cookie flags, expired-state; +4 Admin D.2: `/v1/platform/status` authenticated —
 unauth 401 / viewer 200 / admin-disabled 404 / local-mode open; +9 5B.1: research-watchlist BFF —
 auth required / created_by forwarded / research-config flag gates writes / canonical mutations still
-blocked; +1 5B.1.1: canonical-integrity read; +3 5B.2: artist coverage/movement + market movement BFF) · signal **107** (+4 in 5B.1: resolve @handle / video id → channel id, FOUND/NOT_FOUND; +2 in 5A.3.3:
+blocked; +1 5B.1.1: canonical-integrity read; +3 5B.2i1: artist coverage/movement + market movement BFF;
++6 5B.2i2: catalog Artists/Venues — canonical-only / no graph inflation / monitoring merge / filter /
+degraded / read-only) · signal **107** (+4 in 5B.1: resolve @handle / video id → channel id, FOUND/NOT_FOUND; +2 in 5A.3.3:
 `/health/ready` observation-dependency guard ok/503) · graph **60** · analytics **45** · media **43** ·
 observation **11** · entity **12** ·
 **artist-intelligence 107** (5A.3: candidate universe/quota/hourly/cadence; 5A.3.1: promotion/ecosystem/
@@ -686,7 +718,7 @@ selection stays pending / stale candidate canonical not trusted / WATCHING requi
 canonical-integrity exposes orphans / provider-only never fabricates canonical; +12 in 5B.2: content-movement
 engine — velocity/acceleration, INSUFFICIENT_HISTORY, RISING/BREAKOUT_CANDIDATE/COOLING with evidence, age-
 normalised baseline, no fused score, owned/ecosystem distinct, NOT_FOUND preserves history; +1 Data Coverage
-distinguishes collected/unavailable/insufficient/zero) — all pass. artist-intelligence Alembic **001↔002↔003
+distinguishes collected/unavailable/insufficient/zero; +2 5B.2i2: monitoring summaries batch + coverage) — all pass. artist-intelligence Alembic **001↔002↔003
 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` clean; `npm run lint` exit 0
 (Admin D redesign: only the pre-existing `only-export-components` warnings on the shared primitives module). No JS test runner in the repo (Admin A–D convention): the UI is
 type-checked + browser-validated, with automated coverage on the BFF/read models it consumes. Lint clean
