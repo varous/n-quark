@@ -14,6 +14,7 @@ from signal_service.config import settings
 from signal_service.graph_projection import project_entity_graph
 from signal_service.identity import mbid_alias
 from signal_service.schemas import (
+    YouTubeChannelReference,
     YouTubeChannelSignals,
     YouTubeChannelVerification,
     YouTubeSearchResult,
@@ -60,6 +61,30 @@ async def verify_youtube_channel(channel_id: str) -> YouTubeChannelVerification:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
                             detail=f"YouTube channel verification failed: {exc}") from exc
+
+
+@router.get("/resolve/handle/{handle}", response_model=YouTubeChannelReference)
+async def resolve_youtube_handle(handle: str) -> YouTubeChannelReference:
+    """Map a @handle to its owning channel id (channels.list forHandle; Phase 5B.1). Acquisition-only —
+    the caller must still run the authoritative /verify check on the returned id. 200 FOUND/NOT_FOUND;
+    a provider/network failure returns 502."""
+    try:
+        return await YouTubeClient().resolve_channel_by_handle(handle)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube handle resolution failed: {exc}") from exc
+
+
+@router.get("/resolve/video/{video_id}", response_model=YouTubeChannelReference)
+async def resolve_youtube_video(video_id: str) -> YouTubeChannelReference:
+    """Map a video id to the channel that published it (videos.list snippet.channelId; Phase 5B.1).
+    Acquisition-only — the caller must still verify the returned channel id. 200 FOUND/NOT_FOUND;
+    a provider/network failure returns 502."""
+    try:
+        return await YouTubeClient().resolve_channel_by_video(video_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"YouTube video resolution failed: {exc}") from exc
 
 
 @router.get("/channels/{channel_id}/videos/preview", response_model=YouTubeVideoSignals)

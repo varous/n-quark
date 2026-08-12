@@ -124,6 +124,20 @@ export const api = {
   demandArtistObservations: (id: string, f: Record<string, unknown>) =>
     req<DemandObservations>(`/demand/artists/${encodeURIComponent(id)}/observations${qs(f)}`),
   demandEvent: (id: string) => req<EventDemand>(`/demand/events/${encodeURIComponent(id)}`),
+  // ---- research watchlist (Phase 5B.1; controlled write: research configuration) ----
+  watchlist: (f: Record<string, unknown>) => req<WatchlistList>(`/research/watchlist${qs(f)}`),
+  watchlistDiagnostics: () => req<WatchlistDiagnostics>("/research/watchlist/diagnostics"),
+  watchlistTarget: (id: string) => req<WatchTarget>(`/research/watchlist/${encodeURIComponent(id)}`),
+  watchlistAdd: (body: { display_name: string; canonical_artist_id?: string; youtube_hint?: string; reason?: string; priority?: number }) =>
+    req<{ created: boolean; target: WatchTarget }>("/research/watchlist", { method: "POST", body: JSON.stringify(body) }),
+  watchlistBulkPreview: (text: string) =>
+    req<BulkPreview>("/research/watchlist/bulk/preview", { method: "POST", body: JSON.stringify({ text }) }),
+  watchlistBulkAdd: (text: string, reason?: string) =>
+    req<{ received: number; created: number; existing: number; targets: WatchTarget[] }>("/research/watchlist/bulk", { method: "POST", body: JSON.stringify({ text, reason }) }),
+  watchlistPause: (id: string) => req<WatchTarget>(`/research/watchlist/${encodeURIComponent(id)}/pause`, { method: "POST" }),
+  watchlistResume: (id: string) => req<WatchTarget>(`/research/watchlist/${encodeURIComponent(id)}/resume`, { method: "POST" }),
+  watchlistPriority: (id: string, priority: number) => req<WatchTarget>(`/research/watchlist/${encodeURIComponent(id)}/priority`, { method: "POST", body: JSON.stringify({ priority }) }),
+  watchlistReject: (id: string, reason?: string) => req<WatchTarget>(`/research/watchlist/${encodeURIComponent(id)}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
 };
 
 // ---- types (loose; the BFF is the source of truth) ----
@@ -234,6 +248,26 @@ export type DemandObservations = {
   available: boolean; total?: number; limit?: number; offset?: number;
   items?: Array<Record<string, unknown>>;
 };
+// ---- research watchlist types (loose; the BFF is the source of truth) ----
+export type WatchTarget = {
+  id: string; display_name: string; status: string; human_state: string;
+  canonical_artist_id: string | null; youtube_identity_state: string | null;
+  youtube_channel_id: string | null; youtube_hint: string | null;
+  videos_tracked: number; last_observed_at: string | null;
+  source: string; reason: string | null; priority: number; resolution_method: string | null;
+  created_by: string; last_resolved_at: string | null; created_at: string; updated_at: string;
+  detail: Record<string, unknown>;
+};
+export type WatchlistList = { available: boolean; total: number; limit?: number; offset?: number; targets: WatchTarget[] };
+export type WatchlistDiagnostics = {
+  available: boolean; total?: number; watching?: number; resolution_pending?: number;
+  ambiguous?: number; paused?: number; rejected?: number; new?: number;
+  targets_with_canonical_artist?: number; targets_with_verified_youtube_identity?: number;
+  targets_receiving_demand_observations?: number;
+};
+export type BulkPreviewItem = { display_name: string; disposition: "NEW" | "DUPLICATE" | "MATCHES_CANONICAL"; canonical_artist_id: string | null };
+export type BulkPreview = { count: number; new: number; duplicates: number; matches_canonical: number; items: BulkPreviewItem[] };
+
 export type EventDemand = {
   canonical_event_id: string; available: boolean; resolved_artist_count: number; capped: boolean;
   artists: Array<{

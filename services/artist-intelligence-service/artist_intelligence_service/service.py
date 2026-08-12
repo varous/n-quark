@@ -220,6 +220,72 @@ class DemandService:
                 "provider_id": identity.provider_id, "verified": False,
                 "rejected_candidates": rejected, "candidates": cand_meta["candidates"]}
 
+    async def resolve_youtube_from_hint(self, db: Session, canonical_artist_id: str, *,
+                                        ref: Any, display_name: str | None = None) -> dict[str, Any]:
+        """Resolve a YouTube identity from an operator-supplied hint (Phase 5B.1).
+
+        A pasted channel id / @handle / video id drastically reduces ambiguity — but the hint is NEVER
+        trusted on its own: whatever channel it points to is confirmed by the AUTHORITATIVE channels.list
+        existence check before an identity becomes RESOLVED (parsing a URL is not verification). Handles
+        and video ids are first mapped to a channel id via signal-service (forHandle / videos.list), then
+        that channel id is verified. Never creates a canonical artist; ``last_verified_at`` is set only on
+        a successful verification. Returns {status, reason, provider_id?, verified, lookup}."""
+        from artist_intelligence_service.yturl import CHANNEL_ID, HANDLE, VIDEO_ID
+        now = _now()
+        meter = QuotaMeter()
+        self.youtube.meter = meter
+        channel_id: str | None = None
+        lookup: dict[str, Any] = {"kind": ref.kind, "reference": ref.value, "raw": ref.raw}
+        try:
+            if ref.kind == CHANNEL_ID:
+                channel_id = ref.value
+            elif ref.kind == HANDLE:
+                res = await self.youtube.signal.youtube_resolve_handle(ref.value)
+                lookup["handle_lookup"] = res.get("status")
+                channel_id = res.get("channel_id") if res.get("status") == "FOUND" else None
+            elif ref.kind == VIDEO_ID:
+                res = await self.youtube.signal.youtube_resolve_video(ref.value)
+                lookup["video_lookup"] = res.get("status")
+                channel_id = res.get("channel_id") if res.get("status") == "FOUND" else None
+
+            if not channel_id:
+                return {"canonical_artist_id": canonical_artist_id, "status": UNRESOLVED,
+                        "reason": "hint_not_found_at_provider", "verified": False, "lookup": lookup}
+            try:
+                verification = await self.youtube.verify_channel(channel_id)
+            except Exception:  # noqa: BLE001 — transient provider failure: cannot verify, do not resolve
+                return {"canonical_artist_id": canonical_artist_id, "status": AMBIGUOUS,
+                        "reason": "verification_unavailable", "verified": False, "lookup": lookup}
+        finally:
+            record_meter(db, PROVIDER_YOUTUBE, meter)
+
+        if verification.get("status") != "FOUND":
+            return {"canonical_artist_id": canonical_artist_id, "status": UNRESOLVED,
+                    "reason": "channel_not_found", "provider_id": channel_id, "verified": False,
+                    "lookup": lookup}
+
+        provenance = {"resolution_method": "operator-hint+channels.list-verified",
+                      "hint_kind": ref.kind, "hint": ref.raw, "verified_at": now.isoformat(),
+                      "verified_provider_id": channel_id, "verified_title": verification.get("title"),
+                      "verification_method": "channels.list"}
+        identity = self._upsert_identity(
+            db, canonical_artist_id=canonical_artist_id, provider=PROVIDER_YOUTUBE,
+            identity_type="CHANNEL_ID", provider_id=channel_id, status=RESOLVED,
+            display_name=verification.get("title") or display_name,
+            canonical_url=f"https://www.youtube.com/channel/{channel_id}",
+            resolution_method="operator-hint+channels.list-verified", confidence=1.0,
+            metadata={"reason": "operator_hint_verified", "lookup": lookup},
+            provenance=provenance, last_verified_at=now)
+        pending = self.get_identity(db, PROVIDER_YOUTUBE, "CHANNEL_ID",
+                                    idlib.pending_identity_id(canonical_artist_id))
+        if pending is not None and pending.id != identity.id:
+            pending.status = "REJECTED"
+            pending.updated_at = now
+            db.flush()
+        return {"canonical_artist_id": canonical_artist_id, "status": RESOLVED,
+                "reason": "operator_hint_verified", "provider_id": channel_id,
+                "identity_id": identity.id, "verified": True, "lookup": lookup}
+
     # ---- observation ingest ------------------------------------------------------------------
     def _ingest(self, db: Session, *, canonical_artist_id: str, provider: str,
                 external_identity_id: str | None, data: list[DemandDatum], observed_at: datetime,

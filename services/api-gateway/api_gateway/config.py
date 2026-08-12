@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     admin_frontend_enabled: bool = False       # informational (frontend build gate)
     admin_dev_auth_enabled: bool = False       # isolated dev login; NEVER a prod identity provider
     admin_operational_actions_enabled: bool = False  # OPERATOR mutations (capture/enrich/resolve one event)
+    # Phase 5B.1: the one narrow authenticated WRITE — RESEARCH CONFIGURATION (create/prioritise/pause/
+    # resume artist watch targets). Structurally separate from canonical/admin mutations, which stay
+    # gated by admin_operational_actions_enabled. Enabled on the production console; canonical/observation/
+    # graph state remains protected. Any authenticated Workspace principal (VIEWER) may configure research.
+    admin_research_config_enabled: bool = False
     # --- Admin Phase C: local-only inspection console ---
     # When on, the console runs unauthenticated under a single fixed INTERNAL_USER context (no login,
     # no roles). This is a LOCAL-DEVELOPMENT convenience only and must never be enabled on a public

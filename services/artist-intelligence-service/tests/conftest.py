@@ -75,6 +75,27 @@ class FakeSignal:
                     "video_count": stats.get("video_count"), "mock": self.mock}
         return {"status": "CHANNEL_NOT_FOUND", "channel_id": channel_id, "mock": self.mock}
 
+    async def youtube_resolve_handle(self, handle):
+        self.calls.setdefault("resolve_handle", 0)
+        self.calls["resolve_handle"] += 1
+        h = handle.lstrip("@").lower()
+        for rows in self._search.values():
+            for c in rows:
+                if str(c.get("handle") or "").lstrip("@").lower() == h:
+                    return {"status": "FOUND", "kind": "HANDLE", "reference": h,
+                            "channel_id": c["channel_id"], "mock": self.mock}
+        return {"status": "NOT_FOUND", "kind": "HANDLE", "reference": h, "mock": self.mock}
+
+    async def youtube_resolve_video(self, video_id):
+        self.calls.setdefault("resolve_video", 0)
+        self.calls["resolve_video"] += 1
+        for cid, rows in self._videos.items():
+            for v in rows:
+                if v.get("video_id") == video_id:
+                    return {"status": "FOUND", "kind": "VIDEO", "reference": video_id,
+                            "channel_id": cid, "mock": self.mock}
+        return {"status": "NOT_FOUND", "kind": "VIDEO", "reference": video_id, "mock": self.mock}
+
     async def youtube_channel(self, channel_id):
         self.calls["channel"] += 1
         if self.fail_channel:

@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     candidate_promotion_enabled: bool = False
     candidate_promotion_batch_size: int = 25         # bounded candidates evaluated per pass
     candidate_promotion_min_sources: int = 2         # ≥N independent discovery sources → MULTI_SOURCE_CONFIRMED
+    # --- Phase 5B.1: operator artist intake & research watchlists. ---
+    watchlist_bulk_max: int = 100                    # max names accepted in one bulk intake (bounded)
+    watchlist_reresolve_batch_size: int = 25         # bounded pending targets re-resolved per pass
     # --- Phase 5A.3.1: bounded YouTube ecosystem discovery (seed channels → uploads → candidates). ---
     youtube_ecosystem_enabled: bool = False
     youtube_ecosystem_seed_channels: str = ""        # comma/newline channel ids (festival/promoter/venue/media/label)

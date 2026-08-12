@@ -62,6 +62,36 @@ def test_verify_route_not_found_is_200_not_error(client: TestClient,
     assert r.status_code == 200 and r.json()["status"] == "CHANNEL_NOT_FOUND"
 
 
+# ---- Phase 5B.1: resolve a @handle / video id to its owning channel id ------------------------
+async def test_resolve_handle_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    from signal_service.adapters.youtube import YouTubeClient
+    r = await YouTubeClient().resolve_channel_by_handle("@diljitdosanjh")
+    assert r.status == "FOUND" and r.channel_id == "UCT9zcQNlyht7fRlcjmflRSA"
+
+
+async def test_resolve_handle_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    from signal_service.adapters.youtube import YouTubeClient
+    r = await YouTubeClient().resolve_channel_by_handle("@nobody_at_all")
+    assert r.status == "NOT_FOUND" and r.channel_id is None
+
+
+async def test_resolve_video_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    from signal_service.adapters.youtube import YouTubeClient
+    r = await YouTubeClient().resolve_channel_by_video("arjt_v1")
+    assert r.status == "FOUND" and r.channel_id == "UCmock_arijit_singh_0000"
+
+
+def test_resolve_routes(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_mock_mode", True)
+    r = client.get("/v1/signals/youtube/resolve/handle/diljitdosanjh")
+    assert r.status_code == 200 and r.json()["channel_id"] == "UCT9zcQNlyht7fRlcjmflRSA"
+    r = client.get("/v1/signals/youtube/resolve/video/dlj_v1")
+    assert r.status_code == 200 and r.json()["channel_id"] == "UCT9zcQNlyht7fRlcjmflRSA"
+
+
 async def test_classify_tseries_resolves_label_via_tiebreak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

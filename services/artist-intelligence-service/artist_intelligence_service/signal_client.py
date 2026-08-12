@@ -61,6 +61,16 @@ class SignalClient:
         failure (HTTP 502) — a transient outage must never look like CHANNEL_NOT_FOUND."""
         return await self._get(f"/v1/signals/youtube/channels/{channel_id}/verify")
 
+    async def youtube_resolve_handle(self, handle: str) -> dict[str, Any]:
+        """Map a @handle to its owning channel id (Phase 5B.1; channels.list forHandle). Acquisition-only
+        — the caller must still verify the returned id. Returns {status: FOUND|NOT_FOUND, channel_id?}."""
+        return await self._get(f"/v1/signals/youtube/resolve/handle/{handle.lstrip('@')}")
+
+    async def youtube_resolve_video(self, video_id: str) -> dict[str, Any]:
+        """Map a video id to its owning channel id (Phase 5B.1; videos.list snippet.channelId).
+        Acquisition-only. Returns {status: FOUND|NOT_FOUND, channel_id?}."""
+        return await self._get(f"/v1/signals/youtube/resolve/video/{video_id}")
+
     async def youtube_videos(self, channel_id: str, *, limit: int) -> dict[str, Any]:
         """Recent uploaded-video stats by known channel id. Returns YouTubeVideoSignals."""
         return await self._get(f"/v1/signals/youtube/channels/{channel_id}/videos/preview",

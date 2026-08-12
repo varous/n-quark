@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from artist_intelligence_service.collector import DemandCollector
 from artist_intelligence_service.config import settings
 from artist_intelligence_service.routes.demand import router as demand_router
+from artist_intelligence_service.routes.watchlist import router as watchlist_router
 
 
 @asynccontextmanager
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="artist-intelligence-service", version="0.1.0", lifespan=lifespan)
 app.include_router(demand_router)
+app.include_router(watchlist_router)
 
 
 @app.get("/health")

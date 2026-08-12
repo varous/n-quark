@@ -8,6 +8,7 @@ import { EntityDetail, Entities, EventDetail, Graph } from "./detail";
 import { ArtistDemand, DemandIntelligence } from "./demand";
 import { Overview } from "./overview";
 import { Analysis } from "./analysis";
+import { Watchlist } from "./watchlist";
 
 type NavItem = { to: string; label: string; icon: keyof typeof ICONS };
 type NavGroup = { group: string; items: NavItem[] };
@@ -20,6 +21,7 @@ const NAV: NavGroup[] = [
     { to: "/demand", label: "Demand", icon: "pulse" },
     { to: "/graph", label: "Graph", icon: "share" },
   ] },
+  { group: "Research", items: [{ to: "/watchlist", label: "Watchlist", icon: "eye" }] },
   { group: "Analyze", items: [{ to: "/analysis", label: "Analysis", icon: "spark" }] },
   { group: "Collection", items: [
     { to: "/sources", label: "Sources", icon: "feed" },
@@ -42,6 +44,7 @@ const ICONS = {
   gauge: "M12 14a2 2 0 1 0 0-.01M12 14l4-4M4.9 19a9 9 0 1 1 14.2 0",
   merge: "M7 4v6a4 4 0 0 0 4 4h6M17 10l3 4-3 4M7 4L4 8M7 4l3 4",
   heart: "M12 20s-7-4.3-9.3-8.3C1 8.5 2.5 5 6 5c2 0 3.2 1.2 4 2.3C10.8 6.2 12 5 14 5c3.5 0 5 3.5 3.3 6.7C19 15.7 12 20 12 20z",
+  eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
 } as const;
 
 function Icon({ name }: { name: keyof typeof ICONS }) {
@@ -69,6 +72,7 @@ function Router({ hash }: { hash: string }) {
         ? <ArtistDemand id={decodeURIComponent(parts.slice(2).join("/"))} />
         : <DemandIntelligence />;
     case "analysis": return <Analysis />;
+    case "watchlist": return <Watchlist />;
     case "resolution": return <Resolution />;
     case "graph": return <Graph initialRoot={params.get("root") ?? undefined} />;
     case "captures": return <Captures />;

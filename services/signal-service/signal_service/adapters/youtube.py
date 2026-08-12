@@ -206,6 +206,7 @@ import re as _re
 from datetime import datetime as _dt
 
 from signal_service.schemas import (
+    YouTubeChannelReference,
     YouTubeChannelVerification,
     YouTubeSearchCandidate,
     YouTubeSearchResult,
@@ -332,6 +333,63 @@ class YouTubeClient:
             subscriber_count=_as_int(stats.get("subscriberCount")),
             total_view_count=_as_int(stats.get("viewCount")),
             video_count=_as_int(stats.get("videoCount")), fetched_at=when, mock=False)
+
+    async def resolve_channel_by_handle(self, handle: str) -> YouTubeChannelReference:
+        """Map a @handle to its owning channel id (channels.list ``forHandle``; 1 quota unit when live).
+
+        Acquisition-only — returns the channel id so the caller can run the authoritative existence
+        check. A network/provider failure raises (never NOT_FOUND). ``handle`` has no leading ``@``."""
+        when = datetime.now(UTC)
+        h = handle.lstrip("@").lower()
+        if settings.use_youtube_mock:
+            for rows in _MOCK_SEARCH.values():
+                for c in rows:
+                    if str(c.get("handle") or "").lstrip("@").lower() == h:
+                        return YouTubeChannelReference(status="FOUND", kind="HANDLE", reference=h,
+                                                       channel_id=c["channel_id"], title=c.get("title"),
+                                                       fetched_at=when, mock=True)
+            return YouTubeChannelReference(status="NOT_FOUND", kind="HANDLE", reference=h,
+                                           fetched_at=when, mock=True)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{settings.youtube_api_base}/channels",
+                params={"part": "snippet", "forHandle": "@" + h, "key": settings.youtube_api_key})
+            response.raise_for_status()
+            items = response.json().get("items") or []
+        if not items:
+            return YouTubeChannelReference(status="NOT_FOUND", kind="HANDLE", reference=h,
+                                           fetched_at=when, mock=False)
+        cid = items[0].get("id")
+        snippet = items[0].get("snippet") or {}
+        return YouTubeChannelReference(status="FOUND", kind="HANDLE", reference=h, channel_id=cid,
+                                       title=snippet.get("title"), fetched_at=when, mock=False)
+
+    async def resolve_channel_by_video(self, video_id: str) -> YouTubeChannelReference:
+        """Map a video id to the channel that published it (videos.list ``snippet.channelId``; 1 quota
+        unit when live). Acquisition-only — the returned channel id must still be verified by the caller."""
+        when = datetime.now(UTC)
+        if settings.use_youtube_mock:
+            for cid, rows in _MOCK_VIDEOS.items():
+                for v in rows:
+                    if v.get("video_id") == video_id:
+                        return YouTubeChannelReference(status="FOUND", kind="VIDEO", reference=video_id,
+                                                       channel_id=cid, title=v.get("title"),
+                                                       fetched_at=when, mock=True)
+            return YouTubeChannelReference(status="NOT_FOUND", kind="VIDEO", reference=video_id,
+                                           fetched_at=when, mock=True)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{settings.youtube_api_base}/videos",
+                params={"part": "snippet", "id": video_id, "key": settings.youtube_api_key})
+            response.raise_for_status()
+            items = response.json().get("items") or []
+        if not items:
+            return YouTubeChannelReference(status="NOT_FOUND", kind="VIDEO", reference=video_id,
+                                           fetched_at=when, mock=False)
+        snippet = items[0].get("snippet") or {}
+        return YouTubeChannelReference(status="FOUND", kind="VIDEO", reference=video_id,
+                                       channel_id=snippet.get("channelId"),
+                                       title=snippet.get("channelTitle"), fetched_at=when, mock=False)
 
     async def search_channels(self, query: str, *, limit: int = 5) -> YouTubeSearchResult:
         """Bounded channel search for identity discovery (search.list; 100 quota units when live).

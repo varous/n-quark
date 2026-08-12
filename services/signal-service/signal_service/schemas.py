@@ -86,6 +86,23 @@ class YouTubeChannelVerification(BaseModel):
     mock: bool = False
 
 
+class YouTubeChannelReference(BaseModel):
+    """Resolve an operator-supplied reference (a @handle or a video id) to a channel id (Phase 5B.1).
+
+    Acquisition-only lookup — it maps a reference to the OWNING channel id (channels.list ``forHandle`` /
+    videos.list ``snippet.channelId``). It is NOT verification: the caller must still run the authoritative
+    channels.list existence check on the returned id. ``status`` is FOUND or NOT_FOUND (an empty provider
+    result is NOT_FOUND, never a failure; a provider/network error is surfaced as an HTTP error)."""
+
+    status: str                                  # FOUND | NOT_FOUND
+    kind: str                                    # HANDLE | VIDEO
+    reference: str                               # the handle (no @) or video id that was looked up
+    channel_id: str | None = None
+    title: str | None = None
+    fetched_at: datetime
+    mock: bool = False
+
+
 class YouTubeVideoStat(BaseModel):
     video_id: str
     title: str | None = None

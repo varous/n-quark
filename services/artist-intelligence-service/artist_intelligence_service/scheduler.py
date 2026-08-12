@@ -74,8 +74,15 @@ class DemandScheduler:
                 ArtistExternalIdentity.status == RESOLVED,
             )
         ).scalars().all()
-        created = 0
+        # Phase 5B.1 — an operator-PAUSED watch target suspends recurring collection for that artist
+        # (unless another active watch target keeps it live). Never deletes history; just stops scheduling.
+        from artist_intelligence_service.watchlist import paused_canonical_artist_ids
+        paused = paused_canonical_artist_ids(db)
+        created = skipped = 0
         for ident in resolved:
+            if ident.canonical_artist_id in paused:
+                skipped += 1
+                continue
             priority = self._artist_priority(db, ident.canonical_artist_id)
             for job_type in (JOB_CHANNEL, JOB_VIDEO):
                 window = _window(now, _INTERVALS[job_type]())
@@ -87,7 +94,8 @@ class DemandScheduler:
                               now=now)
                 created += 1
         db.flush()
-        return {"resolved_identities": len(resolved), "jobs_created": created}
+        return {"resolved_identities": len(resolved), "jobs_created": created,
+                "paused_artists_skipped": skipped}
 
     # ---- enqueue: 5A.3 identity discovery + catalogue backfill (used by onboard/backfill) ------
     def enqueue_identity_discovery(self, db: Session, canonical_artist_id: str, *,

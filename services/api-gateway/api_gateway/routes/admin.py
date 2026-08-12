@@ -18,8 +18,14 @@ from fastapi.responses import RedirectResponse, Response
 
 from api_gateway.admin import auth, oidc
 from api_gateway.admin.demand import DemandAdminService
-from api_gateway.admin.deps import get_admin_service, get_audit_store, get_demand_service
+from api_gateway.admin.deps import (
+    get_admin_service,
+    get_audit_store,
+    get_demand_service,
+    get_watchlist_service,
+)
 from api_gateway.admin.service import AdminService
+from api_gateway.admin.watchlist import WatchlistAdminService, WatchlistError
 from api_gateway.config import settings
 
 router = APIRouter(prefix="/admin/v1", tags=["admin"])
@@ -391,6 +397,155 @@ async def export(table: str, fmt: str = Query(default="csv", alias="format"),
                         headers={"Content-Disposition": f'attachment; filename="{fname}.json"'})
     return Response(content=_to_csv(rows), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'})
+
+
+# ---- research configuration (Phase 5B.1) --------------------------------------------------------
+# The ONE narrow authenticated WRITE surface: operators create / prioritise / pause / resume artist
+# WATCH TARGETS. This is deliberately kept separate from the canonical/admin mutation routes below —
+# it never touches canonical entities, observations, graph nodes, provider observations, resolution
+# outcomes, or event/historical state. Reads use VIEWER; writes additionally require the research-config
+# flag and record the authenticated operator as `created_by`. Gated by ADMIN_RESEARCH_CONFIG_ENABLED.
+def _require_research_config() -> None:
+    if not settings.admin_research_config_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="research configuration is disabled on this deployment")
+
+
+def _watchlist_error(exc: WatchlistError):
+    return HTTPException(exc.status if exc.status in range(400, 600) else 502, detail=exc.detail)
+
+
+@router.get("/research/watchlist")
+async def watchlist_list(status_filter: str | None = Query(default=None, alias="status"),
+                         limit: int = Query(default=100, ge=1, le=500),
+                         offset: int = Query(default=0, ge=0),
+                         _: auth.Principal = Depends(auth.require_viewer),
+                         svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:
+    return await svc.list_targets(status=status_filter, limit=limit, offset=offset)
+
+
+@router.get("/research/watchlist/diagnostics")
+async def watchlist_diagnostics(_: auth.Principal = Depends(auth.require_viewer),
+                                svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:
+    return await svc.diagnostics()
+
+
+@router.get("/research/watchlist/{target_id}")
+async def watchlist_target(target_id: str, _: auth.Principal = Depends(auth.require_viewer),
+                           svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:
+    try:
+        return await svc.get_target(target_id)
+    except WatchlistError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/research/watchlist/bulk/preview")
+async def watchlist_bulk_preview(payload: dict = Body(...),
+                                 _: auth.Principal = Depends(auth.require_viewer),
+                                 svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:
+    # a no-write preview (matches/duplicates) so the operator can review before creating targets.
+    try:
+        return await svc.bulk_preview(text=payload.get("text"), names=payload.get("names"))
+    except WatchlistError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/research/watchlist")
+async def watchlist_add(payload: dict = Body(...),
+                        principal: auth.Principal = Depends(auth.require_viewer),
+                        svc: WatchlistAdminService = Depends(get_watchlist_service),
+                        store=Depends(get_audit_store)) -> dict[str, Any]:
+    _require_research_config()
+    display_name = str(payload.get("display_name", "")).strip()
+    if not display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="display_name required")
+    try:
+        out = await svc.add_target(
+            created_by=principal.sub, display_name=display_name,
+            canonical_artist_id=payload.get("canonical_artist_id"),
+            youtube_hint=payload.get("youtube_hint"), reason=payload.get("reason"),
+            priority=payload.get("priority"))
+    except WatchlistError as exc:
+        raise _watchlist_error(exc) from exc
+    target = out.get("target") or {}
+    store.record(actor_id=principal.sub, actor_role=principal.role, action="WATCHLIST_ADD",
+                 object_type="watch_target", object_id=str(target.get("id", "")),
+                 request_id=uuid.uuid4().hex,
+                 new_value={"display_name": display_name, "status": target.get("status")},
+                 reason=payload.get("reason"))
+    return out
+
+
+@router.post("/research/watchlist/bulk")
+async def watchlist_bulk_add(payload: dict = Body(...),
+                             principal: auth.Principal = Depends(auth.require_viewer),
+                             svc: WatchlistAdminService = Depends(get_watchlist_service),
+                             store=Depends(get_audit_store)) -> dict[str, Any]:
+    _require_research_config()
+    try:
+        out = await svc.bulk_add(created_by=principal.sub, text=payload.get("text"),
+                                 names=payload.get("names"), reason=payload.get("reason"))
+    except WatchlistError as exc:
+        raise _watchlist_error(exc) from exc
+    store.record(actor_id=principal.sub, actor_role=principal.role, action="WATCHLIST_BULK_ADD",
+                 object_type="watch_target", object_id="bulk", request_id=uuid.uuid4().hex,
+                 new_value={"received": out.get("received"), "created": out.get("created")},
+                 reason=payload.get("reason"))
+    return out
+
+
+def _watchlist_action(action: str):
+    async def _run(target_id: str, principal: auth.Principal,
+                   svc: WatchlistAdminService, store, coro, reason: str | None = None):
+        _require_research_config()
+        try:
+            out = await coro
+        except WatchlistError as exc:
+            raise _watchlist_error(exc) from exc
+        store.record(actor_id=principal.sub, actor_role=principal.role, action=action,
+                     object_type="watch_target", object_id=target_id, request_id=uuid.uuid4().hex,
+                     new_value={"status": out.get("status")}, reason=reason)
+        return out
+    return _run
+
+
+@router.post("/research/watchlist/{target_id}/pause")
+async def watchlist_pause(target_id: str,
+                          principal: auth.Principal = Depends(auth.require_viewer),
+                          svc: WatchlistAdminService = Depends(get_watchlist_service),
+                          store=Depends(get_audit_store)) -> dict[str, Any]:
+    return await _watchlist_action("WATCHLIST_PAUSE")(target_id, principal, svc, store, svc.pause(target_id))
+
+
+@router.post("/research/watchlist/{target_id}/resume")
+async def watchlist_resume(target_id: str,
+                           principal: auth.Principal = Depends(auth.require_viewer),
+                           svc: WatchlistAdminService = Depends(get_watchlist_service),
+                           store=Depends(get_audit_store)) -> dict[str, Any]:
+    return await _watchlist_action("WATCHLIST_RESUME")(target_id, principal, svc, store, svc.resume(target_id))
+
+
+@router.post("/research/watchlist/{target_id}/priority")
+async def watchlist_priority(target_id: str, payload: dict = Body(...),
+                             principal: auth.Principal = Depends(auth.require_viewer),
+                             svc: WatchlistAdminService = Depends(get_watchlist_service),
+                             store=Depends(get_audit_store)) -> dict[str, Any]:
+    try:
+        priority = int(payload.get("priority"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="priority (int) required") from exc
+    return await _watchlist_action("WATCHLIST_PRIORITY")(
+        target_id, principal, svc, store, svc.set_priority(target_id, priority))
+
+
+@router.post("/research/watchlist/{target_id}/reject")
+async def watchlist_reject(target_id: str, payload: dict = Body(default={}),
+                           principal: auth.Principal = Depends(auth.require_viewer),
+                           svc: WatchlistAdminService = Depends(get_watchlist_service),
+                           store=Depends(get_audit_store)) -> dict[str, Any]:
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    return await _watchlist_action("WATCHLIST_REJECT")(
+        target_id, principal, svc, store, svc.reject(target_id, reason), reason=reason)
 
 
 # ---- audit (ADMIN) ------------------------------------------------------------------------------

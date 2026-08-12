@@ -266,6 +266,50 @@ class YouTubeVideo(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ArtistWatchTarget(Base):
+    """Phase 5B.1 — an operator's instruction to *attempt and maintain* observation of an artist.
+
+    A watch target is NOT a canonical artist and NEVER creates one: it is a durable research
+    instruction that the system tries to resolve (link to an existing canonical, or promote through the
+    existing candidate/evidence rules) and, once resolved, onboards into the existing demand pipeline.
+
+    This is the one narrow operator-writable surface (RESEARCH CONFIGURATION): operators may create /
+    prioritise / pause / resume targets. It never mutates canonical entities, observations, graph nodes,
+    provider observations, resolution outcomes, event state, or historical evidence — those stay owned by
+    the entity/graph architecture and the append-only demand ledger.
+
+    Idempotent on ``dedup_key`` so the same canonical artist / provider identity / name is never
+    watched twice (``canonical:<id>`` › ``yt:<channel_id>`` › ``name:<normalized>``)."""
+
+    __tablename__ = "artist_watch_target"
+    __table_args__ = (
+        Index("uq_artist_watch_target_dedup", "dedup_key", unique=True),
+        Index("ix_awt_status", "status"),
+        Index("ix_awt_canonical", "canonical_artist_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(600), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(700), nullable=False)
+    canonical_artist_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # the raw pasted hint (channel/video URL, handle, or channel id) exactly as the operator gave it
+    youtube_hint: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # the provider-VERIFIED channel id (channels.list), set only after authoritative verification
+    youtube_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(48), nullable=False, default="OPERATOR")
+    reason: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    # operational acquisition priority (P-class, lower = more urgent); NOT a popularity/value score
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
+    # NEW | RESOLUTION_PENDING | WATCHING | AMBIGUOUS | REJECTED | PAUSED
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="NEW")
+    resolution_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    last_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProviderQuotaBucketDay(Base):
     """Phase 5A.3 — per-bucket daily quota accounting (SEARCH | GENERAL_READ | VIDEO_STATS_BATCH).
 
