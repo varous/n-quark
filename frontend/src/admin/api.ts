@@ -124,6 +124,12 @@ export const api = {
   demandArtistObservations: (id: string, f: Record<string, unknown>) =>
     req<DemandObservations>(`/demand/artists/${encodeURIComponent(id)}/observations${qs(f)}`),
   demandEvent: (id: string) => req<EventDemand>(`/demand/events/${encodeURIComponent(id)}`),
+  // ---- product catalog + coverage + movement (Phase 5B.2) ----
+  catalogArtists: (f: Record<string, unknown>) => req<CatalogArtistList>(`/catalog/artists${qs(f)}`),
+  catalogVenues: (f: Record<string, unknown>) => req<CatalogVenueList>(`/catalog/venues${qs(f)}`),
+  artistCoverage: (id: string) => req<ArtistCoverage>(`/demand/artists/${encodeURIComponent(id)}/coverage`),
+  artistMovement: (id: string) => req<ArtistMovement>(`/demand/artists/${encodeURIComponent(id)}/movement`),
+  marketMovement: () => req<MarketMovement>("/market/movement"),
   // ---- research watchlist (Phase 5B.1; controlled write: research configuration) ----
   watchlist: (f: Record<string, unknown>) => req<WatchlistList>(`/research/watchlist${qs(f)}`),
   watchlistDiagnostics: () => req<WatchlistDiagnostics>("/research/watchlist/diagnostics"),
@@ -248,6 +254,30 @@ export type DemandObservations = {
   available: boolean; total?: number; limit?: number; offset?: number;
   items?: Array<Record<string, unknown>>;
 };
+// ---- product catalog + coverage + movement types (loose; the BFF is the source of truth) ----
+export type CatalogArtist = {
+  canonical_artist_id: string; name: string; events_observed: number; sources: string[];
+  last_observed: string | null; watching: boolean; watch_status: string | null;
+  youtube_identity_state: string | null; youtube_verified: boolean; owned_videos: number;
+  has_demand_data: boolean; moving_content_count: number; last_demand_update: string | null;
+};
+export type CatalogArtistList = { available: boolean; monitoring_available: boolean; count: number | null; limit: number; offset: number; artists: CatalogArtist[] };
+export type CatalogVenue = { canonical_venue_id: string; name: string; events_observed: number; sources: string[]; last_observed: string | null };
+export type CatalogVenueList = { available: boolean; count: number | null; limit: number; offset: number; venues: CatalogVenue[] };
+export type CovState = "COLLECTED" | "ZERO_OBSERVED" | "NOT_COLLECTED" | "UNAVAILABLE" | "INSUFFICIENT_HISTORY" | string;
+export type ArtistCoverage = {
+  available?: boolean; canonical_artist_id: string;
+  identity: { canonical_status?: string; youtube_identity?: { state?: string; verified_channel_id?: string | null; channel_url?: string | null; last_verified_at?: string | null } };
+  live_activity: { state?: CovState; events_observed?: number; upcoming_events?: number; past_events?: number; cities?: string[]; venues_count?: number; organizers_count?: number; last_live_observation?: string | null; reason?: string };
+  youtube: { state?: CovState; reason?: string; owned_videos_tracked?: number; ecosystem_videos_tracked?: number; videos_observed_last_24h?: number; videos_with_sufficient_history?: number; insufficient_history_videos?: number; most_recent_content_discovery?: string | null; last_statistics_observation?: string | null; moving_content_count?: number; movement_states?: Record<string, number>; cross_channel_activity?: boolean; unavailable_videos?: number };
+  demand: { youtube_metrics?: { state?: CovState; observation_count?: number }; google_trends?: { state?: CovState; observation_count?: number; note?: string | null }; geographic_demand?: { state?: CovState; regions_covered?: number }; observation_history?: { first_observation?: string | null; last_demand_update?: string | null; total_observations?: number } };
+  evidence: { first_observation?: string | null; most_recent_observation?: string | null; sources_contributing?: string[] };
+  disclaimer?: string;
+};
+export type MovementItem = { canonical_artist_id?: string; video_id?: string; title?: string | null; relationship_type?: string; classification?: string; comparison_cohort?: string | null; observation_count?: number; baseline_sample_size?: number; supporting_values?: Record<string, number | null>; thresholds?: Record<string, number>; calculated_at?: string };
+export type ArtistMovement = { available?: boolean; canonical_artist_id?: string; videos_considered?: number; counts?: Record<string, number>; moving_owned?: number; moving_ecosystem?: number; highest_velocity_per_hour?: number | null; independent_active_channels?: number; cross_channel_activity?: boolean; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; disclaimer?: string };
+export type MarketMovement = { available?: boolean; artists_considered?: number; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; cross_channel_activity?: Array<Record<string, unknown>>; disclaimer?: string };
+
 // ---- research watchlist types (loose; the BFF is the source of truth) ----
 export type WatchTarget = {
   id: string; display_name: string; status: string; human_state: string;

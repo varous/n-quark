@@ -129,6 +129,12 @@ def market_movement_route(limit: int = Query(default=200, ge=1, le=500),
     return movement.market_movement(db, limit=limit)
 
 
+@router.get("/artists/summaries", summary="Batch per-artist monitoring summaries for the Artists list (5B.2)")
+def artist_summaries_route(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import summaries
+    return {"summaries": summaries.artist_monitoring_summaries(db)}
+
+
 @router.get("/artists/{artist_id}/geography", summary="Artist × region demand + supply")
 async def geography(artist_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return await intelligence.build_geography(db, artist_id)

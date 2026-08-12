@@ -232,8 +232,8 @@ function TargetRow({ t, onChange }: { t: WatchTarget; onChange: () => void }) {
             <div><dt className="text-slate-500">Priority</dt><dd className="text-slate-300">{t.priority}</dd></div>
           </dl>
           {t.canonical_artist_id && (
-            <a href={`#/demand/artists/${encodeURIComponent(t.canonical_artist_id)}`}
-              className="mt-2 inline-block text-brand-300 hover:text-brand-200">Open demand detail →</a>
+            <a href={`#/artists/${encodeURIComponent(t.canonical_artist_id)}`}
+              className="mt-2 inline-block text-brand-300 hover:text-brand-200">Open artist →</a>
           )}
         </div>
       )}

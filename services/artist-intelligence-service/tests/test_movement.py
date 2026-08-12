@@ -195,3 +195,21 @@ async def test_data_coverage_distinguishes_states(db):
     assert out["youtube"]["insufficient_history_videos"] == 1                  # insufficient
     assert out["live_activity"]["state"] == "ZERO_OBSERVED"                    # collected, truly zero
     assert out["demand"]["google_trends"]["state"] == "UNAVAILABLE"            # unavailable
+
+
+def test_monitoring_summaries_batch(db):
+    from artist_intelligence_service import summaries
+    from artist_intelligence_service.models import ArtistExternalIdentity
+    from artist_intelligence_service import identity as idlib
+    db.add(ArtistExternalIdentity(
+        id=idlib.new_id("YOUTUBE", "CHANNEL_ID", "UCown"), canonical_artist_id="artist:a",
+        provider="YOUTUBE", identity_type="CHANNEL_ID", provider_id="UCown", status="RESOLVED",
+        confidence=1.0, first_seen_at=NOW, created_at=NOW, updated_at=NOW))
+    seed_obs(db, artist="artist:a", provider="YOUTUBE", metric="YOUTUBE_SUBSCRIBERS", value=1.0,
+             observed_at=NOW, bucket="b1")
+    db.flush()
+    out = summaries.artist_monitoring_summaries(db)
+    assert "artist:a" in out
+    assert out["artist:a"]["youtube_identity_state"] == "RESOLVED"
+    assert out["artist:a"]["has_demand_data"] is True
+    assert out["artist:a"]["owned_videos"] == 0

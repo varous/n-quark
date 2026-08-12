@@ -17,10 +17,12 @@ from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Query, Requ
 from fastapi.responses import RedirectResponse, Response
 
 from api_gateway.admin import auth, oidc
+from api_gateway.admin.catalog import CatalogAdminService
 from api_gateway.admin.demand import DemandAdminService
 from api_gateway.admin.deps import (
     get_admin_service,
     get_audit_store,
+    get_catalog_service,
     get_demand_service,
     get_watchlist_service,
 )
@@ -297,6 +299,30 @@ async def search(q: str = Query(...), limit: int = Query(default=20, ge=1, le=10
                  _: auth.Principal = Depends(auth.require_viewer),
                  svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
     return await svc.search(q, limit=limit)
+
+
+# ---- product catalog: first-class Artists & Venues (Phase 5B.2; canonical registry only) --------
+@router.get("/catalog/artists")
+async def catalog_artists(limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
+                          watching: bool = Query(default=False),
+                          youtube_verified: bool = Query(default=False),
+                          needs_identity: bool = Query(default=False),
+                          has_demand: bool = Query(default=False),
+                          moving: bool = Query(default=False),
+                          has_events: bool = Query(default=False),
+                          _: auth.Principal = Depends(auth.require_viewer),
+                          svc: CatalogAdminService = Depends(get_catalog_service)) -> dict[str, Any]:
+    return await svc.artists(limit=limit, offset=offset, watching=watching,
+                             youtube_verified=youtube_verified, needs_identity=needs_identity,
+                             has_demand=has_demand, moving=moving, has_events=has_events)
+
+
+@router.get("/catalog/venues")
+async def catalog_venues(limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
+                         has_events: bool = Query(default=False),
+                         _: auth.Principal = Depends(auth.require_viewer),
+                         svc: CatalogAdminService = Depends(get_catalog_service)) -> dict[str, Any]:
+    return await svc.venues(limit=limit, offset=offset, has_events=has_events)
 
 
 # ---- demand intelligence (Phase 5A.2; read-only; degrades gracefully) ---------------------------

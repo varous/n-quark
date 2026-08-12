@@ -2,6 +2,7 @@
 
 from api_gateway.admin.audit import AuditStore
 from api_gateway.admin.decisions import DecisionStore
+from api_gateway.admin.catalog import CatalogAdminService
 from api_gateway.admin.demand import DemandAdminService
 from api_gateway.admin.gateway_client import DownstreamGateway
 from api_gateway.admin.service import AdminService
@@ -9,6 +10,7 @@ from api_gateway.admin.watchlist import WatchlistAdminService
 
 _service: AdminService | None = None
 _demand: DemandAdminService | None = None
+_catalog: CatalogAdminService | None = None
 _watchlist: WatchlistAdminService | None = None
 _audit: AuditStore | None = None
 _decisions: DecisionStore | None = None
@@ -26,6 +28,13 @@ def get_demand_service() -> DemandAdminService:
     if _demand is None:
         _demand = DemandAdminService(DownstreamGateway())
     return _demand
+
+
+def get_catalog_service() -> CatalogAdminService:
+    global _catalog
+    if _catalog is None:
+        _catalog = CatalogAdminService(DownstreamGateway())
+    return _catalog
 
 
 def get_watchlist_service() -> WatchlistAdminService:

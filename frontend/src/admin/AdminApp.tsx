@@ -9,6 +9,7 @@ import { ArtistDemand, DemandIntelligence } from "./demand";
 import { Overview } from "./overview";
 import { Analysis } from "./analysis";
 import { Watchlist } from "./watchlist";
+import { ArtistDetail, Artists, Market, VenueDetail, Venues } from "./product";
 
 type NavItem = { to: string; label: string; icon: keyof typeof ICONS };
 type NavGroup = { group: string; items: NavItem[] };
@@ -17,19 +18,27 @@ const NAV: NavGroup[] = [
   { group: "", items: [{ to: "/overview", label: "Overview", icon: "grid" }] },
   { group: "Explore", items: [
     { to: "/events", label: "Events", icon: "calendar" },
-    { to: "/entities", label: "Artists & venues", icon: "users" },
+    { to: "/artists", label: "Artists", icon: "users" },
+    { to: "/venues", label: "Venues", icon: "pin" },
+    { to: "/organizers", label: "Organizers", icon: "building" },
+  ] },
+  { group: "Monitor", items: [
+    { to: "/watchlist", label: "Watchlist", icon: "eye" },
+    { to: "/market", label: "Market Movement", icon: "trend" },
     { to: "/demand", label: "Demand", icon: "pulse" },
-    { to: "/graph", label: "Graph", icon: "share" },
   ] },
-  { group: "Research", items: [{ to: "/watchlist", label: "Watchlist", icon: "eye" }] },
-  { group: "Analyze", items: [{ to: "/analysis", label: "Analysis", icon: "spark" }] },
-  { group: "Collection", items: [
-    { to: "/sources", label: "Sources", icon: "feed" },
+  { group: "Coverage", items: [
+    { to: "/sources", label: "Collection", icon: "feed" },
     { to: "/captures", label: "Captures", icon: "camera" },
-    { to: "/diagnostics", label: "Diagnostics", icon: "gauge" },
-    { to: "/resolution", label: "Resolution", icon: "merge" },
   ] },
-  { group: "System", items: [{ to: "/health", label: "Service health", icon: "heart" }] },
+  { group: "Advanced", items: [
+    { to: "/analysis", label: "Analysis", icon: "spark" },
+    { to: "/resolution", label: "Resolution", icon: "merge" },
+    { to: "/graph", label: "Graph", icon: "share" },
+    { to: "/diagnostics", label: "Diagnostics", icon: "gauge" },
+    { to: "/entities", label: "All entities", icon: "grid" },
+    { to: "/health", label: "System health", icon: "heart" },
+  ] },
 ];
 
 const ICONS = {
@@ -45,6 +54,9 @@ const ICONS = {
   merge: "M7 4v6a4 4 0 0 0 4 4h6M17 10l3 4-3 4M7 4L4 8M7 4l3 4",
   heart: "M12 20s-7-4.3-9.3-8.3C1 8.5 2.5 5 6 5c2 0 3.2 1.2 4 2.3C10.8 6.2 12 5 14 5c3.5 0 5 3.5 3.3 6.7C19 15.7 12 20 12 20z",
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  pin: "M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10zM12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  building: "M3 21h18M5 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M9 8h2M9 12h2M9 16h2M19 21V10a1 1 0 0 1 1-1h0",
+  trend: "M3 17l6-6 4 4 8-8M15 7h6v6",
 } as const;
 
 function Icon({ name }: { name: keyof typeof ICONS }) {
@@ -66,6 +78,10 @@ function Router({ hash }: { hash: string }) {
     case "overview": case undefined: return <Overview />;
     case "sources": return <Sources />;
     case "events": return a ? <EventDetail id={decodeURIComponent(parts.slice(1).join("/"))} /> : <Events />;
+    case "artists": return a ? <ArtistDetail id={decodeURIComponent(parts.slice(1).join("/"))} /> : <Artists />;
+    case "venues": return a ? <VenueDetail id={decodeURIComponent(parts.slice(1).join("/"))} /> : <Venues />;
+    case "organizers": return <Entities />;
+    case "market": return <Market />;
     case "entities": return a && b ? <EntityDetail type={a} id={decodeURIComponent(parts.slice(2).join("/"))} /> : <Entities />;
     case "demand":
       return a === "artists" && b
