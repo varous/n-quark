@@ -1,6 +1,14 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.1.1). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-12 (Phase 5B.2 increment 1). Branch `main`. Repo: github.com/varous/n-quark._
+
+> **Phase 5B.2 is in progress (multi-increment).** Increment 1 (this update) delivered the deterministic
+> content-movement backend + Data Coverage/Market Movement read models + the canonical preflight, deployed
+> and prod-validated. **Not yet done** (subsequent increments): ecosystem content discovery + relevance
+> (spec §11–14), movement-aware scheduler cadence (§6), and the large **frontend redesign** (§19–32:
+> Artist Data Coverage UI, first-class Artists/Venues screens, Market Movement page, ontology
+> simplification, organizer de-clutter) + the production **UI** proof (§35). See the 5B.2 section below.
+
 
 n-quark is an India-first "Intelligence OS for live entertainment": 11 FastAPI microservices +
 React frontend on Docker Compose (postgres/pgvector, neo4j-optional, redis, qdrant, minio).
@@ -273,6 +281,51 @@ Production defect: a search-result candidate could transition a YouTube CHANNEL_
   `CHANNEL_NOT_FOUND` → not resolved; a real valid channel verifies `FOUND` → RESOLVED with
   `last_verified_at`; refresh of the stale production row invalidates it and writes nothing. Regression
   suite +9 (`test_verification.py`); demand **43**, signal **99** (verify primitive), all green.
+
+## Phase 5B.2 — YouTube content sensing + market UX (2026-08-12, INCREMENT 1 DEPLOYED; phase in progress)
+
+Turning periodic artist/channel metrics into continuous content sensing + a market-intelligence UX. Being
+built in tested increments. **Increment 1 (deployed)** = the deterministic content-movement backend + the
+read models the UX depends on. **Remaining** (next increments, not started/partial): ecosystem discovery
+(§11–14), movement-aware cadence (§6), and the frontend redesign (§19–32) + UI proof (§35).
+
+- **§0 Canonical preflight (done, read-only)**: resolved the "64 vs 102" ambiguity. The **102 is NOT
+  comparable to the canonical count** — it is total *artist-type graph nodes*: 64 canonical ARTIST nodes
+  (`artist:<slug>`, registry-backed) **plus 38 source-handle projection nodes** (`boshow:artist:<…>`,
+  `origin=null`, only display_name+updated_at). The 38 are raw Boshow source-artist handles not yet folded
+  into a canonical — many are **compound/ambiguous** ("Sumeli Chakraborty / Atulita Banerjee",
+  "Kabir Suman . Gangur"), organisations ("…Cultural & Welfare Society"), or generic singles. `registry_only`
+  = 0 (every canonical has a graph node). **No graph-only *canonical* cohort exists**, so `reconcile_graph_artists`
+  is **not** appropriate here (it would fabricate canonicals from ambiguous source strings — forbidden);
+  these resolve through normal entity resolution over time. No mutation, no new registry, no id rewrite.
+- **Content registry semantics (§3/4/15)**: migration 004 (additive/reversible) adds to `youtube_video`:
+  `relationship_type` (OWNED_CONTENT = published by the artist's verified channel — ownership only, not a
+  relevance claim; vs ECOSYSTEM_CONTENT), `availability_state` (AVAILABLE/UNAVAILABLE/NOT_FOUND — a KNOWN
+  video's provider availability; a transient failure never becomes NOT_FOUND; history never deleted), and
+  `discovery_method`. Per-video statistics time-series already lives in `artist_demand_observation`
+  (scope=CONTENT), reused unchanged.
+- **Movement engine (§6–10, the core)** `movement.py`: deterministic, **age-normalised**, **evidence-gated**
+  content movement computed over the existing per-video observation series (collects nothing). Windowed
+  velocity + acceleration; a comparable-age baseline (a video judged only against same-age-bucket siblings,
+  self excluded by id); states **INSUFFICIENT_HISTORY / NORMAL / RISING / BREAKOUT_CANDIDATE / COOLING**,
+  each carrying a full **evidence contract** (cohort, observation count, baseline sample size, metrics,
+  thresholds, supporting values, evidence_state). **No fused virality score.** Thresholds are config.
+  `artist_movement` + `market_movement` aggregate from constituent evidence (owned vs ecosystem moving,
+  independent active channels, cross-channel flag) — never one number.
+- **Artist Data Coverage (§18/19 backend)** `coverage.py`: "what does n-quark know about this artist" —
+  identity / live activity / youtube / demand / evidence — explicitly distinguishing **COLLECTED /
+  ZERO_OBSERVED / NOT_COLLECTED / UNAVAILABLE / INSUFFICIENT_HISTORY** (§32).
+- **Surfaces**: artist-intel `/artists/{id}/movement`, `/artists/{id}/coverage`, `/market/movement`;
+  gateway BFF passthrough (`/admin/v1/demand/artists/{id}/{movement,coverage}`, `/admin/v1/market/movement`),
+  VIEWER read-only, degrades gracefully.
+- **Deployed + prod-validated (§34, honest)**: migration 004 live; the engine runs. Prod currently has
+  **0 verified YouTube channels / 0 video-registry rows** (every real channel resolution has returned
+  CHANNEL_NOT_FOUND/AMBIGUOUS under real channels.list + daily-search limits — e.g. Arijit's stale channel),
+  so content-sensing has **no input yet** and the read models honestly report `NOT_COLLECTED` /
+  `ZERO_OBSERVED` / `UNAVAILABLE` — nothing fabricated, no timestamps manipulated. The engine's behaviour is
+  proven by the deterministic test suite; end-to-end owned-content→movement needs a verified channel (an
+  operator can paste a known-correct channel URL via the watchlist to seed it).
+- Tests: artist-intel **119** (+13 movement/coverage; migration 001↔004 round-trip), gateway **119** (+3).
 
 ## Phase 5B.1.1 — watchlist canonical-integrity closure (2026-08-12, DEPLOYED to Fly)
 
@@ -620,7 +673,7 @@ unknown-key/kid/alg=none/iss/aud/expiry/email/domain/hd-spoof/nonce), hard read-
 session-cookie flags, expired-state; +4 Admin D.2: `/v1/platform/status` authenticated —
 unauth 401 / viewer 200 / admin-disabled 404 / local-mode open; +9 5B.1: research-watchlist BFF —
 auth required / created_by forwarded / research-config flag gates writes / canonical mutations still
-blocked; +1 5B.1.1: canonical-integrity read) · signal **107** (+4 in 5B.1: resolve @handle / video id → channel id, FOUND/NOT_FOUND; +2 in 5A.3.3:
+blocked; +1 5B.1.1: canonical-integrity read; +3 5B.2: artist coverage/movement + market movement BFF) · signal **107** (+4 in 5B.1: resolve @handle / video id → channel id, FOUND/NOT_FOUND; +2 in 5A.3.3:
 `/health/ready` observation-dependency guard ok/503) · graph **60** · analytics **45** · media **43** ·
 observation **11** · entity **12** ·
 **artist-intelligence 107** (5A.3: candidate universe/quota/hourly/cadence; 5A.3.1: promotion/ecosystem/
@@ -630,7 +683,10 @@ intake — name-only pending / existing-canonical link / channel-URL verified id
 idempotency / no-fabricated-canonical / hint-requires-verification / pause suspends + resume restores
 scheduling / diagnostics / re-resolve; +5 in 5B.1.1: canonical-reference invariant — unregistered operator
 selection stays pending / stale candidate canonical not trusted / WATCHING requires registry-backed id /
-canonical-integrity exposes orphans / provider-only never fabricates canonical) — all pass. artist-intelligence Alembic **001↔002↔003
+canonical-integrity exposes orphans / provider-only never fabricates canonical; +12 in 5B.2: content-movement
+engine — velocity/acceleration, INSUFFICIENT_HISTORY, RISING/BREAKOUT_CANDIDATE/COOLING with evidence, age-
+normalised baseline, no fused score, owned/ecosystem distinct, NOT_FOUND preserves history; +1 Data Coverage
+distinguishes collected/unavailable/insufficient/zero) — all pass. artist-intelligence Alembic **001↔002↔003
 upgrade+downgrade+re-upgrade verified** (additive/reversible). Frontend `tsc -b` + `vite build` clean; `npm run lint` exit 0
 (Admin D redesign: only the pre-existing `only-export-components` warnings on the shared primitives module). No JS test runner in the repo (Admin A–D convention): the UI is
 type-checked + browser-validated, with automated coverage on the BFF/read models it consumes. Lint clean
