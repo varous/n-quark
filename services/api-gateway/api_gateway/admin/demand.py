@@ -105,6 +105,29 @@ class DemandAdminService:
             "downstream": {"demand": demand.ok, "momentum": momentum.ok, "geography": geography.ok},
         }
 
+    async def coverage(self, artist_id: str) -> dict[str, Any]:
+        """Artist Data Coverage (5B.2): plain-language 'what does n-quark know about this artist'."""
+        r = await self.gw.get(DEMAND, f"/v1/internal/artists/{artist_id}/coverage")
+        if not r.ok:
+            return {"canonical_artist_id": artist_id, "available": False}
+        return {"available": True, **(r.data or {})}
+
+    async def movement(self, artist_id: str, *, relationship: str | None = None) -> dict[str, Any]:
+        """Deterministic content-movement states + evidence for one artist (5B.2)."""
+        params = {"relationship": relationship} if relationship else None
+        r = await self.gw.get(DEMAND, f"/v1/internal/artists/{artist_id}/movement", params=params)
+        if not r.ok:
+            return {"canonical_artist_id": artist_id, "available": False}
+        return {"available": True, **(r.data or {})}
+
+    async def market_movement(self, *, limit: int = 200) -> dict[str, Any]:
+        """Market-wide notable YouTube movement across monitored artists (5B.2)."""
+        r = await self.gw.get(DEMAND, "/v1/internal/market/movement", params={"limit": limit})
+        if not r.ok:
+            return {"available": False, "breakout_candidates": [], "rising": [], "cooling": [],
+                    "cross_channel_activity": []}
+        return {"available": True, **(r.data or {})}
+
     async def observations(self, artist_id: str, *, provider: str | None = None,
                            metric: str | None = None, limit: int = 100,
                            offset: int = 0) -> dict[str, Any]:

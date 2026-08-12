@@ -188,6 +188,22 @@ class Settings(BaseSettings):
     cadence_event_t3_s: int = 2 * 3600            # T-3 … T
     cadence_event_post_s: int = 2 * 3600          # T … T+3 (high frequency)
 
+    # --- Phase 5B.2: deterministic YouTube content-movement thresholds (transparent + configurable). ---
+    # These are INITIAL defaults; movement is observed abnormal behaviour, never a prediction or a fused
+    # score. All comparisons are age-normalised (a young video is compared against the artist's other
+    # videos at a comparable age, never against a 3-year-old's lifetime performance).
+    movement_min_observations: int = 3           # < this for a video → INSUFFICIENT_HISTORY
+    movement_min_time_separation_hours: float = 1.0   # obs must span at least this to derive velocity
+    movement_min_baseline_sample: int = 3        # comparable-age cohort size below which ratios are N/A
+    movement_recent_window_hours: float = 6.0    # the "current" velocity window (and the prior window)
+    movement_age_buckets_hours: str = "24,72,168,720"  # young/recent/maturing/mature/old boundaries (h)
+    movement_rising_ratio: float = 1.5           # current velocity ≥ this × comparable-age baseline median
+    movement_breakout_ratio: float = 3.0         # breakout needs velocity ≥ this × baseline …
+    movement_breakout_accel_ratio: float = 1.3   # … AND recent-window velocity ≥ this × prior window
+    movement_breakout_max_age_hours: float = 168.0    # breakout only applies to reasonably fresh content
+    movement_cooling_ratio: float = 0.6          # current ≤ this × its own prior-window velocity → cooling
+    movement_cross_channel_min_channels: int = 2      # independent moving channels → cross-channel activity
+
     # --- Deterministic read-model thresholds (transparent + configurable). ---
     demand_min_observations_for_delta: int = 2   # below this: INSUFFICIENT_HISTORY
     demand_freshness_stale_hours: int = 48       # observation older than this is "stale"

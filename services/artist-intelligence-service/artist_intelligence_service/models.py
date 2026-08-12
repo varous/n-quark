@@ -247,6 +247,7 @@ class YouTubeVideo(Base):
         Index("ix_ytv_channel", "channel_id"),
         Index("ix_ytv_artist", "canonical_artist_id"),
         Index("ix_ytv_published", "published_at"),
+        Index("ix_ytv_relationship", "canonical_artist_id", "relationship_type"),
     )
 
     video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -259,6 +260,14 @@ class YouTubeVideo(Base):
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     live_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tracking_status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")  # ACTIVE|DORMANT
+    # Phase 5B.2 — how this video relates to the artist. OWNED_CONTENT = published by the artist's verified
+    # channel (channel-ownership only; NOT a claim of musical relevance). ECOSYSTEM_CONTENT = a third-party
+    # channel that plausibly features/concerns the artist (relevance carried in metadata_json, not assumed).
+    relationship_type: Mapped[str] = mapped_column(String(24), nullable=False, default="OWNED_CONTENT")
+    # AVAILABLE | UNAVAILABLE | NOT_FOUND — a KNOWN video's provider availability (5A.1a discipline: a
+    # transient provider failure never becomes NOT_FOUND). History is never deleted on unavailability.
+    availability_state: Mapped[str] = mapped_column(String(16), nullable=False, default="AVAILABLE")
+    discovery_method: Mapped[str | None] = mapped_column(String(48), nullable=True)  # CHANNEL_UPLOADS|ECOSYSTEM_SEARCH|…
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(_json_type(), nullable=False, default=dict)

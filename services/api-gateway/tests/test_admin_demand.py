@@ -251,6 +251,40 @@ def test_event_context_no_artists(local):
     assert body["artists"] == []
 
 
+# ---- 5B.2 content-movement + coverage + market --------------------------------------------------
+def test_artist_coverage_and_movement(local):
+    app.dependency_overrides[get_demand_service] = lambda: _demand({
+        f"artist_intelligence:/v1/internal/artists/{ARTIST}/coverage": {
+            "canonical_artist_id": ARTIST, "identity": {"youtube_identity": {"state": "VERIFIED"}},
+            "youtube": {"state": "COLLECTED", "owned_videos_tracked": 26, "moving_content_count": 2},
+            "live_activity": {"state": "COLLECTED", "events_observed": 7},
+            "demand": {"google_trends": {"state": "UNAVAILABLE"}}},
+        f"artist_intelligence:/v1/internal/artists/{ARTIST}/movement": {
+            "counts": {"BREAKOUT_CANDIDATE": 1, "RISING": 1}, "breakout_candidates": [{"video_id": "v"}],
+            "cross_channel_activity": False}})
+    cov = local.get(f"/admin/v1/demand/artists/{ARTIST}/coverage").json()
+    assert cov["available"] is True and cov["youtube"]["owned_videos_tracked"] == 26
+    mov = local.get(f"/admin/v1/demand/artists/{ARTIST}/movement").json()
+    assert mov["available"] is True and mov["counts"]["BREAKOUT_CANDIDATE"] == 1
+
+
+def test_market_movement(local):
+    app.dependency_overrides[get_demand_service] = lambda: _demand({
+        "artist_intelligence:/v1/internal/market/movement": {
+            "breakout_candidates": [{"canonical_artist_id": ARTIST, "video_id": "v",
+                                     "supporting_values": {"current_velocity_per_hour": 500}}],
+            "rising": [], "cooling": [], "cross_channel_activity": []}})
+    r = local.get("/admin/v1/market/movement")
+    assert r.status_code == 200
+    assert r.json()["available"] is True and len(r.json()["breakout_candidates"]) == 1
+
+
+def test_coverage_degrades_when_down(local):
+    app.dependency_overrides[get_demand_service] = lambda: _demand(
+        {}, unavailable={f"artist_intelligence:/v1/internal/artists/{ARTIST}/coverage"})
+    assert local.get(f"/admin/v1/demand/artists/{ARTIST}/coverage").json()["available"] is False
+
+
 # ---- read-only guarantee ------------------------------------------------------------------------
 def test_demand_surface_is_read_only(local):
     # No demand mutation route exists: POST to any demand path is not allowed.

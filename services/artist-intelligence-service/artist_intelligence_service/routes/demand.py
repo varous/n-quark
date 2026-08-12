@@ -109,6 +109,26 @@ def momentum(artist_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return intelligence.build_momentum(db, artist_id)
 
 
+@router.get("/artists/{artist_id}/movement", summary="Deterministic content-movement states + evidence (5B.2)")
+def movement_route(artist_id: str, relationship: str | None = Query(default=None),
+                   db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import movement
+    return movement.artist_movement(db, artist_id, relationship=relationship)
+
+
+@router.get("/artists/{artist_id}/coverage", summary="Artist Data Coverage — what n-quark knows (5B.2)")
+async def coverage_route(artist_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import coverage
+    return await coverage.artist_data_coverage(db, artist_id)
+
+
+@router.get("/market/movement", summary="Market-wide notable YouTube movement (5B.2)")
+def market_movement_route(limit: int = Query(default=200, ge=1, le=500),
+                          db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service import movement
+    return movement.market_movement(db, limit=limit)
+
+
 @router.get("/artists/{artist_id}/geography", summary="Artist × region demand + supply")
 async def geography(artist_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return await intelligence.build_geography(db, artist_id)

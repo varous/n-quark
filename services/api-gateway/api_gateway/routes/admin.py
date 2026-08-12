@@ -323,6 +323,26 @@ async def demand_artist_observations(artist_id: str,
     return await svc.observations(artist_id, provider=provider, metric=metric, limit=limit, offset=offset)
 
 
+@router.get("/demand/artists/{artist_id:path}/coverage")
+async def demand_artist_coverage(artist_id: str, _: auth.Principal = Depends(auth.require_viewer),
+                                 svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.coverage(artist_id)
+
+
+@router.get("/demand/artists/{artist_id:path}/movement")
+async def demand_artist_movement(artist_id: str, relationship: str | None = Query(default=None),
+                                 _: auth.Principal = Depends(auth.require_viewer),
+                                 svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.movement(artist_id, relationship=relationship)
+
+
+@router.get("/market/movement")
+async def market_movement(limit: int = Query(default=200, ge=1, le=500),
+                          _: auth.Principal = Depends(auth.require_viewer),
+                          svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
+    return await svc.market_movement(limit=limit)
+
+
 @router.get("/demand/artists/{artist_id:path}")
 async def demand_artist(artist_id: str, _: auth.Principal = Depends(auth.require_viewer),
                         svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
