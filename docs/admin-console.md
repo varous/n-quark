@@ -228,3 +228,9 @@ observe them — no canonical id, YouTube id, SQL, or curl.
   (VIEWER), records `created_by`, and is audited. It **cannot** mutate canonical entities, observations,
   graph nodes, provider observations, resolution outcomes, or event/historical state — those remain
   read-only. Unauthenticated → 401; disabled → 503.
+- **Canonical-reference integrity (5B.1.1).** A target is shown as *Watching* only when its
+  `canonical_artist_id` is acknowledged by the authoritative crawl entity-resolution registry (an uncached
+  by-id check). A stale/promoted/operator-supplied id the registry does not own is never exposed as
+  canonical — the target stays *Waiting for stronger evidence* with an auditable `canonical_unverified`
+  note. `GET /admin/v1/research/watchlist/canonical-integrity` audits orphan canonical references across
+  watch targets / candidates / identities / observations (never auto-rewritten).

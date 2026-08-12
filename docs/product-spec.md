@@ -1207,3 +1207,20 @@ _Appended 2026-08-12. Additive record; append-only like the rest of this MCP. Fi
   separate from (and does not enable) any canonical, observation, graph, provider-observation, resolution,
   or historical-state mutation. It is authenticated with the same Workspace identity, records who made each
   change, and is audited. Pausing suspends future collection for a target without deleting past history.
+
+# Delivered — Watchlist canonical-reference integrity (Phase 5B.1.1)  `[CURRENT]`
+
+_Appended 2026-08-12. Additive record; append-only like the rest of this MCP. It hardens the 5B.1 intake
+so a research target can never present a canonical identity the owner does not own._
+
+- **Canonical resolution requires the owner's acknowledgement `[INVARIANT]`** — a watch target may present
+  a canonical artist (and read as actively "watching a canonical artist") only when the authoritative
+  crawl entity-resolution registry acknowledges that canonical id. A candidate's stored link, a promotion
+  result, or an operator-supplied id is re-confirmed against the registry (an uncached, by-id check) before
+  it is trusted; an id the owner does not own is never exposed as canonical — the target stays honestly
+  pending and the unacknowledged reference is auditable, never silently rewritten. Canonical creation and
+  reconciliation still flow only through the existing crawl-owned governance path and evidence rules.
+- **Provider identity and canonical identity remain distinct `[INVARIANT]`** — a verified provider
+  identity is never promoted into a canonical artist, and a missing canonical is never papered over with a
+  fabricated or parallel canonical id. Where the architecture cannot yet bind a provider identity to a
+  registry-owned canonical, the honest state is "pending", not a manufactured canonical.
