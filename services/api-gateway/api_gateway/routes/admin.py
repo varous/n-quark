@@ -430,6 +430,12 @@ async def watchlist_diagnostics(_: auth.Principal = Depends(auth.require_viewer)
     return await svc.diagnostics()
 
 
+@router.get("/research/watchlist/canonical-integrity")
+async def watchlist_canonical_integrity(_: auth.Principal = Depends(auth.require_viewer),
+                                        svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:
+    return await svc.canonical_integrity()
+
+
 @router.get("/research/watchlist/{target_id}")
 async def watchlist_target(target_id: str, _: auth.Principal = Depends(auth.require_viewer),
                            svc: WatchlistAdminService = Depends(get_watchlist_service)) -> dict[str, Any]:

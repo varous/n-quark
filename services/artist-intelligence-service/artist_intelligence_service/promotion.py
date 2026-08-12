@@ -126,6 +126,20 @@ async def promote(db: Session, candidate: ArtistCandidate, *, crawl: CrawlServic
         cid = result["canonical_entity_id"]
         created = bool(result.get("created"))
 
+    # 5B.1.1 — canonical-reference invariant: re-read/confirm the id against the AUTHORITATIVE crawl
+    # registry before any downstream linking. This never trusts a stale candidate.canonical_artist_id
+    # (ALREADY_LINKED) or a create that failed to register: an id the owner does not acknowledge is not
+    # canonical. We never fabricate a registry row here — the id must already be owner-registered (create
+    # does that idempotently). A crawl outage raises and is handled by the caller (fail closed).
+    if not await crawl.canonical_artist_registered(cid):
+        if candidate.status == cand.NEW:
+            cand.set_status(db, candidate, cand.RESOLUTION_PENDING, now=now)
+        db.flush()
+        return {"promoted": False, "candidate_id": candidate.id, "method": "CANONICAL_UNVERIFIED",
+                "reason": f"canonical id {cid} is not acknowledged by the crawl registry",
+                "canonical_artist_id": None, "proposed_canonical_artist_id": cid,
+                "created_canonical": created}
+
     cand.link_to_canonical(db, candidate, cid, now=now)
     cand.record_market_evidence(
         db, canonical_artist_id=cid, evidence_class=INDIA_MARKET_CANDIDATE,

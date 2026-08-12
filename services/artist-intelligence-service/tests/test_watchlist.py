@@ -27,11 +27,16 @@ CID_URL = f"https://www.youtube.com/channel/{CID}"
 
 
 class FakeCrawl:
-    def __init__(self, existing=None):
+    """`existing` = matchable-by-name canonicals; `registered` = the authoritative registry membership set
+    (defaults to the existing canonicals ∪ anything created here). Pass `registered=set()` with a preset
+    canonical to model an ORPHAN (referenced but not registry-backed)."""
+
+    def __init__(self, existing=None, registered=None):
         import re
         self._re = re
         self.existing = {self._n(k): v for k, v in (existing or {}).items()}
         self.create_calls = []
+        self.registered = set(self.existing.values()) if registered is None else set(registered)
 
     def _n(self, s):
         return self._re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
@@ -43,10 +48,15 @@ class FakeCrawl:
     async def create_artist(self, name, *, provenance=None, source=None):
         self.create_calls.append(name)
         cid = "artist:" + self._re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True}
+        self.registered.add(cid)
+        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True,
+                "registry_registered": True}
+
+    async def canonical_artist_registered(self, cid):
+        return cid in self.registered
 
     async def artists(self, *, limit=200, offset=0):
-        return []
+        return [{"canonical_entity_id": c} for c in sorted(self.registered)][offset:offset + limit]
 
 
 def _svc(*, found=None):
@@ -92,10 +102,22 @@ async def test_name_only_stays_pending_and_creates_no_canonical(db):
 async def test_operator_selected_existing_canonical_watches(db):
     out = await watchlist.add_and_resolve(db, display_name="Anuv Jain", created_by="op@x.com",
                                           canonical_artist_id="artist:anuv-jain",
-                                          crawl=FakeCrawl(), scheduler=_sched(), svc=_svc())
+                                          crawl=FakeCrawl(registered={"artist:anuv-jain"}),
+                                          scheduler=_sched(), svc=_svc())
     t = out["target"]
     assert t["canonical_artist_id"] == "artist:anuv-jain"
     assert t["status"] == watchlist.WATCHING
+
+
+async def test_operator_selected_unregistered_canonical_stays_pending(db):
+    # operator supplies a canonical id the crawl registry does NOT acknowledge → never exposed as WATCHING
+    out = await watchlist.add_and_resolve(db, display_name="Ghost Artist", created_by="op@x.com",
+                                          canonical_artist_id="artist:ghost", crawl=FakeCrawl(),
+                                          scheduler=_sched(), svc=_svc())
+    t = out["target"]
+    assert t["canonical_artist_id"] is None
+    assert t["status"] == watchlist.RESOLUTION_PENDING
+    assert t["detail"]["canonical_unverified"]["id"] == "artist:ghost"
 
 
 # ---- 3. create with a YouTube channel URL ---------------------------------------------------
@@ -103,7 +125,8 @@ async def test_channel_url_resolves_verified_identity(db):
     out = await watchlist.add_and_resolve(db, display_name="Arijit Singh", created_by="op@x.com",
                                           canonical_artist_id="artist:arijit-singh",
                                           youtube_hint=CID_URL,
-                                          crawl=FakeCrawl(), scheduler=_sched(), svc=_svc())
+                                          crawl=FakeCrawl(registered={"artist:arijit-singh"}),
+                                          scheduler=_sched(), svc=_svc())
     t = out["target"]
     assert t["youtube_channel_id"] == CID
     assert t["youtube_identity_state"] == "RESOLVED"
@@ -115,11 +138,12 @@ async def test_channel_url_resolves_verified_identity(db):
 
 # ---- 4. duplicate intake is idempotent ------------------------------------------------------
 async def test_duplicate_intake_is_idempotent(db):
+    crawl = FakeCrawl(registered={"artist:anuv-jain"})
     a = await watchlist.add_and_resolve(db, display_name="Anuv Jain", created_by="op@x.com",
-                                        canonical_artist_id="artist:anuv-jain", crawl=FakeCrawl(),
+                                        canonical_artist_id="artist:anuv-jain", crawl=crawl,
                                         scheduler=_sched(), svc=_svc())
     b = await watchlist.add_and_resolve(db, display_name="Anuv Jain", created_by="op2@x.com",
-                                        canonical_artist_id="artist:anuv-jain", crawl=FakeCrawl(),
+                                        canonical_artist_id="artist:anuv-jain", crawl=crawl,
                                         scheduler=_sched(), svc=_svc())
     assert a["target"]["id"] == b["target"]["id"]
     assert b["created"] is False
@@ -181,7 +205,7 @@ async def test_hint_requires_verification(db):
     out = await watchlist.add_and_resolve(
         db, display_name="Arijit Singh", created_by="op@x.com",
         canonical_artist_id="artist:arijit-singh", youtube_hint=CID_URL,
-        crawl=FakeCrawl(), scheduler=_sched(), svc=_svc(found=[]))
+        crawl=FakeCrawl(registered={"artist:arijit-singh"}), scheduler=_sched(), svc=_svc(found=[]))
     assert out["target"]["youtube_channel_id"] is None
     assert out["target"]["youtube_identity_state"] != "RESOLVED"
     resolved = db.execute(select(func.count()).select_from(ArtistExternalIdentity)
@@ -192,7 +216,8 @@ async def test_hint_requires_verification(db):
 # ---- 11. successful target enters the existing demand workflow ------------------------------
 async def test_watching_enrolls_in_demand_pipeline(db):
     await watchlist.add_and_resolve(db, display_name="Anuv Jain", created_by="op@x.com",
-                                    canonical_artist_id="artist:anuv-jain", crawl=FakeCrawl(),
+                                    canonical_artist_id="artist:anuv-jain",
+                                    crawl=FakeCrawl(registered={"artist:anuv-jain"}),
                                     scheduler=_sched(), svc=_svc())
     # onboarding queued an identity-discovery job through the existing scheduler (no parallel path)
     jobs = db.execute(select(func.count()).select_from(DemandRefreshJob)
@@ -206,7 +231,7 @@ async def _watching_with_resolved_identity(db):
     return await watchlist.add_and_resolve(
         db, display_name="Arijit Singh", created_by="op@x.com",
         canonical_artist_id="artist:arijit-singh", youtube_hint=CID_URL,
-        crawl=FakeCrawl(), scheduler=_sched(), svc=_svc())
+        crawl=FakeCrawl(registered={"artist:arijit-singh"}), scheduler=_sched(), svc=_svc())
 
 
 async def test_pause_prevents_recurring_scheduling(db):
@@ -233,7 +258,8 @@ async def test_resume_restores_scheduling(db):
 # ---- diagnostics -------------------------------------------------------------------------------
 async def test_diagnostics_counts(db):
     await watchlist.add_and_resolve(db, display_name="Anuv Jain", created_by="op@x.com",
-                                    canonical_artist_id="artist:anuv-jain", crawl=FakeCrawl(),
+                                    canonical_artist_id="artist:anuv-jain",
+                                    crawl=FakeCrawl(registered={"artist:anuv-jain"}),
                                     scheduler=_sched(), svc=_svc())
     await watchlist.add_and_resolve(db, display_name="Nobody At All", created_by="op@x.com",
                                     crawl=FakeCrawl(), scheduler=_sched(), svc=_svc())
@@ -242,6 +268,59 @@ async def test_diagnostics_counts(db):
     assert d["watching"] == 1
     assert d["resolution_pending"] == 1
     assert d["targets_with_canonical_artist"] == 1
+
+
+# ---- 5B.1.1 canonical-reference invariant ---------------------------------------------------
+async def test_stale_candidate_canonical_not_trusted(db):
+    # a candidate is already linked to a canonical the registry does NOT acknowledge (a legacy orphan).
+    from artist_intelligence_service import candidates as cand
+    from artist_intelligence_service import promotion
+    c, _ = cand.upsert_candidate(db, display_name="Legacy Orphan", discovery_source=cand.SRC_EVENT,
+                                 discovery_source_id="ev-orphan", canonical_artist_id="artist:orphan",
+                                 status=cand.RESOLVED)
+    # crawl does not know artist:orphan → promote must NOT trust the stale link
+    out = await promotion.promote(db, c, crawl=FakeCrawl(registered=set()), scheduler=_sched())
+    assert out["promoted"] is False
+    assert out["method"] == "CANONICAL_UNVERIFIED"
+    assert out["canonical_artist_id"] is None
+
+
+async def test_watching_requires_registry_backed_canonical(db):
+    # matched canonical is registry-backed → WATCHING references only a registry-acknowledged id
+    crawl = FakeCrawl(existing={"Arijit Singh": "artist:arijit-singh"})
+    out = await watchlist.add_and_resolve(db, display_name="Arijit Singh", created_by="op@x.com",
+                                          crawl=crawl, scheduler=_sched(), svc=_svc())
+    t = out["target"]
+    assert t["status"] == watchlist.WATCHING
+    assert await crawl.canonical_artist_registered(t["canonical_artist_id"]) is True
+
+
+async def test_canonical_integrity_exposes_orphans(db):
+    from artist_intelligence_service import candidates as cand
+    from tests.conftest import seed_obs
+    from datetime import UTC, datetime
+    # a demand observation + candidate referencing an id the registry does not contain
+    seed_obs(db, artist="artist:orphan-x", provider="YOUTUBE", metric="YOUTUBE_SUBSCRIBERS", value=1,
+             observed_at=datetime.now(UTC))
+    cand.upsert_candidate(db, display_name="Orphan X", discovery_source=cand.SRC_EVENT,
+                          discovery_source_id="ev-ox", canonical_artist_id="artist:orphan-x",
+                          status=cand.RESOLVED)
+    report = await watchlist.canonical_integrity(db, crawl=FakeCrawl(registered={"artist:real"}))
+    assert report["registry_available"] is True
+    assert "artist:orphan-x" in report["demand_observations"]["orphans"]
+    assert "artist:orphan-x" in report["candidates"]["orphans"]
+    assert report["orphan_total"] >= 1
+
+
+async def test_provider_only_hint_never_fabricates_canonical(db):
+    # name-only + a channel URL, no existing canonical → stays pending; no canonical, no identity fabricated
+    out = await watchlist.add_and_resolve(db, display_name="Unknown Indie", created_by="op@x.com",
+                                          youtube_hint=CID_URL, crawl=FakeCrawl(), scheduler=_sched(),
+                                          svc=_svc())
+    t = out["target"]
+    assert t["canonical_artist_id"] is None and t["youtube_channel_id"] is None
+    assert t["status"] == watchlist.RESOLUTION_PENDING
+    assert db.execute(select(func.count()).select_from(ArtistExternalIdentity)).scalar_one() == 0
 
 
 async def test_reject_and_reresolve(db):

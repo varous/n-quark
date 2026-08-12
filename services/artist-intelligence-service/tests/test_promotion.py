@@ -24,13 +24,18 @@ from tests.conftest import FakeSignal, candidate
 
 
 class FakeCrawl:
-    """Stands in for the crawl-owned entity path (create/match). Records create calls."""
+    """Stands in for the crawl-owned entity path (create/match). Records create calls.
 
-    def __init__(self, existing: dict[str, str] | None = None):
+    ``registered`` models the authoritative entity-resolution registry: an existing canonical and any
+    id created here are registry-backed; ``canonical_artist_registered`` answers the 5B.1.1 membership
+    check. Pass ``registered={...}`` to model an id that is referenced but NOT in the registry (orphan)."""
+
+    def __init__(self, existing: dict[str, str] | None = None, registered: set[str] | None = None):
         import re
         self._re = re
         self.existing = {self._n(k): v for k, v in (existing or {}).items()}
         self.create_calls: list[str] = []
+        self.registered = set(self.existing.values()) if registered is None else set(registered)
 
     def _n(self, s: str) -> str:
         return self._re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
@@ -42,7 +47,12 @@ class FakeCrawl:
     async def create_artist(self, name, *, provenance=None, source=None):
         self.create_calls.append(name)
         cid = "artist:" + self._re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True}
+        self.registered.add(cid)  # crawl-owned creation registers it → enumerable/acknowledged
+        return {"canonical_entity_id": cid, "entity_type": "ARTIST", "created": True,
+                "registry_registered": True}
+
+    async def canonical_artist_registered(self, cid):
+        return cid in self.registered
 
     async def artists(self, *, limit=200, offset=0):
         return []

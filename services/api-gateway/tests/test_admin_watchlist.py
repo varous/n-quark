@@ -144,6 +144,22 @@ def test_pause_resume_priority(local):
                       json={"priority": 10}).json()["priority"] == 10
 
 
+def test_canonical_integrity_read(local):
+    app.dependency_overrides[get_watchlist_service] = lambda: _svc({
+        f"artist_intelligence:{BASE}/canonical-integrity": {
+            "registry_available": True, "registry_canonical_artists": 64,
+            "watch_targets": {"referenced": 1, "orphans": []},
+            "candidates": {"referenced": 1, "orphans": []},
+            "external_identities": {"referenced": 1, "orphans": []},
+            "demand_observations": {"referenced": 1, "orphans": []},
+            "orphan_total": 0}})
+    r = local.get("/admin/v1/research/watchlist/canonical-integrity")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True and body["orphan_total"] == 0
+    assert body["watch_targets"]["orphans"] == []
+
+
 def test_reads_degrade_when_demand_down(local):
     app.dependency_overrides[get_watchlist_service] = lambda: _svc(
         {}, unavailable={f"artist_intelligence:{BASE}"})

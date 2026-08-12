@@ -73,6 +73,11 @@ def diagnostics(db: Session = Depends(get_db)) -> dict[str, Any]:
     return watchlist.diagnostics(db)
 
 
+@router.get("/canonical-integrity", summary="Canonical-reference integrity audit (5B.1.1)")
+async def canonical_integrity(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return await watchlist.canonical_integrity(db)
+
+
 @router.get("/{target_id}", summary="Watch target detail")
 def target_detail(target_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     target = watchlist.get_target(db, target_id)

@@ -261,19 +261,21 @@ async def resolve_target(db: Session, target: ArtistWatchTarget, *,
         return {"target_id": target.id, "status": target.status, "skipped": True}
 
     detail: dict[str, Any] = dict(target.detail or {})
+    detail.pop("canonical_unverified", None)  # recompute freshly each resolve
     method: str | None = None
+    proposed_cid: str | None = None
+    promote_verified = False   # True when promotion already confirmed registry membership
 
     if target.canonical_artist_id:
-        # operator chose an existing canonical artist → link + onboard (no creation).
+        # Path A — operator chose an existing canonical artist. Verified against the registry below
+        # BEFORE any onboarding; cleared here so an unbacked selection can never leak through.
+        proposed_cid = target.canonical_artist_id
+        target.canonical_artist_id = None
         method = "OPERATOR_SELECTED_CANONICAL"
-        universe.onboard_artist(
-            db, canonical_artist_id=target.canonical_artist_id, display_name=target.display_name,
-            discovery_source=SRC_OPERATOR, source_id=target.id, evidence_class=None,
-            priority=target.priority, scheduler=scheduler, now=now)
     else:
-        # record the operator's instruction as a candidate (one independent discovery source) and run the
-        # existing deterministic promotion — link to an existing canonical, or create only if the existing
-        # evidence rules are met (never from the operator instruction alone).
+        # Path B — record the operator's instruction as a candidate (one independent discovery source) and
+        # run the existing deterministic promotion. Promotion itself now re-confirms registry membership,
+        # so a promoted candidate's canonical id is already registry-backed.
         candidate, _ = cand.upsert_candidate(
             db, display_name=target.display_name, discovery_source=SRC_OPERATOR,
             discovery_source_id=_norm(target.display_name) or target.id,
@@ -283,22 +285,46 @@ async def resolve_target(db: Session, target: ArtistWatchTarget, *,
             provenance={"created_by": target.created_by, "source": target.source}, now=now)
         decision = await promotion.promote(db, candidate, crawl=crawl, scheduler=scheduler, now=now)
         detail["promotion"] = {k: decision.get(k) for k in ("promoted", "method", "reason")}
+        target.canonical_artist_id = None
         if decision.get("promoted"):
-            # the candidate row is the authoritative link target after promote (the returned dict's
-            # canonical id can be None for a freshly-created MULTI_SOURCE artist).
-            target.canonical_artist_id = candidate.canonical_artist_id
+            proposed_cid = candidate.canonical_artist_id
+            promote_verified = True
             method = decision.get("method")
         else:
-            method = "INSUFFICIENT_EVIDENCE"
+            method = decision.get("method") or "INSUFFICIENT_EVIDENCE"
+            if decision.get("proposed_canonical_artist_id"):
+                detail["canonical_unverified"] = {"id": decision["proposed_canonical_artist_id"],
+                                                  "via": decision.get("method")}
 
-    # apply a YouTube hint once a canonical exists (authoritative channels.list verification).
-    if target.canonical_artist_id and target.youtube_hint:
+    # 5B.1.1 canonical-reference invariant: only expose a canonical the crawl registry acknowledges.
+    # WATCHING never references a canonical the owner does not own.
+    verified_cid: str | None = None
+    if proposed_cid:
+        backed = promote_verified or await crawl.canonical_artist_registered(proposed_cid)
+        if backed:
+            verified_cid = proposed_cid
+        else:
+            detail["canonical_unverified"] = {
+                "id": proposed_cid, "via": method,
+                "reason": "not acknowledged by the crawl canonical ARTIST registry"}
+            method = "CANONICAL_NOT_IN_REGISTRY"
+    target.canonical_artist_id = verified_cid
+
+    # onboard a registry-backed canonical into the existing demand pipeline (idempotent).
+    if verified_cid:
+        universe.onboard_artist(
+            db, canonical_artist_id=verified_cid, display_name=target.display_name,
+            discovery_source=SRC_OPERATOR, source_id=target.id, evidence_class=None,
+            priority=target.priority, scheduler=scheduler, now=now)
+
+    # apply a YouTube hint only once a registry-backed canonical exists (authoritative channels.list check).
+    if verified_cid and target.youtube_hint:
         ref = parse_youtube_hint(target.youtube_hint)
         if ref is None:
             detail["youtube_hint"] = {"status": "UNPARSEABLE", "raw": target.youtube_hint}
         else:
             out = await svc.resolve_youtube_from_hint(
-                db, target.canonical_artist_id, ref=ref, display_name=target.display_name)
+                db, verified_cid, ref=ref, display_name=target.display_name)
             detail["youtube_hint"] = {"status": out.get("status"), "reason": out.get("reason"),
                                       "provider_id": out.get("provider_id"), "lookup": out.get("lookup")}
             if out.get("status") == YT_RESOLVED and out.get("provider_id"):
@@ -307,9 +333,9 @@ async def resolve_target(db: Session, target: ArtistWatchTarget, *,
     target.resolution_method = method
     target.detail = detail
     target.last_resolved_at = now
-    # canonical present → WATCHING/AMBIGUOUS (from live identity state); otherwise it was attempted but
-    # lacks sufficient canonical evidence → RESOLUTION_PENDING (never NEW again, never fabricated).
-    target.status = effective_status(db, target) if target.canonical_artist_id else RESOLUTION_PENDING
+    # registry-backed canonical → WATCHING/AMBIGUOUS (from live identity state); otherwise it was attempted
+    # but lacks a registry-backed canonical → RESOLUTION_PENDING (never NEW again, never fabricated).
+    target.status = effective_status(db, target) if verified_cid else RESOLUTION_PENDING
     target.updated_at = now
     # keep the dedup key aligned with a newly-resolved canonical so re-intake stays idempotent.
     new_key = _dedup_key(display_name=target.display_name,
@@ -501,6 +527,62 @@ def diagnostics(db: Session) -> dict[str, Any]:
         "targets_with_canonical_artist": with_canonical,
         "targets_with_verified_youtube_identity": with_verified_youtube,
         "targets_receiving_demand_observations": receiving_demand,
+    }
+
+
+async def canonical_integrity(db: Session, *, crawl: CrawlServiceClient | None = None) -> dict[str, Any]:
+    """Audit every artist-intel canonical reference against the authoritative crawl registry (5B.1.1).
+
+    Read-only. Reports ids referenced by watch targets / candidates / external identities / demand
+    observations that the crawl entity-resolution registry does NOT acknowledge — orphans. After 5B.1.1
+    the watchlist only ever exposes registry-backed canonicals, so `watch_targets.orphans` should stay
+    empty; the rest is surfaced for ongoing auditability and owner-side reconciliation, never rewritten."""
+    from artist_intelligence_service.models import (
+        ArtistCandidate,
+        ArtistDemandObservation,
+        ArtistExternalIdentity,
+    )
+    crawl = crawl or CrawlServiceClient()
+    registry: set[str] = set()
+    available = True
+    try:
+        offset = 0
+        for _ in range(20):  # bounded pages
+            rows = await crawl.artists(limit=200, offset=offset)
+            if not rows:
+                break
+            for r in rows:
+                cid = r.get("canonical_entity_id") or r.get("canonical_artist_id") or r.get("id")
+                if cid:
+                    registry.add(cid)
+            if len(rows) < 200:
+                break
+            offset += 200
+    except Exception:  # noqa: BLE001 — a crawl outage degrades safely (cannot audit right now)
+        available = False
+
+    def _refs(col) -> set[str]:
+        return set(db.execute(select(func.distinct(col)).where(col.is_not(None))).scalars())
+
+    wt = _refs(ArtistWatchTarget.canonical_artist_id)
+    cd = _refs(ArtistCandidate.canonical_artist_id)
+    idn = set(db.execute(select(func.distinct(ArtistExternalIdentity.canonical_artist_id))).scalars())
+    ob = set(db.execute(select(func.distinct(ArtistDemandObservation.canonical_artist_id))).scalars())
+
+    def _orphans(s: set[str]) -> list[str]:
+        return sorted(s - registry) if available else []
+
+    all_orphans = set(_orphans(wt)) | set(_orphans(cd)) | set(_orphans(idn)) | set(_orphans(ob))
+    return {
+        "registry_available": available,
+        "registry_canonical_artists": len(registry) if available else None,
+        "watch_targets": {"referenced": len(wt), "orphans": _orphans(wt)},
+        "candidates": {"referenced": len(cd), "orphans": _orphans(cd)},
+        "external_identities": {"referenced": len(idn), "orphans": _orphans(idn)},
+        "demand_observations": {"referenced": len(ob), "orphans": _orphans(ob)},
+        "orphan_total": len(all_orphans),
+        "note": "canonical ids referenced by artist-intelligence but not acknowledged by the crawl "
+                "registry; auditable, never silently rewritten (Phase 5B.1.1).",
     }
 
 

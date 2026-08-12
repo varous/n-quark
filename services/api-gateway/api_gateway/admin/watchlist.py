@@ -59,6 +59,12 @@ class WatchlistAdminService:
             return {"available": False}
         return {"available": True, **(r.data or {})}
 
+    async def canonical_integrity(self) -> dict[str, Any]:
+        r = await self.gw.get(DEMAND, f"{BASE}/canonical-integrity")
+        if not r.ok:
+            return {"available": False}
+        return {"available": True, **(r.data or {})}
+
     async def get_target(self, target_id: str) -> dict[str, Any]:
         return self._unwrap(await self.gw.get(DEMAND, f"{BASE}/{target_id}"))
 

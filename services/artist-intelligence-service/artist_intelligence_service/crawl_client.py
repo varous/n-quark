@@ -78,6 +78,25 @@ class CrawlServiceClient:
             offset += 200
         return None
 
+    async def canonical_artist_registered(self, canonical_artist_id: str) -> bool:
+        """Authoritative, UNCACHED membership check (Phase 5B.1.1): does the crawl entity-resolution
+        registry acknowledge this canonical ARTIST id?
+
+        Returns True only when ``/entities/ARTIST/{id}`` exists — i.e. there is an entity-resolution
+        registry row for it. A graph-only node with no registry row returns 404 → False, so this never
+        treats an artist-intel reference (or a bare graph node) as canonical ownership. A provider/network
+        failure raises (surfaced to the caller) — a transient outage must never look like "not
+        registered", so the caller can fail closed (leave the target pending, retry later)."""
+        if not canonical_artist_id:
+            return False
+        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+            resp = await client.get(
+                f"{self.base_url}/v1/internal/entity-resolution/entities/ARTIST/{canonical_artist_id}")
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     async def create_artist(self, canonical_name: str, *, provenance: dict[str, Any] | None = None,
                             source: str | None = None) -> dict[str, Any]:
         """Create/match a canonical ARTIST through the crawl-owned governance path (5A.3.1). The demand
