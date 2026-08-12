@@ -206,3 +206,25 @@ by **Google Workspace OIDC**. See `docs/deployment.md` for the deploy runbook.
   (`min_machines_running=1`, `auto_stop_machines=false` in `deploy/fly/admin-console.toml`) so the console
   answers with no cold start; extra machines still auto-start under load. No collection-service machine
   config is affected.
+
+## Research configuration — Artist watchlists (Phase 5B.1)
+
+The console is operationally read-only with **one deliberate exception**: RESEARCH CONFIGURATION. An
+operator can add artists to a research watchlist (`Artists · Watchlist`) so the system starts trying to
+observe them — no canonical id, YouTube id, SQL, or curl.
+
+- **A watch target is not a canonical artist.** Adding one records a durable research *instruction*;
+  n-quark then links it to an existing canonical (deterministic name match) or promotes it through the
+  existing evidence rules. An operator instruction is a single independent discovery source, so a lone
+  name with no existing canonical stays *pending* — canonical identity is never fabricated. Resolved
+  targets flow into the existing demand pipeline (identity discovery → verification → catalogue → recurring
+  demand). Pausing a target suspends its recurring collection without deleting history.
+- **YouTube URLs are hints, not proof.** A pasted channel / `@handle` / video URL reduces resolution
+  ambiguity but is still confirmed by the authoritative channels.list check before an identity resolves.
+  External YouTube HTTP stays in signal-service (the single ingestion path).
+- **Controlled-write boundary.** The write surface is `POST/GET /admin/v1/research/watchlist…`, kept
+  structurally separate from the canonical/admin mutation routes. It is gated by
+  `ADMIN_RESEARCH_CONFIG_ENABLED` (true on the console), requires the authenticated Workspace principal
+  (VIEWER), records `created_by`, and is audited. It **cannot** mutate canonical entities, observations,
+  graph nodes, provider observations, resolution outcomes, or event/historical state — those remain
+  read-only. Unauthenticated → 401; disabled → 503.

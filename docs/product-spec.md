@@ -1184,3 +1184,26 @@ posture from "authenticated" to "cryptographically authenticated" before the pub
   local data path); and it visibly identifies itself as the production, read-only environment so it can
   never be mistaken for a development surface. Session material is an httpOnly, secure, same-site cookie;
   no secret or token is ever exposed to the browser.
+
+# Delivered — Operator artist intake & research watchlists (Phase 5B.1)  `[CURRENT]`
+
+_Appended 2026-08-12. Additive record; append-only like the rest of this MCP. First slice of Phase 5B
+(Market Coverage & Sensing): the operator can now expand what the observatory watches._
+
+- **The operator directs coverage without touching identity `[INVARIANT]`** — an authenticated operator
+  can say "start watching this artist" (by name, by choosing an existing canonical artist, or by pasting a
+  YouTube URL, singly or in bulk) without a canonical id, a channel id, SQL, or provider knowledge. This
+  records a **research instruction (a watch target), which is not a canonical artist and never creates one**
+  on its own. The system attempts to link the target to an existing canonical, or to promote it through the
+  **existing candidate/evidence rules**; a single operator instruction is one independent source, so a name
+  lacking corroborating evidence stays pending rather than being fabricated. Resolved targets flow into the
+  existing demand pipeline; nothing bypasses the entity/graph ownership of canonical identity.
+- **A pasted link is a hint, not proof `[INVARIANT]`** — a YouTube channel / handle / video URL reduces
+  resolution ambiguity, but a syntactically valid URL is never treated as verification: the channel it
+  points to is confirmed by the authoritative provider existence check before any identity resolves, and
+  external YouTube access stays on the single existing ingestion path.
+- **Research configuration is the one controlled write `[INVARIANT]`** — creating, prioritising, pausing,
+  and resuming watch targets is the only mutation the production console permits, and it is kept structurally
+  separate from (and does not enable) any canonical, observation, graph, provider-observation, resolution,
+  or historical-state mutation. It is authenticated with the same Workspace identity, records who made each
+  change, and is audited. Pausing suspends future collection for a target without deleting past history.

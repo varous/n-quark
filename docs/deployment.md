@@ -78,6 +78,14 @@ curl -s -o /dev/null -w '%{http_code}\n' https://nquark-admin.fly.dev/v1/platfor
 requires the console's read-only VIEWER principal — unauthenticated returns **401**, not a public topology
 dump. Only the plain `/health` liveness probe stays public (that is what the Fly health check hits).
 
+**Research configuration (Phase 5B.1).** `NQUARK_ADMIN_RESEARCH_CONFIG_ENABLED=true` on `nquark-admin`
+enables the one narrow authenticated write — artist watch targets (`/admin/v1/research/watchlist`). It is
+independent of `NQUARK_ADMIN_OPERATIONAL_ACTIONS_ENABLED` (which stays false): research configuration
+never touches canonical/observation/graph state. Deploying 5B.1 touches **signal-service** (adds
+acquisition-only handle/video → channel resolution), **artist-intelligence-service** (adds the watch-target
+table via migration 003, applied on boot), and **nquark-admin** (BFF + frontend). It does not touch the
+crawl→graph→observation collection spine.
+
 Cloud pipeline deployment is unchanged — the console is an additive, separate app.
 
 ## Running the local dashboard
