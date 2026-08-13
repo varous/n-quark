@@ -280,10 +280,14 @@ class AdminService:
         node = await self.gw.get(GRAPH, f"/v1/graph/nodes/{event_id}")
         neigh = await self.gw.get(GRAPH, f"/v1/graph/nodes/{event_id}/neighbors", params={"direction": "out"})
         resolved = await self.gw.get(CRAWL, f"/v1/internal/events/{event_id}/resolved-entities")
+        interp = await self.gw.get(CRAWL, f"/v1/internal/events/{event_id}/interpreted-entities")
         recs = await self.gw.get(CRAWL, f"/v1/internal/events/{event_id}/source-records")
         props = (node.data or {}).get("properties", {}) if node.ok else {}
         return {
             "canonical_event_id": event_id,
+            # 5B.2.5 — integrity-projected relationships: the honest venue/artist/organizer states
+            # (quarantined/placeholder never presented as a link). The frontend leads with this.
+            "interpreted": (interp.data or {}) if interp.ok else None,
             "current_view": {
                 "title": props.get("display_name"), "starts_at": props.get("starts_at"),
                 "city": props.get("city"), "organizer": props.get("organizer"),
@@ -341,6 +345,13 @@ class AdminService:
         manifest. Read-only; degrades gracefully."""
         r = await self.gw.get(CRAWL, "/v1/internal/entity-resolution/quality-audit",
                               params={"limit": limit})
+        if not r.ok:
+            return {"available": False}
+        return {"available": True, **(r.data or {})}
+
+    async def quality_metrics(self) -> dict[str, Any]:
+        """Live integrity-flow metrics (5B.2.5). Read-only; degrades gracefully."""
+        r = await self.gw.get(CRAWL, "/v1/internal/entity-resolution/quality-metrics")
         if not r.ok:
             return {"available": False}
         return {"available": True, **(r.data or {})}

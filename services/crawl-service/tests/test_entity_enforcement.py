@@ -129,3 +129,42 @@ async def test_established_same_type_not_suppressed_by_cross_type(session_factor
     with session_factory() as s:
         venues = s.query(EntityResolutionCandidate).filter_by(entity_type="VENUE", raw_name="Multi Hall").all()
     assert any(v.resolution_status == R.RESOLVED and v.candidate_canonical_entity_id for v in venues)
+
+
+@pytest.mark.asyncio
+async def test_interpreted_event_venue_not_announced_after_quarantine(session_factory):
+    node, nb = _event_node([_venue("Real Hall"), _feat("Real Artist")])
+    svc = _svc(session_factory, node, nb)
+    await svc.resolve_event(canonical_event_id="event:1", source="boshow", source_record_id="r1")
+    with session_factory() as s:
+        cid = s.query(EntityResolutionCandidate).filter_by(entity_type="VENUE").first().candidate_canonical_entity_id
+    # before: venue PRESENT
+    rel = svc.interpreted_relationships("event:1")
+    assert rel["venue"]["state"] == "PRESENT" and rel["venue"]["canonical_entity_id"] == cid
+    # quarantine → venue reads NOT_ANNOUNCED, no canonical, raw preserved
+    svc.quarantine_canonical(cid, reason="placeholder", actor="op@x.com")
+    rel2 = svc.interpreted_relationships("event:1")
+    assert rel2["venue"]["state"] == "NOT_ANNOUNCED"
+    assert rel2["venue"]["canonical_entity_id"] is None
+    assert "Real Hall" in rel2["venue"]["raw_mentions"]      # raw source evidence preserved
+
+
+@pytest.mark.asyncio
+async def test_interpreted_event_role_conflict_needs_review(session_factory):
+    await _svc(session_factory, *_event_node([_venue("Skinny Mos")])).resolve_event(
+        canonical_event_id="event:v", source="boshow", source_record_id="rv")
+    svc = _svc(session_factory, *_event_node([_feat("Skinny Mos")]))
+    await svc.resolve_event(canonical_event_id="event:a", source="district", source_record_id="ra")
+    rel = svc.interpreted_relationships("event:a")
+    assert rel["artists"]["needs_review_count"] == 1
+    assert rel["artists"]["resolved_count"] == 0            # no fake canonical link
+
+
+@pytest.mark.asyncio
+async def test_quality_metrics_counts_flow(session_factory):
+    await _svc(session_factory, *_event_node([_venue("Venue to be announced"),
+              _feat("Anuv Jain, Prateek Kuhad, Hanumankind")])).resolve_event(
+        canonical_event_id="event:1", source="boshow", source_record_id="r1")
+    m = EntityResolutionService(session_factory, FakeGraphReader(None, []), FakeGraphWriter()).quality_metrics()
+    assert m["flow"]["compound_split"] >= 2                 # the two split artists
+    assert m["interpretation_method"] == "deterministic" and m["ai_adjudicated"] == 0

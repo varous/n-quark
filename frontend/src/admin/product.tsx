@@ -406,6 +406,9 @@ export function DataQuality() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const metrics = useAsync(() => api.dataQualityMetrics(), [tick]);
+  const review = useAsync(() => api.dataQualityReview(), [tick]);
+
   async function correct(item: DataQualityItem, action: string) {
     setBusy(item.canonical_entity_id + action);
     setMsg(null);
@@ -413,6 +416,19 @@ export function DataQuality() {
       await api.dataQualityCorrect({ action, canonical_entity_id: item.canonical_entity_id,
         reason: `operator ${action} from Data Quality` });
       setMsg(`${action.replace(/_/g, " ").toLowerCase()} applied to “${item.name}”.`);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    } finally { setBusy(null); }
+  }
+
+  async function correctCandidate(candidateId: string, action: string, label: string) {
+    setBusy(candidateId + action);
+    setMsg(null);
+    try {
+      await api.dataQualityCorrect({ action, candidate_id: candidateId,
+        reason: `operator ${action} from review queue` });
+      setMsg(`${label} applied.`);
       reload();
     } catch (e) {
       setMsg(e instanceof ApiError ? e.message : String(e));
@@ -462,6 +478,59 @@ export function DataQuality() {
             </div>
           )}
           <p className="mt-3 text-xs text-slate-600">{data.note}</p>
+
+          {/* live review queue — mentions the gate flagged, with context-sensitive governed actions */}
+          <div className="mt-8">
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">Needs review <span className="text-slate-500">({review.data?.count ?? 0})</span></h3>
+            {(review.data?.items?.length ?? 0) === 0 ? (
+              <p className="text-sm text-slate-500">No live review items — every recent mention resolved cleanly.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {(review.data?.items ?? []).map((it, i) => {
+                  const cid = String(it.candidate_id ?? "");
+                  const cls = String(it.problem_class ?? "");
+                  return (
+                    <Card key={cid || i}>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium text-slate-100">{String(it.raw_name ?? "")}</span>
+                            <span className="text-xs text-slate-500">source called it {String(it.expected_role ?? it.entity_type ?? "?").toLowerCase()}</span>
+                            <Chip label={cls === "ROLE_CONFLICT" ? "Possible wrong type" : cls === "REVIEW_REQUIRED" ? "Ambiguous — needs review" : cls} tone="amber" />
+                          </div>
+                          <div className="mt-0.5 text-xs text-slate-500">{String(it.source ?? "")}{it.reason ? ` · ${String(it.reason)}` : ""}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {cls === "ROLE_CONFLICT" && (
+                            <button disabled={!!busy} onClick={() => correctCandidate(cid, "CONFIRM_MULTI_ROLE", "Confirm dual-role")}
+                              className="rounded-md border border-emerald-800/60 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50">Confirm dual-role</button>
+                          )}
+                          <button disabled={!!busy} onClick={() => correctCandidate(cid, "REQUEUE_RESOLUTION", "Re-run resolution")}
+                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50">Re-run</button>
+                          <button disabled={!!busy} onClick={() => correctCandidate(cid, "REJECT_MATCH", "Reject match")}
+                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-50">Reject</button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* live integrity-flow metrics */}
+          {metrics.data && metrics.data.available !== false && (
+            <div className="mt-8">
+              <h3 className="mb-2 text-sm font-semibold text-slate-200">Quality metrics</h3>
+              <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <Card><div className="text-lg font-semibold text-slate-100">{metrics.data.mentions_processed ?? 0}</div><div className="text-xs text-slate-500">Mentions processed</div></Card>
+                <Card><div className="text-lg font-semibold text-slate-100">{metrics.data.flow?.placeholder_suppressed ?? 0}</div><div className="text-xs text-slate-500">Placeholders suppressed</div></Card>
+                <Card><div className="text-lg font-semibold text-slate-100">{metrics.data.flow?.compound_split ?? 0}</div><div className="text-xs text-slate-500">Compound split</div></Card>
+                <Card><div className="text-lg font-semibold text-amber-300">{metrics.data.open_review_items ?? 0}</div><div className="text-xs text-slate-500">Open review items</div></Card>
+              </div>
+              <p className="mt-2 text-xs text-slate-600">Interpretation method: {metrics.data.interpretation_method ?? "deterministic"} · {metrics.data.operator_corrected ?? 0} operator-corrected.</p>
+            </div>
+          )}
         </>
       )}
     </Section>

@@ -132,6 +132,7 @@ export const api = {
   marketMovement: () => req<MarketMovement>("/market/movement"),
   dataQuality: () => req<DataQualityAudit>("/data-quality"),
   dataQualityReview: () => req<{ available: boolean; count?: number; by_class?: Record<string, number>; items?: Array<Record<string, unknown>> }>("/data-quality/review-queue"),
+  dataQualityMetrics: () => req<{ available: boolean; mentions_processed?: number; flow?: Record<string, number>; open_review_items?: number; oldest_review_age_hours?: number | null; operator_corrected?: number; interpretation_method?: string; by_type?: Record<string, Record<string, number>> }>("/data-quality/metrics"),
   dataQualityCorrect: (body: { action: string; canonical_entity_id?: string; candidate_id?: string; reason?: string }) =>
     req<Record<string, unknown>>("/data-quality/correct", { method: "POST", body: JSON.stringify(body) }),
   // ---- research watchlist (Phase 5B.1; controlled write: research configuration) ----
@@ -175,9 +176,17 @@ export type EventRow = {
   state_count: number; transition_count: number; capture_gap_hours: number | null;
   enrichment_status: string | null; resolution_status: string | null; stale: boolean;
 };
+export type InterpretedRelationships = {
+  canonical_event_id: string;
+  artists: { resolved: Array<Record<string, unknown>>; resolved_count: number; needs_review: Array<Record<string, unknown>>; needs_review_count: number; unresolved_mentions: Array<Record<string, unknown>> };
+  venue: { state: string; canonical_entity_id: string | null; raw_mentions: string[] };
+  organizer: { state: string; canonical_entity_id: string | null; raw_mentions: string[] };
+  note?: string;
+};
 export type EventDetail = {
   canonical_event_id: string; current_view: Record<string, unknown>;
   relationships: Rel[]; resolved_entities: EntitySummary[]; source_records: Array<Record<string, unknown>>;
+  interpreted?: InterpretedRelationships | null;
   available: boolean;
 };
 export type Rel = { relationship: string; canonical_target: string; target_name: string | null; target_type: string; confidence: number | null; resolution_status: string | null };

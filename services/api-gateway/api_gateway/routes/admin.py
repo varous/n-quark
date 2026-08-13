@@ -300,6 +300,12 @@ async def data_quality_review(_: auth.Principal = Depends(auth.require_viewer),
     return await svc.review_queue()
 
 
+@router.get("/data-quality/metrics")
+async def data_quality_metrics(_: auth.Principal = Depends(auth.require_viewer),
+                               svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
+    return await svc.quality_metrics()
+
+
 # Governed data-quality correction — the one narrow canonical-interpretation write. Authenticated
 # (Workspace), flag-gated (reuses the research-config controlled-write capability), records the operator,
 # audited. No arbitrary canonical CRUD; kept separate from the read surface.

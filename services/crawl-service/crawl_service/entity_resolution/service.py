@@ -443,6 +443,74 @@ class EntityResolutionService:
             ).scalars().all()
         return {"canonical_event_id": event_id, "entities": [self._row_summary(r) for r in rows]}
 
+    def interpreted_relationships(self, event_id: str) -> dict[str, Any]:
+        """Integrity-projected Event relationships (5B.2.5). A quarantined/placeholder mention is NEVER
+        presented as a legitimate linked entity — the venue reads NOT_ANNOUNCED (raw source preserved);
+        review/role-conflict mentions read NEEDS_REVIEW; only RESOLVED canonicals are real links. The
+        frontend consumes this rather than inferring integrity from graph edges or display strings."""
+        with self._sf() as s:
+            rows = s.execute(
+                select(EntityResolutionCandidate).where(
+                    EntityResolutionCandidate.canonical_event_id == event_id)).scalars().all()
+
+        def _mention(r: EntityResolutionCandidate) -> dict[str, Any]:
+            return {"candidate_id": r.id, "raw_name": r.raw_name, "source": r.source,
+                    "status": r.resolution_status, "reason": r.reason_code,
+                    "canonical_entity_id": r.candidate_canonical_entity_id}
+
+        def _bucket(r: EntityResolutionCandidate) -> str:
+            st = r.resolution_status
+            if st in (R.RESOLVED, R.POSSIBLE_MATCH) and r.candidate_canonical_entity_id:
+                return "RESOLVED"
+            if st in (R.PLACEHOLDER, R.QUARANTINED):
+                return "SUPPRESSED"      # absence marker / repaired bad canonical — not a real link
+            if st in (R.REVIEW_REQUIRED, R.ROLE_CONFLICT, R.AMBIGUOUS):
+                return "NEEDS_REVIEW"
+            return "UNRESOLVED"
+
+        artists = {"resolved": [], "needs_review": [], "unresolved_mentions": []}
+        venue = {"state": "NOT_PROVIDED", "canonical_entity_id": None, "raw_mentions": []}
+        organizer = {"state": "NOT_PROVIDED", "canonical_entity_id": None, "raw_mentions": []}
+
+        def _single(slot: dict[str, Any], r: EntityResolutionCandidate, bucket: str) -> None:
+            slot["raw_mentions"].append(r.raw_name)
+            rank = {"RESOLVED": 3, "NEEDS_REVIEW": 2, "SUPPRESSED": 1, "UNRESOLVED": 0}
+            cur = {"PRESENT": 3, "NEEDS_REVIEW": 2, "NOT_ANNOUNCED": 1, "NOT_PROVIDED": 0}.get(slot["state"], 0)
+            new_state = {"RESOLVED": "PRESENT", "NEEDS_REVIEW": "NEEDS_REVIEW",
+                         "SUPPRESSED": "NOT_ANNOUNCED", "UNRESOLVED": "NOT_PROVIDED"}[bucket]
+            if rank[bucket] >= cur:
+                slot["state"] = new_state
+                slot["canonical_entity_id"] = r.candidate_canonical_entity_id if bucket == "RESOLVED" else None
+
+        for r in rows:
+            b = _bucket(r)
+            if r.entity_type == ARTIST:
+                if b == "RESOLVED":
+                    artists["resolved"].append(_mention(r))
+                elif b == "NEEDS_REVIEW":
+                    artists["needs_review"].append(_mention(r))
+                elif b == "UNRESOLVED":
+                    artists["unresolved_mentions"].append(_mention(r))
+                # SUPPRESSED artists (placeholder) are dropped from product (raw kept in the mention row)
+            elif r.entity_type == VENUE:
+                _single(venue, r, b)
+            elif r.entity_type == ORGANIZER:
+                _single(organizer, r, b)
+
+        return {
+            "canonical_event_id": event_id,
+            "artists": {
+                "resolved": artists["resolved"],
+                "resolved_count": len(artists["resolved"]),
+                "needs_review": artists["needs_review"],
+                "needs_review_count": len(artists["needs_review"]),
+                "unresolved_mentions": artists["unresolved_mentions"]},
+            "venue": venue,
+            "organizer": organizer,
+            "note": "integrity-projected: quarantined/placeholder mentions are never exposed as canonical "
+                    "links; raw source values are preserved for evidence.",
+        }
+
     def cross_inventory(self, *, entity_type: str = ARTIST, limit: int = 50) -> dict[str, Any]:
         """Minimal proof that platform-exclusive events converge through shared entities: canonical
         entities carrying events from more than one source."""
@@ -653,6 +721,70 @@ class EntityResolutionService:
                 "created_at": _iso(_aware(c.created_at)), "evidence": interp})
         return {"count": len(items), "by_class": counts, "items": items,
                 "note": "live interpretation-gated mentions awaiting review; no canonical was created."}
+
+    def quality_metrics(self) -> dict[str, Any]:
+        """Live integrity-flow metrics (5B.2.5): interpretation outcomes across all mentions, by type +
+        source, plus open review items, oldest review age, and recent corrections. No fabricated trends."""
+        now = datetime.now(UTC)
+        with self._sf() as s:
+            rows = s.execute(
+                select(EntityResolutionCandidate.entity_type, EntityResolutionCandidate.resolution_status,
+                       EntityResolutionCandidate.source, EntityResolutionCandidate.evidence,
+                       EntityResolutionCandidate.raw_name, EntityResolutionCandidate.updated_at)).all()
+
+        def _flow(st: str, ev: dict) -> str:
+            interp = (ev or {}).get("interpretation") or {}
+            if st in (R.RESOLVED, R.POSSIBLE_MATCH):
+                return "resolved"
+            if st == R.PLACEHOLDER:
+                return "placeholder_suppressed"
+            if st == R.QUARANTINED:
+                return "quarantined"
+            if st == R.ROLE_CONFLICT:
+                return "role_conflict"
+            if st == R.REVIEW_REQUIRED:
+                return "ambiguous_compound" if interp.get("state") == "AMBIGUOUS_COMPOUND" else "review_required"
+            if st == R.AMBIGUOUS:
+                return "ambiguous"
+            return "unresolved"
+
+        flow: dict[str, int] = {}
+        by_type: dict[str, dict[str, int]] = {}
+        by_source: dict[str, dict[str, int]] = {}
+        compound_split = clean_single = corrected = open_review = 0
+        oldest_age_h: float | None = None
+        recently: list[dict[str, Any]] = []
+        for etype, st, src, ev, raw, upd in rows:
+            b = _flow(st, ev or {})
+            flow[b] = flow.get(b, 0) + 1
+            by_type.setdefault(etype, {})[b] = by_type.setdefault(etype, {}).get(b, 0) + 1
+            by_source.setdefault(src, {})[b] = by_source.setdefault(src, {}).get(b, 0) + 1
+            if (ev or {}).get("split_from"):
+                compound_split += 1
+            elif b == "resolved":
+                clean_single += 1
+            corrs = (ev or {}).get("corrections")
+            if corrs:
+                corrected += 1
+                last = corrs[-1]
+                recently.append({"name": raw, "action": last.get("action"), "actor": last.get("actor"),
+                                 "at": last.get("at")})
+            if st in (R.REVIEW_REQUIRED, R.ROLE_CONFLICT):
+                open_review += 1
+                if upd is not None:
+                    age = (now - _aware(upd)).total_seconds() / 3600.0
+                    oldest_age_h = age if oldest_age_h is None else max(oldest_age_h, age)
+        recently.sort(key=lambda r: r.get("at") or "", reverse=True)
+        return {
+            "mentions_processed": sum(flow.values()),
+            "flow": {"clean_single": clean_single, "compound_split": compound_split, **flow},
+            "by_type": by_type, "by_source": by_source,
+            "open_review_items": open_review,
+            "oldest_review_age_hours": round(oldest_age_h, 1) if oldest_age_h is not None else None,
+            "operator_corrected": corrected, "ai_adjudicated": 0,
+            "recently_corrected": recently[:10],
+            "interpretation_method": "deterministic",  # AI adjudicator disabled
+        }
 
     def quarantine_canonical(self, canonical_entity_id: str, *, reason: str, actor: str,
                              now: datetime | None = None) -> dict[str, Any]:

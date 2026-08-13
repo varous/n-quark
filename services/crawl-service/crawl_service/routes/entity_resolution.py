@@ -56,6 +56,11 @@ def quality_audit(
     return svc.quality_audit(limit=limit)
 
 
+@router.get("/quality-metrics", summary="Live integrity-flow metrics (internal, 5B.2.5)")
+def quality_metrics(svc: EntityResolutionService = Depends(get_entity_resolution_service)) -> dict[str, Any]:
+    return svc.quality_metrics()
+
+
 @router.get("/review-queue", summary="Live interpretation review items (internal, 5B.2.4)")
 def review_queue(
     limit: int = Query(default=100, ge=1, le=500),
@@ -149,3 +154,12 @@ def resolved_entities(
     svc: EntityResolutionService = Depends(get_entity_resolution_service),
 ) -> dict[str, Any]:
     return svc.resolved_entities(event_id)
+
+
+@events_router.get("/{event_id}/interpreted-entities",
+                   summary="Integrity-projected Event relationships (internal, 5B.2.5)")
+def interpreted_entities(
+    event_id: str,
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    return svc.interpreted_relationships(event_id)

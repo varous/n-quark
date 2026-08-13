@@ -87,3 +87,34 @@ def test_review_queue_read(monkeypatch):
         body = c.get("/admin/v1/data-quality/review-queue").json()
     assert body["available"] is True and body["count"] == 1
     app.dependency_overrides.clear()
+
+
+def test_metrics_read(monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_enabled", True)
+    monkeypatch.setattr(settings, "admin_local_mode", True)
+    app.dependency_overrides[get_admin_service] = lambda: _svc({
+        "crawl:/v1/internal/entity-resolution/quality-metrics": {
+            "mentions_processed": 520, "flow": {"placeholder_suppressed": 2, "compound_split": 5},
+            "open_review_items": 3, "interpretation_method": "deterministic"}})
+    with TestClient(app) as c:
+        body = c.get("/admin/v1/data-quality/metrics").json()
+    assert body["available"] is True and body["mentions_processed"] == 520
+    assert body["interpretation_method"] == "deterministic"
+    app.dependency_overrides.clear()
+
+
+def test_event_detail_includes_interpreted(monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_enabled", True)
+    monkeypatch.setattr(settings, "admin_local_mode", True)
+    ev = "event:x"
+    app.dependency_overrides[get_admin_service] = lambda: _svc({
+        f"graph:/v1/graph/nodes/{ev}": {"properties": {"display_name": "Show"}},
+        f"crawl:/v1/internal/events/{ev}/interpreted-entities": {
+            "venue": {"state": "NOT_ANNOUNCED", "canonical_entity_id": None, "raw_mentions": ["Venue to be announced"]},
+            "artists": {"resolved": [], "resolved_count": 0, "needs_review": [], "needs_review_count": 0, "unresolved_mentions": []},
+            "organizer": {"state": "NOT_PROVIDED", "canonical_entity_id": None, "raw_mentions": []}}})
+    with TestClient(app) as c:
+        body = c.get(f"/admin/v1/events/{ev}").json()
+    assert body["interpreted"]["venue"]["state"] == "NOT_ANNOUNCED"
+    assert body["interpreted"]["venue"]["canonical_entity_id"] is None
+    app.dependency_overrides.clear()

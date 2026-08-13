@@ -35,11 +35,56 @@ export function EventDetail({ id }: { id: string }) {
   );
 }
 
+function EventIntegrity({ it }: { it: NonNullable<Awaited<ReturnType<typeof api.eventDetail>>["interpreted"]> }) {
+  const venueCopy: Record<string, string> = {
+    PRESENT: "", NOT_ANNOUNCED: "Venue not announced", NEEDS_REVIEW: "Venue identity needs review",
+    NOT_PROVIDED: "Venue not provided",
+  };
+  const orgCopy: Record<string, string> = {
+    PRESENT: "", NOT_ANNOUNCED: "Organizer not announced", NEEDS_REVIEW: "Organizer identity needs review",
+    NOT_PROVIDED: "Organizer not identified",
+  };
+  const A = it.artists;
+  return (
+    <Card title="Who & where">
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-slate-500">Artists</dt>
+          <dd className="mt-1 text-slate-200">
+            {A.resolved_count > 0 ? `${A.resolved_count} identified` : "None identified yet"}
+            {A.needs_review_count > 0 && <span className="ml-1 text-amber-300">· {A.needs_review_count} need{A.needs_review_count === 1 ? "s" : ""} review</span>}
+          </dd>
+          {A.resolved.slice(0, 6).map((a, i) => (
+            <div key={i} className="mt-0.5 truncate text-xs text-slate-400">{String(a.raw_name ?? a.canonical_entity_id)}</div>
+          ))}
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-slate-500">Venue</dt>
+          <dd className={`mt-1 ${it.venue.state === "PRESENT" ? "text-slate-200" : "text-slate-400"}`}>
+            {it.venue.state === "PRESENT" ? String(it.venue.raw_mentions[0] ?? it.venue.canonical_entity_id) : venueCopy[it.venue.state]}
+          </dd>
+          {it.venue.state !== "PRESENT" && it.venue.raw_mentions.length > 0 && (
+            <div className="mt-0.5 text-xs text-slate-600">Source said: “{it.venue.raw_mentions[0]}”</div>
+          )}
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-slate-500">Organizer</dt>
+          <dd className={`mt-1 ${it.organizer.state === "PRESENT" ? "text-slate-200" : "text-slate-400"}`}>
+            {it.organizer.state === "PRESENT" ? String(it.organizer.raw_mentions[0] ?? it.organizer.canonical_entity_id) : orgCopy[it.organizer.state]}
+          </dd>
+        </div>
+      </dl>
+    </Card>
+  );
+}
+
 function CurrentView({ d }: { d: Awaited<ReturnType<typeof api.eventDetail>> }) {
   const { open } = useDrawer();
   const cv = d.current_view;
   const fields = ["title", "starts_at", "city", "organizer", "price_min", "currency", "fill_ratio", "source"];
   return (
+    <div className="space-y-4">
+    {d.interpreted && <EventIntegrity it={d.interpreted} />}
     <Card title="Current resolved view" right={<Badge label={String(cv.epistemic ?? "Observed")} />}>
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
         {fields.map((f) => (
@@ -53,6 +98,7 @@ function CurrentView({ d }: { d: Awaited<ReturnType<typeof api.eventDetail>> }) 
         Provenance
       </button>
     </Card>
+    </div>
   );
 }
 
