@@ -1246,3 +1246,20 @@ quality-aware so the market-observatory data is trustworthy._
   scored opinion, and must still clear the existing crawl-owned governance thresholds; it can never directly
   create canonical truth, and when no provider is configured the deterministic pipeline plus a review queue
   handle resolution unchanged.
+
+# Delivered — Interpretation enforcement & governed corrections (Phase 5B.2.4)  `[CURRENT]`
+
+_Appended 2026-08-12. Additive record; append-only. It makes the 5B.2.3 interpretation binding and gives
+the operator a safe, audited way to correct canonical interpretation._
+
+- **Interpretation gates canonical creation `[INVARIANT]`** — no mention may create or match a canonical
+  while its interpretation is unresolved: a placeholder is suppressed, a confidently-compound string is
+  split into independent mentions (never a combined canonical), and an ambiguous compound or a new
+  cross-type/role collision is held for review. An established same-type canonical still resolves normally,
+  so legitimate dual-role identities are never suppressed.
+- **Canonical corrections are governed, audited, and non-destructive `[INVARIANT]`** — an operator may
+  suppress a bad canonical or confirm/adjudicate a flagged mention only through a narrow, authenticated,
+  audited action set (no arbitrary create/edit/delete/merge). Suppression quarantines rather than deletes:
+  the source evidence and history are always preserved, and every correction records who did it, when, the
+  previous and new state, and why. Known-invalid canonicals are excluded from product lists and search but
+  remain inspectable under Advanced.

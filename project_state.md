@@ -1,6 +1,46 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.2 increment 3 — entity integrity). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-12 (Phase 5B.2 increment 4 — integrity enforcement). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 4 — integrity enforcement + governed corrections (2026-08-12, DEPLOYED)
+
+Closed the integrity loop: detection → **enforcement → review → governed correction → safe historical
+repair**. No schema migration (new states live in the existing `resolution_status` column + `evidence` JSON).
+
+- **Resolver gate**: `resolve_event` now consumes interpretation before any canonical create/match.
+  Placeholder → suppressed (no candidate); compound → split children resolve independently, **never a
+  combined canonical**; ambiguous compound → **REVIEW_REQUIRED**; a **new** cross-type identity →
+  **ROLE_CONFLICT** (no wrong-type canonical). Interpretation is persisted on the candidate
+  (`evidence.interpretation`). New states REVIEW_REQUIRED / ROLE_CONFLICT / PLACEHOLDER / QUARANTINED.
+- **Dual-role protection**: the cross-type gate fires only for a **new** wrong-type creation — an
+  established same-type canonical resolves normally even when the identity also exists as another type, so
+  legitimate dual-role entities (a venue that also organizes) are never suppressed on re-resolution.
+- **Product suppression**: `entities()` excludes canonicals whose every candidate is non-product
+  (quarantined/review) unless `include_flagged`; the catalog **and** global search read that endpoint, so
+  suppressed entities vanish from Artists/Venues/Search together.
+- **Governed corrections** (crawl `service` + `/review-queue`, `/correct`): `review_queue` (live gated
+  mentions), `quarantine_canonical` (suppress a bad canonical — status→QUARANTINED, **evidence + history
+  preserved, zero rows deleted**), `apply_correction` (MARK_PLACEHOLDER / CONFIRM_MULTI_ROLE / REQUEUE /
+  REJECT_MATCH / CONFIRM_EXISTING_MATCH) — actor + prev/new audited in `evidence.corrections` + history.
+  Gateway `/admin/v1/data-quality/{review-queue,correct}`: authenticated (Workspace VIEWER), flag-gated
+  (research-config), **operator forwarded as `actor` (never client-supplied)**, gateway-audited. Data
+  Quality screen gains a governed "Suppress placeholder" action + human issue copy.
+- **AI adjudicator** stays a runtime-DISABLED provider-neutral seam; the deterministic pipeline + review
+  queue work without it.
+- **Production proof (real, governed)**: fresh dry-run **520 audited / 503 clean / 1 placeholder + 16
+  cross-type**. The flagship **`venue:venue-to-be-announced--kolkata`** ("Venue to be announced", district):
+  **before** = in the product Venue list; governed **quarantine** (2 candidates, 0 deleted, evidence
+  preserved); **after** = **gone from the product Venue list**, still under Advanced (`include_flagged`).
+  **Regression cohort**: re-resolving **20 District/Boshow events → 20/20 SUCCEEDED** (no coverage loss),
+  placeholder stays suppressed/not recreated, legitimate dual-role entities resolve normally (review queue 0).
+- Tests: crawl **227** (+11 across interpretation/enforcement: placeholder-no-candidate, compound split,
+  cross-type→review, dual-role protection, quarantine preserves evidence, multi-role audited), gateway
+  **130** (+5 correction auth/flag/action/actor + review read). frontend tsc/build/lint clean.
+- **Remaining**: Event "Venue not announced" copy (§14 — the event read model still references the venue via
+  graph; catalogue/search already suppress it), the full per-mention review-card action set in the UI
+  (§17 — API supports all actions; UI wires MARK_PLACEHOLDER), quality-flow metrics dashboard (§19), and
+  the Part B market-observatory UX (Overview/Events/Venue/Demand).
+
 
 ## Phase 5B.2 increment 3 — entity-integrity core + data-quality audit (2026-08-12, DEPLOYED)
 
