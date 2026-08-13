@@ -28,6 +28,13 @@ POSSIBLE_MATCH = "POSSIBLE_MATCH"
 AMBIGUOUS = "AMBIGUOUS"
 UNRESOLVED = "UNRESOLVED"
 REJECTED = "REJECTED"
+# Phase 5B.2.4 — interpretation-gate states (no migration: values in the existing status column).
+REVIEW_REQUIRED = "REVIEW_REQUIRED"   # flagged by interpretation; no canonical mutation until reviewed
+ROLE_CONFLICT = "ROLE_CONFLICT"       # identity exists as a different canonical type (cross-type)
+PLACEHOLDER = "PLACEHOLDER"           # an absence marker; never a canonical
+QUARANTINED = "QUARANTINED"           # an existing bad canonical suppressed from product (evidence kept)
+# states that must NEVER carry a canonical into product surfaces
+NON_PRODUCT_STATES = frozenset({REVIEW_REQUIRED, ROLE_CONFLICT, PLACEHOLDER, QUARANTINED})
 
 # reason codes
 SOURCE_HANDLE_MATCH = "SOURCE_HANDLE_MATCH"

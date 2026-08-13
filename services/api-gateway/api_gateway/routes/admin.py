@@ -294,6 +294,40 @@ async def data_quality(_: auth.Principal = Depends(auth.require_viewer),
     return await svc.data_quality()
 
 
+@router.get("/data-quality/review-queue")
+async def data_quality_review(_: auth.Principal = Depends(auth.require_viewer),
+                              svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
+    return await svc.review_queue()
+
+
+# Governed data-quality correction — the one narrow canonical-interpretation write. Authenticated
+# (Workspace), flag-gated (reuses the research-config controlled-write capability), records the operator,
+# audited. No arbitrary canonical CRUD; kept separate from the read surface.
+_DQ_ACTIONS = {"MARK_PLACEHOLDER", "CONFIRM_MULTI_ROLE", "REQUEUE_RESOLUTION", "REJECT_MATCH",
+               "CONFIRM_EXISTING_MATCH"}
+
+
+@router.post("/data-quality/correct")
+async def data_quality_correct(payload: dict = Body(...),
+                               principal: auth.Principal = Depends(auth.require_viewer),
+                               svc: AdminService = Depends(get_admin_service),
+                               store=Depends(get_audit_store)) -> dict[str, Any]:
+    _require_research_config()
+    action = str(payload.get("action", "")).upper()
+    if action not in _DQ_ACTIONS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"action must be one of {sorted(_DQ_ACTIONS)}")
+    out = await svc.apply_correction(
+        action=action, actor=principal.sub, reason=payload.get("reason"),
+        canonical_entity_id=payload.get("canonical_entity_id"), candidate_id=payload.get("candidate_id"))
+    store.record(actor_id=principal.sub, actor_role=principal.role, action=f"DATA_QUALITY_{action}",
+                 object_type="canonical_entity", request_id=uuid.uuid4().hex,
+                 object_id=str(payload.get("canonical_entity_id") or payload.get("candidate_id") or ""),
+                 new_value={"new_state": out.get("new_state") or out.get("candidates_quarantined")},
+                 reason=payload.get("reason"))
+    return out
+
+
 @router.get("/system-health")
 async def system_health(_: auth.Principal = Depends(auth.require_viewer),
                         svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:

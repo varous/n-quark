@@ -345,6 +345,29 @@ class AdminService:
             return {"available": False}
         return {"available": True, **(r.data or {})}
 
+    async def review_queue(self, *, limit: int = 100) -> dict[str, Any]:
+        """Live interpretation review items (5B.2.4). Read-only; degrades gracefully."""
+        r = await self.gw.get(CRAWL, "/v1/internal/entity-resolution/review-queue",
+                              params={"limit": limit})
+        if not r.ok:
+            return {"available": False, "items": []}
+        return {"available": True, **(r.data or {})}
+
+    async def apply_correction(self, *, action: str, actor: str, reason: str | None = None,
+                               canonical_entity_id: str | None = None,
+                               candidate_id: str | None = None) -> dict[str, Any]:
+        """Governed data-quality correction (5B.2.4) — forwards the authenticated operator as `actor`."""
+        body = {"action": action, "actor": actor, "reason": reason,
+                "canonical_entity_id": canonical_entity_id, "candidate_id": candidate_id}
+        r = await self.gw.post(CRAWL, "/v1/internal/entity-resolution/correct", json=body)
+        if r.ok:
+            return {"ok": True, **(r.data if isinstance(r.data, dict) else {})}
+        detail = "correction failed"
+        if isinstance(r.data, dict):
+            detail = str(r.data.get("detail") or detail)
+        from fastapi import HTTPException
+        raise HTTPException(r.status if r.available and r.status in range(400, 600) else 502, detail=detail)
+
     async def entity_detail(self, entity_type: str, entity_id: str) -> dict[str, Any]:
         r = await self.gw.get(CRAWL, f"/v1/internal/entity-resolution/entities/{entity_type}/{entity_id}")
         handles = await self.gw.get(CRAWL, f"/v1/internal/entities/{entity_type}/{entity_id}/source-handles")

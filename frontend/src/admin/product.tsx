@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  api, type ArtistCoverage, type ArtistMovement, type CatalogArtist, type CovState,
+  api, ApiError, type ArtistCoverage, type ArtistMovement, type CatalogArtist, type CovState,
   type DataQualityItem, type MovementItem,
 } from "./api";
 import {
@@ -400,9 +400,27 @@ const PROBLEM_LABEL: Record<string, string> = {
 };
 
 export function DataQuality() {
-  const { data, loading, error } = useAsync(() => api.dataQuality(), []);
+  const [tick, setTick] = useState(0);
+  const reload = () => setTick((n) => n + 1);
+  const { data, loading, error } = useAsync(() => api.dataQuality(), [tick]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function correct(item: DataQualityItem, action: string) {
+    setBusy(item.canonical_entity_id + action);
+    setMsg(null);
+    try {
+      await api.dataQualityCorrect({ action, canonical_entity_id: item.canonical_entity_id,
+        reason: `operator ${action} from Data Quality` });
+      setMsg(`${action.replace(/_/g, " ").toLowerCase()} applied to “${item.name}”.`);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    } finally { setBusy(null); }
+  }
+
   return (
-    <Section title="Data Quality" subtitle="Questionable canonical interpretations flagged for review. Read-only audit — nothing is changed automatically.">
+    <Section title="Data Quality" subtitle="Questionable canonical interpretations flagged for review. Corrections are governed, authenticated and audited — nothing is changed automatically.">
       {loading && <Loading label="Auditing the registry…" />}
       {error && <ErrorBox message={error} />}
       {data && data.available === false && <Unavailable what="the data-quality audit" />}
@@ -414,25 +432,50 @@ export function DataQuality() {
             <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.PLACEHOLDER_ENTITY ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Placeholder entities</div></Card>
             <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.COMPOUND_ENTITY ?? 0) + (data.counts_by_problem?.CROSS_TYPE_CONFLICT ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Need review</div></Card>
           </div>
+          {msg && <div className="mb-3 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5 text-xs text-slate-300">{msg}</div>}
           {(data.manifest?.length ?? 0) === 0 ? <Empty message="No data-quality issues detected." /> : (
-            <Card>
-              <Table<DataQualityItem>
-                rows={data.manifest ?? []}
-                columns={[
-                  { key: "name", header: "Name", render: (r) => <span className="text-slate-100">{r.name}</span> },
-                  { key: "type", header: "Current type", render: (r) => <span className="text-slate-400">{r.entity_type}</span> },
-                  { key: "problem", header: "Issue", render: (r) => <Chip label={PROBLEM_LABEL[r.problem_class] ?? r.problem_class} tone="amber" /> },
-                  { key: "action", header: "Proposed", render: (r) => <span className="text-xs text-slate-400">{r.proposed_action.replace(/_/g, " ")}</span> },
-                  { key: "safe", header: "", render: (r) => r.auto_safe ? <Chip label="Auto-safe" tone="emerald" /> : <Chip label="Review" tone="slate" /> },
-                ]}
-              />
-            </Card>
+            <div className="space-y-2.5">
+              {(data.manifest ?? []).map((r) => (
+                <Card key={r.canonical_entity_id + r.problem_class}>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-slate-100">{r.name}</span>
+                        <span className="text-xs text-slate-500">{r.entity_type}</span>
+                        <Chip label={PROBLEM_LABEL[r.problem_class] ?? r.problem_class} tone="amber" />
+                        {r.auto_safe && <Chip label="Auto-safe" tone="emerald" />}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-500">{describeIssue(r)}</div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {r.problem_class === "PLACEHOLDER_ENTITY" && (
+                        <button disabled={!!busy} onClick={() => correct(r, "MARK_PLACEHOLDER")}
+                          className="rounded-md border border-rose-800/60 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-950/30 disabled:opacity-50">Suppress placeholder</button>
+                      )}
+                      {r.problem_class === "CROSS_TYPE_CONFLICT" && (
+                        <button disabled className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-500" title="Confirm on the specific mention in the review queue">Dual-role → review</button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
           )}
           <p className="mt-3 text-xs text-slate-600">{data.note}</p>
         </>
       )}
     </Section>
   );
+}
+
+function describeIssue(r: DataQualityItem): string {
+  if (r.problem_class === "PLACEHOLDER_ENTITY") return "This looks like an absence marker, not a real entity.";
+  if (r.problem_class === "CROSS_TYPE_CONFLICT") {
+    const other = (r.evidence?.also_exists_as as string[] | undefined)?.join(", ");
+    return `The same identity also exists as ${other ?? "another type"} — may be a legitimate dual role, or a wrong type. Review needed.`;
+  }
+  if (r.problem_class === "COMPOUND_ENTITY") return "This name looks like several artists combined into one.";
+  return r.proposed_action.replace(/_/g, " ");
 }
 
 // ---- helpers -----------------------------------------------------------------------------------

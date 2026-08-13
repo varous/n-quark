@@ -93,7 +93,7 @@ def extract_event_entities(
                        source_record_id=source_record_id, city=city, region_id=region_id)
 
     # ---- artists (FEATURES) — placeholder-suppressed + compound-split (5B.2.3) -------------------
-    def _emit_artist(name: str, *, split_from: str | None = None) -> None:
+    def _emit_artist(name: str, *, split_from: str | None = None, interpretation: str = "CLEAN_SINGLE") -> None:
         an = N.normalize_artist(name)
         if not an.normalized:
             return
@@ -104,7 +104,11 @@ def extract_event_entities(
             raw_name=an.raw, normalized_name=an.normalized, observed_at=observed_at,
             confidence=0.8, provenance=prov,
             evidence={"is_tribute": an.is_tribute, "is_ambiguous": N.is_ambiguous_artist(an),
-                      "stripped_feat": an.stripped_feat, "city": city, **extra}))
+                      "stripped_feat": an.stripped_feat, "city": city,
+                      # Phase 5B.2.4 — interpretation carried on the mention; the resolver gates on it.
+                      "interpretation": {"state": interpretation, "expected_role": ARTIST,
+                                         "review_required": interpretation != "CLEAN_SINGLE"},
+                      **extra}))
 
     for name in performer_names:
         interp = _I.interpret_mention(raw=name, expected_role=ARTIST)
@@ -116,7 +120,10 @@ def extract_event_entities(
             for part in interp.parts:
                 _emit_artist(part, split_from=name)
             continue
-        # AMBIGUOUS/REVIEW compound and cross-type stay a single mention (never blindly split); OK passes.
+        if interp.outcome == _I.REVIEW_REQUIRED:
+            # ambiguous compound kept as ONE mention (never blindly split) → flagged for review.
+            _emit_artist(name, interpretation="AMBIGUOUS_COMPOUND")
+            continue
         _emit_artist(name)
 
     # ---- venue (OCCURS_AT) — placeholder never becomes a Venue ----------------------------------

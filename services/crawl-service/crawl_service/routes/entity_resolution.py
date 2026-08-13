@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from crawl_service.config import settings
 from crawl_service.deps import get_entity_resolution_service
@@ -54,6 +54,26 @@ def quality_audit(
     svc: EntityResolutionService = Depends(get_entity_resolution_service),
 ) -> dict[str, Any]:
     return svc.quality_audit(limit=limit)
+
+
+@router.get("/review-queue", summary="Live interpretation review items (internal, 5B.2.4)")
+def review_queue(
+    limit: int = Query(default=100, ge=1, le=500),
+    svc: EntityResolutionService = Depends(get_entity_resolution_service),
+) -> dict[str, Any]:
+    return svc.review_queue(limit=limit)
+
+
+@router.post("/correct", summary="Governed data-quality correction (internal, 5B.2.4)")
+def correct(payload: dict = Body(...),
+            svc: EntityResolutionService = Depends(get_entity_resolution_service)) -> dict[str, Any]:
+    try:
+        return svc.apply_correction(
+            action=str(payload.get("action", "")), actor=str(payload.get("actor", "")),
+            reason=payload.get("reason"), canonical_entity_id=payload.get("canonical_entity_id"),
+            candidate_id=payload.get("candidate_id"))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @router.get("/cross-inventory", summary="Entities shared across sources — convergence proof (internal)")

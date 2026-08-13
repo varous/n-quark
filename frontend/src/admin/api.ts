@@ -131,6 +131,9 @@ export const api = {
   artistMovement: (id: string) => req<ArtistMovement>(`/demand/artists/${encodeURIComponent(id)}/movement`),
   marketMovement: () => req<MarketMovement>("/market/movement"),
   dataQuality: () => req<DataQualityAudit>("/data-quality"),
+  dataQualityReview: () => req<{ available: boolean; count?: number; by_class?: Record<string, number>; items?: Array<Record<string, unknown>> }>("/data-quality/review-queue"),
+  dataQualityCorrect: (body: { action: string; canonical_entity_id?: string; candidate_id?: string; reason?: string }) =>
+    req<Record<string, unknown>>("/data-quality/correct", { method: "POST", body: JSON.stringify(body) }),
   // ---- research watchlist (Phase 5B.1; controlled write: research configuration) ----
   watchlist: (f: Record<string, unknown>) => req<WatchlistList>(`/research/watchlist${qs(f)}`),
   watchlistDiagnostics: () => req<WatchlistDiagnostics>("/research/watchlist/diagnostics"),

@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from crawl_service.config import Settings, settings
+from crawl_service.entity_resolution import normalizers as _N
 from crawl_service.entity_resolution import resolvers as R
 from crawl_service.entity_resolution.evidence import (
     ARTIST,
@@ -80,8 +81,17 @@ class EntityResolutionService:
                     "entities": [], "geography": self._geography(ents)}
 
         known = self._known_for(evidence_list)
+        cross_index = self._cross_type_index()
         decisions: list[tuple[EntityEvidence, ResolutionResult]] = []
         for ev in evidence_list:
+            # 5B.2.4 — interpretation GATE: no unresolved interpretation state may create a canonical.
+            gate = self._interpret_gate(ev, cross_index)
+            if gate is not None:
+                res = ResolutionResult(status=gate, canonical_entity_id=None, score=0.0,
+                                       reason_code=gate)
+                self._persist_candidate(ev, res, now)
+                decisions.append((ev, res))
+                continue
             res = R.resolve(ev, known)
             res = self._apply_threshold(ev.entity_type, res)
             self._persist_candidate(ev, res, now)
@@ -171,6 +181,38 @@ class EntityResolutionService:
                     if etype == VENUE:
                         known.venue_map.setdefault(nm, []).append((cid, (evd or {}).get("city")))
         return known
+
+    # ---- interpretation gate (5B.2.4) -----------------------------------------------------------
+    def _cross_type_index(self) -> dict[str, set[str]]:
+        """slug(name) -> set of canonical entity types it exists as (RESOLVED only, non-quarantined)."""
+        idx: dict[str, set[str]] = {}
+        with self._sf() as s:
+            rows = s.execute(
+                select(EntityResolutionCandidate.entity_type, EntityResolutionCandidate.raw_name)
+                .where(EntityResolutionCandidate.resolution_status == R.RESOLVED,
+                       EntityResolutionCandidate.candidate_canonical_entity_id.is_not(None))).all()
+        for etype, raw in rows:
+            idx.setdefault(_N.slug(raw), set()).add(etype)
+        return idx
+
+    def _interpret_gate(self, ev: EntityEvidence, cross_index: dict[str, set[str]]) -> str | None:
+        """Return a non-product status (REVIEW_REQUIRED / ROLE_CONFLICT / PLACEHOLDER) when this mention
+        must NOT create/match a canonical, else None. Consumes the mention's interpretation (set at
+        extraction) plus a registry cross-type check — one place, no duplicated interpretation logic."""
+        interp = (ev.evidence or {}).get("interpretation") or {}
+        state = interp.get("state")
+        if state == "PLACEHOLDER":
+            return R.PLACEHOLDER
+        if state == "AMBIGUOUS_COMPOUND":
+            return R.REVIEW_REQUIRED
+        # cross-type / role conflict — identity already exists as a DIFFERENT canonical type.
+        other = sorted(t for t in cross_index.get(_N.slug(ev.raw_name), set()) if t != ev.entity_type)
+        if other:
+            # a mention whose evidence already confirms LEGITIMATE_MULTI_ROLE is allowed to proceed.
+            if (ev.evidence or {}).get("multi_role_confirmed"):
+                return None
+            return R.ROLE_CONFLICT
+        return None
 
     def _apply_threshold(self, entity_type: str, res: ResolutionResult) -> ResolutionResult:
         """A RESOLVED decision below the entity's configured confidence is downgraded to POSSIBLE_MATCH,
@@ -449,7 +491,8 @@ class EntityResolutionService:
 
     def entities(self, *, entity_type: str | None = None, source: str | None = None,
                  status: str | None = None, cross_source_only: bool = False,
-                 has_ambiguous: bool = False, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+                 has_ambiguous: bool = False, include_flagged: bool = False,
+                 limit: int = 50, offset: int = 0) -> dict[str, Any]:
         with self._sf() as s:
             cands = s.execute(select(EntityResolutionCandidate)).scalars().all()
             handles = s.execute(select(EntitySourceHandle)).scalars().all()
@@ -496,6 +539,10 @@ class EntityResolutionService:
             }
             rows.append(row)
 
+        # 5B.2.4 — product suppression: a canonical whose every candidate is quarantined/placeholder/
+        # review-only never appears on normal product surfaces (kept for Advanced/debug via include_flagged).
+        if not include_flagged:
+            rows = [r for r in rows if r["resolution_status"] not in R.NON_PRODUCT_STATES]
         if entity_type:
             rows = [r for r in rows if r["entity_type"] == entity_type]
         if source:
@@ -576,6 +623,104 @@ class EntityResolutionService:
                 "manifest": manifest, "manifest_truncated": len(manifest) >= limit,
                 "note": "read-only audit; no canonical data mutated. auto_safe items are exact placeholder "
                         "phrases eligible for deterministic suppression; everything else is review-gated."}
+
+    # ---- review queue + governed corrections (5B.2.4) -------------------------------------------
+    def review_queue(self, *, limit: int = 100) -> dict[str, Any]:
+        """Live interpretation review items — mentions the gate flagged (REVIEW_REQUIRED / ROLE_CONFLICT /
+        PLACEHOLDER), for which no canonical was created, awaiting operator adjudication."""
+        with self._sf() as s:
+            rows = s.execute(
+                select(EntityResolutionCandidate)
+                .where(EntityResolutionCandidate.resolution_status.in_(
+                    (R.REVIEW_REQUIRED, R.ROLE_CONFLICT, R.PLACEHOLDER)))
+                .order_by(EntityResolutionCandidate.updated_at.desc()).limit(limit)).scalars().all()
+        items, counts = [], {}
+        for c in rows:
+            interp = (c.evidence or {}).get("interpretation") or {}
+            counts[c.resolution_status] = counts.get(c.resolution_status, 0) + 1
+            items.append({
+                "candidate_id": c.id, "entity_type": c.entity_type, "raw_name": c.raw_name,
+                "source": c.source, "canonical_event_id": c.canonical_event_id,
+                "expected_role": interp.get("expected_role") or c.entity_type,
+                "problem_class": c.resolution_status, "reason": c.reason_code,
+                "created_at": _iso(_aware(c.created_at)), "evidence": interp})
+        return {"count": len(items), "by_class": counts, "items": items,
+                "note": "live interpretation-gated mentions awaiting review; no canonical was created."}
+
+    def quarantine_canonical(self, canonical_entity_id: str, *, reason: str, actor: str,
+                             now: datetime | None = None) -> dict[str, Any]:
+        """Governed suppression of a bad canonical (placeholder/junk). Sets its candidates to QUARANTINED,
+        records evidence.quarantine + a history row per candidate. NEVER deletes a row or observation."""
+        now = now or datetime.now(UTC)
+        examined = quarantined = 0
+        with self._sf() as s, s.begin():
+            cands = s.execute(select(EntityResolutionCandidate).where(
+                EntityResolutionCandidate.candidate_canonical_entity_id == canonical_entity_id)).scalars().all()
+            examined = len(cands)
+            for c in cands:
+                prev = c.resolution_status
+                ev = dict(c.evidence or {})
+                ev["quarantine"] = {"reason": reason, "actor": actor, "at": now.isoformat(),
+                                    "previous_status": prev}
+                ev.setdefault("corrections", []).append({"action": "MARK_PLACEHOLDER", "actor": actor,
+                                                          "reason": reason, "at": now.isoformat(),
+                                                          "previous_status": prev})
+                c.evidence = ev
+                c.resolution_status = R.QUARANTINED
+                c.updated_at = now
+                s.add(EntityResolutionHistory(
+                    id=_uuid(), candidate_id=c.id, previous_status=prev, new_status=R.QUARANTINED,
+                    previous_canonical_entity_id=c.candidate_canonical_entity_id,
+                    new_canonical_entity_id=c.candidate_canonical_entity_id, reason_code="QUARANTINE",
+                    resolver_version=R.RESOLVER_VERSION, created_at=now))
+                quarantined += 1
+        return {"canonical_entity_id": canonical_entity_id, "candidates_examined": examined,
+                "candidates_quarantined": quarantined, "actor": actor, "reason": reason,
+                "evidence_preserved": True, "rows_deleted": 0}
+
+    def apply_correction(self, *, action: str, actor: str, reason: str | None = None,
+                         canonical_entity_id: str | None = None, candidate_id: str | None = None,
+                         now: datetime | None = None) -> dict[str, Any]:
+        """Narrowly-scoped governed correction (no arbitrary CRUD). Records actor/time/prev/new in
+        evidence.corrections + a history row."""
+        now = now or datetime.now(UTC)
+        action = (action or "").upper()
+        if action == "MARK_PLACEHOLDER":
+            if not canonical_entity_id:
+                raise ValueError("canonical_entity_id required for MARK_PLACEHOLDER")
+            return self.quarantine_canonical(canonical_entity_id,
+                                             reason=reason or "operator marked placeholder", actor=actor, now=now)
+        if not candidate_id:
+            raise ValueError("candidate_id required")
+        with self._sf() as s, s.begin():
+            c = s.get(EntityResolutionCandidate, candidate_id)
+            if c is None:
+                raise ValueError("candidate not found")
+            prev = c.resolution_status
+            ev = dict(c.evidence or {})
+            if action == "CONFIRM_MULTI_ROLE":
+                ev["multi_role_confirmed"] = True
+                c.resolution_status = R.UNRESOLVED     # re-resolves next pass, gate now bypassed
+                new = "LEGITIMATE_MULTI_ROLE"
+            elif action == "REQUEUE_RESOLUTION":
+                c.resolution_status, new = R.UNRESOLVED, R.UNRESOLVED
+            elif action == "REJECT_MATCH":
+                c.candidate_canonical_entity_id, c.resolution_status, new = None, R.UNRESOLVED, "REJECTED_MATCH"
+            elif action == "CONFIRM_EXISTING_MATCH":
+                c.resolution_status, new = R.RESOLVED, R.RESOLVED
+            else:
+                raise ValueError(f"unsupported action {action}")
+            ev.setdefault("corrections", []).append({"action": action, "actor": actor, "reason": reason,
+                                                     "at": now.isoformat(), "previous_status": prev})
+            c.evidence = ev
+            c.updated_at = now
+            s.add(EntityResolutionHistory(
+                id=_uuid(), candidate_id=c.id, previous_status=prev, new_status=c.resolution_status,
+                previous_canonical_entity_id=c.candidate_canonical_entity_id,
+                new_canonical_entity_id=c.candidate_canonical_entity_id,
+                reason_code=f"CORRECTION:{action}", resolver_version=R.RESOLVER_VERSION, created_at=now))
+        return {"candidate_id": candidate_id, "action": action, "actor": actor, "new_state": new,
+                "audited": True}
 
     def entity_detail(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         with self._sf() as s:
