@@ -168,3 +168,74 @@ async def test_quality_metrics_counts_flow(session_factory):
     m = EntityResolutionService(session_factory, FakeGraphReader(None, []), FakeGraphWriter()).quality_metrics()
     assert m["flow"]["compound_split"] >= 2                 # the two split artists
     assert m["interpretation_method"] == "deterministic" and m["ai_adjudicated"] == 0
+
+
+def _seed_candidate(session_factory, *, name, cid, status, etype="VENUE", handle=None):
+    from datetime import UTC, datetime
+    import uuid
+    from crawl_service.models import EntityResolutionCandidate
+    now = datetime.now(UTC)
+    with session_factory() as s:
+        s.add(EntityResolutionCandidate(
+            id=uuid.uuid4().hex, entity_type=etype, source="district",
+            source_record_id="seed-r", canonical_event_id="event:seed",
+            source_entity_handle=handle or f"district:{etype.lower()}:{name}",
+            raw_name=name, normalized_name=name.lower(),
+            candidate_canonical_entity_id=cid, match_score=1.0,
+            resolution_status=status, reason_code="SEED", evidence={},
+            resolver_version="test", observed_at=now, created_at=now, updated_at=now))
+        s.commit()
+
+
+@pytest.mark.asyncio
+async def test_quality_audit_distinguishes_repaired_from_open(session_factory):
+    svc = _svc(session_factory, *_event_node([]))
+    # an OPEN placeholder (still resolved to a canonical) and a REPAIRED one (already quarantined)
+    _seed_candidate(session_factory, name="TBA", cid="venue:tba-open", status=R.RESOLVED)
+    _seed_candidate(session_factory, name="Venue to be announced", cid="venue:vtba-fixed",
+                    status=R.QUARANTINED)
+    audit = svc.quality_audit()
+    by_id = {m["canonical_entity_id"]: m for m in audit["manifest"]}
+    assert by_id["venue:tba-open"]["problem_class"] == "PLACEHOLDER_ENTITY"
+    assert by_id["venue:tba-open"]["repaired"] is False and by_id["venue:tba-open"]["state"] == "open"
+    assert by_id["venue:vtba-fixed"]["repaired"] is True and by_id["venue:vtba-fixed"]["state"] == "repaired"
+    # the already-repaired one is NOT counted as an open issue
+    assert audit["open_issues"] >= 1 and audit["repaired_issues"] >= 1
+    assert audit["counts_by_problem"].get("PLACEHOLDER_ENTITY", 0) == 1   # open only
+    assert audit["repaired_by_problem"].get("PLACEHOLDER_ENTITY", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_confirm_existing_match_links_selected_canonical(session_factory):
+    svc = _svc(session_factory, *_event_node([]))
+    # a real VENUE canonical exists in the registry
+    _seed_candidate(session_factory, name="Kala Mandir", cid="venue:kala-mandir", status=R.RESOLVED)
+    # a review mention with no canonical yet
+    _seed_candidate(session_factory, name="Kala Mondir", cid=None, status=R.REVIEW_REQUIRED,
+                    handle="district:venue:kala-mondir")
+    from crawl_service.models import EntityResolutionCandidate
+    with session_factory() as s:
+        review = s.query(EntityResolutionCandidate).filter_by(raw_name="Kala Mondir").one()
+        rid = review.id
+    out = svc.apply_correction(action="CONFIRM_EXISTING_MATCH", actor="op@x.com",
+                               candidate_id=rid, canonical_entity_id="venue:kala-mandir",
+                               reason="same venue, spelling variant")
+    assert out["new_state"] == R.RESOLVED and out["audited"] is True
+    with session_factory() as s:
+        c = s.get(EntityResolutionCandidate, rid)
+        assert c.candidate_canonical_entity_id == "venue:kala-mandir"   # linked to the SELECTED canonical
+        assert c.resolution_status == R.RESOLVED
+        assert c.evidence["corrections"][-1]["new_canonical_entity_id"] == "venue:kala-mandir"
+
+
+@pytest.mark.asyncio
+async def test_confirm_existing_match_rejects_arbitrary_id(session_factory):
+    svc = _svc(session_factory, *_event_node([]))
+    _seed_candidate(session_factory, name="Some Place", cid=None, status=R.REVIEW_REQUIRED)
+    from crawl_service.models import EntityResolutionCandidate
+    with session_factory() as s:
+        rid = s.query(EntityResolutionCandidate).filter_by(raw_name="Some Place").one().id
+    # an id that is not a known canonical of the correct type is refused (no arbitrary linking)
+    with pytest.raises(ValueError):
+        svc.apply_correction(action="CONFIRM_EXISTING_MATCH", actor="op@x.com",
+                             candidate_id=rid, canonical_entity_id="venue:totally-made-up")

@@ -94,6 +94,23 @@ records, never rewriting source evidence.
 longer sufficient — "F1 2026", "India Tour 2026", "Summer 2026" produce **no** series. A recurring event
 that only carries a year is left for a manual `CORRECT_EVENT_SERIES` decision.
 
+## Governed data-quality corrections (Phase 5B.2.4–.6)
+
+The Data Quality surface exposes a **narrow, audited** set of interpretation corrections — never arbitrary
+canonical CRUD. `apply_correction`: `MARK_PLACEHOLDER` (quarantine a bad canonical, suppress-not-delete),
+`CONFIRM_MULTI_ROLE` (bless a legitimate dual-role identity), `REQUEUE_RESOLUTION` (re-resolve a mention;
+for an ambiguous compound this resolves each suggested part independently — **never** a combined canonical),
+`REJECT_MATCH`, and `CONFIRM_EXISTING_MATCH` (link a review mention to an operator-**selected existing**
+canonical). `CONFIRM_EXISTING_MATCH` validates the target with `_is_known_canonical` — it must be a real
+canonical of the **same type**; an arbitrary id is rejected at both the BFF and the resolver. Every action
+records actor / time / previous+new status / previous+new canonical in `evidence.corrections` + an
+`EntityResolutionHistory` row. The operator is server-set from the authenticated session, never client-supplied.
+
+`quality_audit` (read-only) classifies each canonical (placeholder / compound / cross-type) and distinguishes
+**open** issues from already-**repaired** ones (every candidate QUARANTINED): repaired items stay in the
+manifest for provenance (`state:"repaired"`, `repaired:true`) but are excluded from `open_issues` /
+`counts_by_problem`, so quality statistics never imply an already-fixed issue is still outstanding.
+
 ## Known limitations
 
 - Cross-source convergence needs sources whose catalogues actually overlap; the current Boshow/District

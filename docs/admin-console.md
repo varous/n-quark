@@ -41,12 +41,31 @@ data (`available:false`), never a 500.
 
 ## Screens
 
-Overview (KPI cards + source summary + attention queues) · Sources · Events (list + detail tabs: Current,
-Source records, Timeline, Evidence, Entities, Relationships, Capture ops) · Entities (list + detail with
-identity state, source handles, linked events, candidates) · Resolution queue · Graph explorer (bounded)
-· Captures · Health (services + data quality). Global search, breadcrumbs, URL-backed filters, a reusable
-provenance drawer, and explicit epistemic labels (Observed / Derived / Resolved / Ambiguous / Conflicting
-/ Stale / Failed / Unknown) — never colour alone.
+Market-observatory information architecture (Phase 5B.2.6): **Overview** · **Explore**
+(Events · Artists · Venues · Organizers) · **Monitor** (Watchlist · Market Movement · Demand) ·
+**Coverage** (Collection · Captures) · **Advanced** (Data Quality · Analysis · Resolution · Graph ·
+Diagnostics · All entities · System). A normal operator thinks in product terms — Events / Artists /
+Venues / Organizers / Demand / Movement / Coverage — while the ontology (canonical / candidate / node /
+edge / resolution status) stays under Advanced and Evidence.
+
+- **Overview** answers "what is n-quark seeing?" with **registry-backed** product totals (Artists / Venues /
+  Organizers from the canonical registry, never raw graph-node counts — via `/catalog/counts`), a
+  Needs-attention grid over real supported states (open identity review, capture failures, content-movement
+  & demand coverage) with honest explained-zero copy, and distinct demand-coverage vs service-reachability.
+- **Event detail** leads with product tabs (Overview · Sources · Changes · Demand); Evidence · Entities ·
+  Relationships · Capture status are grouped under **Advanced**. The Overview tab reads Event → Who & where
+  (the integrity projection — a quarantined/placeholder mention is never shown as a link) → Ticketing.
+- **Venue detail** is first-class (Activity · Artists appearing · Organizers active here · Events · Sources)
+  from a bounded `/catalog/venues/{id}` read model — canonical relationships only, no frontend N+1.
+- **Global search** is product-first: grouped Artists / Venues / Organizers / Events with plain type labels;
+  quarantined/invalid canonicals and source projections never surface; review-required → "Needs data-quality
+  review".
+- **Data Quality** distinguishes **open** from already-**repaired** (quarantined) issues, and finishes the
+  review toolset: a **canonical match selector** (link a mention to an operator-selected existing canonical,
+  validated server-side) and compound review (suggested parts + Confirm-split re-resolution).
+
+Global search, breadcrumbs, URL-backed filters, a reusable provenance drawer, and explicit epistemic labels
+(Observed / Derived / Resolved / Ambiguous / Conflicting / Stale / Failed / Unknown) — never colour alone.
 
 ## Canonical identity state
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   api, ApiError, type ArtistCoverage, type ArtistMovement, type CatalogArtist, type CovState,
   type DataQualityItem, type MovementItem,
@@ -306,30 +306,83 @@ export function Venues() {
 }
 
 export function VenueDetail({ id }: { id: string }) {
-  const { data, loading, error } = useAsync(() => api.entityDetail("VENUE", id), [id]);
-  if (loading) return <Loading />;
+  const { data, loading, error } = useAsync(() => api.catalogVenueDetail(id), [id]);
+  if (loading) return <Loading label="Loading venue…" />;
   if (error && !data) return <ErrorBox message={error} />;
   if (!data || data.available === false) return <Unavailable what="this venue" />;
-  const events = (data.linked_events ?? []) as string[];
+  const events = data.events ?? [];
+  const artists = data.artists ?? [];
+  const organizers = data.organizers ?? [];
   return (
     <div className="space-y-6">
+      {/* Venue — where is this */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-100">{data.canonical_name ?? shortName(id)}</h1>
-        <div className="mt-2 flex gap-2"><Chip label="Venue" /><Chip label={`${events.length} event${events.length === 1 ? "" : "s"} observed`} tone="brand" /></div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-100">{data.name ?? shortName(id)}</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Chip label="Venue" />
+          {data.city && <Chip label={data.city} tone="slate" />}
+          <Chip label={`${data.events_observed ?? 0} event${(data.events_observed ?? 0) === 1 ? "" : "s"} observed`} tone="brand" />
+        </div>
       </div>
-      <Card title="Events observed here">
+
+      {/* Activity — how much have we observed */}
+      <Card title="Activity">
+        <ul className="space-y-1.5 text-sm text-slate-300">
+          <li>{(data.events_observed ?? 0) > 0
+            ? `${data.events_observed} event${data.events_observed === 1 ? "" : "s"} observed here`
+            : "No events observed here yet"}
+            {data.city ? ` · ${data.city}` : ""}</li>
+          <li>{artists.length > 0 ? `${artists.length} artist${artists.length === 1 ? "" : "s"} have appeared here` : "No artists identified here yet"}</li>
+          <li>{organizers.length > 0 ? `${organizers.length} organizer${organizers.length === 1 ? "" : "s"} active here` : "No organizers identified here yet"}</li>
+          <li>Last observed {data.last_observed ? relTime(data.last_observed) : "—"}</li>
+        </ul>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title={`Artists appearing here${artists.length ? ` · ${artists.length}` : ""}`}>
+          {artists.length === 0 ? <Empty message="None identified yet." /> : (
+            <ul className="flex flex-wrap gap-1.5 text-sm">
+              {artists.map((a) => (
+                <li key={a.canonical_artist_id}>
+                  <a href={`#/artists/${encodeURIComponent(a.canonical_artist_id)}`} className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-brand-500 hover:text-brand-200">{a.name}</a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+        <Card title={`Organizers active here${organizers.length ? ` · ${organizers.length}` : ""}`}>
+          {organizers.length === 0 ? <Empty message="None identified yet." /> : (
+            <ul className="flex flex-wrap gap-1.5 text-sm">
+              {organizers.map((o) => (
+                <li key={o.canonical_organizer_id}>
+                  <span className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200">{o.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Card title={`Events observed here${events.length ? ` · ${events.length}` : ""}`}>
         {events.length === 0 ? <p className="text-sm text-slate-500">No events observed at this venue yet.</p> : (
-          <ul className="space-y-1 text-sm">
-            {events.slice(0, 50).map((e) => (
-              <li key={e}><a href={`#/events/${encodeURIComponent(e)}`} className="text-slate-300 hover:text-brand-200">{shortName(e)}</a></li>
-            ))}
-          </ul>
+          <>
+            <ul className="space-y-1 text-sm">
+              {events.slice(0, 60).map((e) => (
+                <li key={e}><a href={`#/events/${encodeURIComponent(e)}`} className="text-slate-300 hover:text-brand-200">{shortName(e)}</a></li>
+              ))}
+            </ul>
+            {data.events_truncated && (
+              <p className="mt-2 text-xs text-slate-600">Showing the {data.events_aggregated} most recent for relationship aggregation.</p>
+            )}
+          </>
         )}
       </Card>
+
       <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm">
         <summary className="cursor-pointer text-slate-400">Evidence &amp; sources</summary>
-        <div className="mt-2 text-xs text-slate-500">Canonical id: <span className="text-slate-300">{id}</span></div>
-        <div className="mt-1 text-xs text-slate-500">Source listings: <span className="text-slate-300">{fmt((data.source_handles ?? []).length)}</span></div>
+        <div className="mt-2 text-xs text-slate-500">Sources: <span className="text-slate-300">{(data.sources ?? []).join(", ") || "—"}</span></div>
+        <div className="mt-1 text-xs text-slate-500">Canonical id: <span className="text-slate-300">{id}</span></div>
+        <div className="mt-1 text-xs text-slate-500">Source listings: <span className="text-slate-300">{fmt(data.source_handles ?? 0)}</span></div>
       </details>
     </div>
   );
@@ -405,6 +458,7 @@ export function DataQuality() {
   const { data, loading, error } = useAsync(() => api.dataQuality(), [tick]);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [picking, setPicking] = useState<string | null>(null);   // candidate_id whose picker is open
 
   const metrics = useAsync(() => api.dataQualityMetrics(), [tick]);
   const review = useAsync(() => api.dataQualityReview(), [tick]);
@@ -435,6 +489,22 @@ export function DataQuality() {
     } finally { setBusy(null); }
   }
 
+  // §21 — link a review mention to an EXISTING canonical the operator selected (never an arbitrary id;
+  // the BFF + resolver both reject anything that is not a known canonical of the correct type).
+  async function linkExisting(candidateId: string, canonicalId: string, name: string) {
+    setBusy(candidateId + "LINK");
+    setMsg(null);
+    try {
+      await api.dataQualityCorrect({ action: "CONFIRM_EXISTING_MATCH", candidate_id: candidateId,
+        canonical_entity_id: canonicalId, reason: `operator linked to existing ${canonicalId}` });
+      setMsg(`Linked to “${name}”.`);
+      setPicking(null);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    } finally { setBusy(null); }
+  }
+
   return (
     <Section title="Data Quality" subtitle="Questionable canonical interpretations flagged for review. Corrections are governed, authenticated and audited — nothing is changed automatically.">
       {loading && <Loading label="Auditing the registry…" />}
@@ -445,8 +515,8 @@ export function DataQuality() {
           <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Card><div className="text-2xl font-semibold text-slate-100">{data.canonical_entities_audited ?? 0}</div><div className="mt-1 text-xs text-slate-500">Entities audited</div></Card>
             <Card><div className="text-2xl font-semibold text-emerald-300">{data.clean ?? 0}</div><div className="mt-1 text-xs text-slate-500">Look clean</div></Card>
-            <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.PLACEHOLDER_ENTITY ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Placeholder entities</div></Card>
-            <Card><div className="text-2xl font-semibold text-amber-300">{(data.counts_by_problem?.COMPOUND_ENTITY ?? 0) + (data.counts_by_problem?.CROSS_TYPE_CONFLICT ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Need review</div></Card>
+            <Card><div className="text-2xl font-semibold text-amber-300">{data.open_issues ?? ((data.counts_by_problem?.PLACEHOLDER_ENTITY ?? 0) + (data.counts_by_problem?.COMPOUND_ENTITY ?? 0) + (data.counts_by_problem?.CROSS_TYPE_CONFLICT ?? 0))}</div><div className="mt-1 text-xs text-slate-500">Open issues</div></Card>
+            <Card><div className="text-2xl font-semibold text-slate-300">{data.repaired_issues ?? 0}</div><div className="mt-1 text-xs text-slate-500">Repaired (quarantined)</div></Card>
           </div>
           {msg && <div className="mb-3 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5 text-xs text-slate-300">{msg}</div>}
           {(data.manifest?.length ?? 0) === 0 ? <Empty message="No data-quality issues detected." /> : (
@@ -456,19 +526,21 @@ export function DataQuality() {
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-slate-100">{r.name}</span>
+                        <span className={`truncate text-sm font-medium ${r.repaired ? "text-slate-400 line-through decoration-slate-600" : "text-slate-100"}`}>{r.name}</span>
                         <span className="text-xs text-slate-500">{r.entity_type}</span>
-                        <Chip label={PROBLEM_LABEL[r.problem_class] ?? r.problem_class} tone="amber" />
-                        {r.auto_safe && <Chip label="Auto-safe" tone="emerald" />}
+                        {r.repaired
+                          ? <Chip label="Repaired · quarantined" tone="emerald" />
+                          : <Chip label={PROBLEM_LABEL[r.problem_class] ?? r.problem_class} tone="amber" />}
+                        {!r.repaired && r.auto_safe && <Chip label="Auto-safe" tone="emerald" />}
                       </div>
-                      <div className="mt-0.5 text-xs text-slate-500">{describeIssue(r)}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">{r.repaired ? "Already suppressed via governance — kept for provenance; no longer an open issue." : describeIssue(r)}</div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      {r.problem_class === "PLACEHOLDER_ENTITY" && (
+                      {!r.repaired && r.problem_class === "PLACEHOLDER_ENTITY" && (
                         <button disabled={!!busy} onClick={() => correct(r, "MARK_PLACEHOLDER")}
                           className="rounded-md border border-rose-800/60 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-950/30 disabled:opacity-50">Suppress placeholder</button>
                       )}
-                      {r.problem_class === "CROSS_TYPE_CONFLICT" && (
+                      {!r.repaired && r.problem_class === "CROSS_TYPE_CONFLICT" && (
                         <button disabled className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-500" title="Confirm on the specific mention in the review queue">Dual-role → review</button>
                       )}
                     </div>
@@ -489,28 +561,50 @@ export function DataQuality() {
                 {(review.data?.items ?? []).map((it, i) => {
                   const cid = String(it.candidate_id ?? "");
                   const cls = String(it.problem_class ?? "");
+                  const etype = String(it.expected_role ?? it.entity_type ?? "").toUpperCase();
+                  const interp = (it.evidence ?? {}) as Record<string, unknown>;
+                  const parts = Array.isArray(interp.parts) ? (interp.parts as string[])
+                    : Array.isArray((interp.compound as Record<string, unknown> | undefined)?.parts)
+                      ? ((interp.compound as Record<string, unknown>).parts as string[]) : [];
+                  const isCompound = String(interp.state ?? "") === "AMBIGUOUS_COMPOUND" || parts.length > 1;
                   return (
                     <Card key={cid || i}>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <span className="truncate text-sm font-medium text-slate-100">{String(it.raw_name ?? "")}</span>
-                            <span className="text-xs text-slate-500">source called it {String(it.expected_role ?? it.entity_type ?? "?").toLowerCase()}</span>
-                            <Chip label={cls === "ROLE_CONFLICT" ? "Possible wrong type" : cls === "REVIEW_REQUIRED" ? "Ambiguous — needs review" : cls} tone="amber" />
+                            <span className="text-xs text-slate-500">source called it {etype.toLowerCase() || "?"}</span>
+                            <Chip label={cls === "ROLE_CONFLICT" ? "Possible wrong type" : isCompound ? "Compound — several artists?" : cls === "REVIEW_REQUIRED" ? "Ambiguous — needs review" : cls} tone="amber" />
                           </div>
                           <div className="mt-0.5 text-xs text-slate-500">{String(it.source ?? "")}{it.reason ? ` · ${String(it.reason)}` : ""}</div>
+                          {isCompound && parts.length > 0 && (
+                            <div className="mt-1.5 text-xs text-slate-400">
+                              Suggested interpretation:
+                              <span className="ml-1">{parts.map((p, j) => (
+                                <span key={j} className="mr-1 inline-block rounded border border-slate-700 px-1.5 py-0.5 text-slate-300">{p}</span>
+                              ))}</span>
+                              <div className="mt-1 text-[11px] text-slate-600">Re-run resolves each part independently — no combined canonical is ever created.</div>
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {cls === "ROLE_CONFLICT" && (
                             <button disabled={!!busy} onClick={() => correctCandidate(cid, "CONFIRM_MULTI_ROLE", "Confirm dual-role")}
                               className="rounded-md border border-emerald-800/60 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50">Confirm dual-role</button>
                           )}
-                          <button disabled={!!busy} onClick={() => correctCandidate(cid, "REQUEUE_RESOLUTION", "Re-run resolution")}
-                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50">Re-run</button>
+                          <button disabled={!!busy} onClick={() => setPicking(picking === cid ? null : cid)}
+                            className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${picking === cid ? "border-brand-500 text-brand-200" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}>Link to existing…</button>
+                          <button disabled={!!busy} onClick={() => correctCandidate(cid, "REQUEUE_RESOLUTION", isCompound ? "Confirm split (re-resolve parts)" : "Re-run resolution")}
+                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50">{isCompound ? "Confirm split" : "Re-run"}</button>
                           <button disabled={!!busy} onClick={() => correctCandidate(cid, "REJECT_MATCH", "Reject match")}
-                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-50">Reject</button>
+                            className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-50">Leave unresolved</button>
                         </div>
                       </div>
+                      {picking === cid && (
+                        <CanonicalPicker entityType={etype} busy={!!busy}
+                          onPick={(canonicalId, name) => linkExisting(cid, canonicalId, name)}
+                          onClose={() => setPicking(null)} />
+                      )}
                     </Card>
                   );
                 })}
@@ -534,6 +628,57 @@ export function DataQuality() {
         </>
       )}
     </Section>
+  );
+}
+
+// §21 — bounded canonical search/select. Queries the authenticated BFF search (which reads the
+// suppressing /entities endpoint, so quarantined/invalid canonicals never appear), filters to the
+// mention's own type, and only ever emits an existing canonical id — no free-text id entry.
+function CanonicalPicker({ entityType, busy, onPick, onClose }:
+  { entityType: string; busy: boolean; onPick: (id: string, name: string) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<Array<{ id: string; name: string; type: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    if (q.trim().length < 2) { setResults([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await api.search(q);
+        if (cancelled) return;
+        const matches = (res.results.entities ?? [])
+          .filter((e) => String(e.type ?? "").toUpperCase() === entityType)
+          .map((e) => ({ id: String(e.canonical_entity_id), name: String(e.name ?? e.canonical_entity_id), type: String(e.type) }));
+        setResults(matches);
+      } catch { if (!cancelled) setResults([]); }
+      finally { if (!cancelled) setSearching(false); }
+    }, 220);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [q, entityType]);
+  return (
+    <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs text-slate-400">Link to an existing {entityType.toLowerCase() || "canonical"}</span>
+        <button onClick={onClose} className="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+      </div>
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder={`Search ${entityType.toLowerCase() || "canonical"}s by name…`}
+        className="w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-brand-500" />
+      <div className="mt-2 max-h-52 space-y-1 overflow-y-auto">
+        {searching && <div className="px-1 py-1 text-xs text-slate-600">Searching…</div>}
+        {!searching && q.trim().length >= 2 && results.length === 0 && (
+          <div className="px-1 py-1 text-xs text-slate-600">No matching {entityType.toLowerCase()} canonical found.</div>
+        )}
+        {results.map((r) => (
+          <button key={r.id} disabled={busy} onClick={() => onPick(r.id, r.name)}
+            className="flex w-full items-center justify-between gap-2 rounded-md border border-slate-800 px-2.5 py-1.5 text-left text-sm hover:border-brand-500 hover:bg-slate-800/50 disabled:opacity-50">
+            <span className="truncate text-slate-200">{r.name}</span>
+            <span className="shrink-0 font-mono text-[10px] text-slate-500">{r.id}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

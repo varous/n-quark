@@ -143,20 +143,75 @@ function GlobalSearch() {
       <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500 sm:block">/</kbd>
       {open && res && (
         <div className="absolute z-30 mt-1.5 max-h-96 w-full overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/95 p-2 text-sm shadow-2xl backdrop-blur">
-          <div className="px-2 pb-1 pt-1 text-[10px] uppercase tracking-wide text-slate-500">Entities</div>
-          {res.results.entities.length === 0 && <div className="px-2 py-1 text-xs text-slate-600">none</div>}
-          {res.results.entities.map((e, i) => (
-            <a key={i} href={`#/entities/${e.type}/${e.canonical_entity_id}`} className="block truncate rounded-md px-2 py-1.5 hover:bg-slate-800">{String(e.name ?? e.canonical_entity_id)} <span className="text-xs text-slate-500">{String(e.type)}</span></a>
-          ))}
-          <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-500">Events</div>
-          {res.results.events.length === 0 && <div className="px-2 py-1 text-xs text-slate-600">none</div>}
-          {res.results.events.map((e, i) => (
-            <a key={i} href={`#/events/${e.canonical_event_id}`} className="block truncate rounded-md px-2 py-1.5 hover:bg-slate-800">{String(e.source_record_id)} <span className="text-xs text-slate-500">{String(e.source)}</span></a>
-          ))}
+          <SearchGroups entities={res.results.entities} events={res.results.events} />
         </div>
       )}
     </div>
   );
+}
+
+// Product-first global search (§5B.2.6 §18/§19): results read as Artists / Venues / Organizers /
+// Events with plain-language types and product routes. The BFF search reads the suppressing /entities
+// endpoint, so quarantined/invalid canonicals and source-handle projections never surface here.
+type Ent = Record<string, unknown>;
+const ENTITY_ROUTE: Record<string, (id: string) => string> = {
+  ARTIST: (id) => `/artists/${encodeURIComponent(id)}`,
+  VENUE: (id) => `/venues/${encodeURIComponent(id)}`,
+  ORGANIZER: (id) => `/entities/ORGANIZER/${encodeURIComponent(id)}`,
+};
+const ENTITY_LABEL: Record<string, string> = { ARTIST: "Artist", VENUE: "Venue", ORGANIZER: "Organizer", EVENT_SERIES: "Series" };
+
+function SearchGroups({ entities, events }: { entities: Ent[]; events: Ent[] }) {
+  const order = ["ARTIST", "VENUE", "ORGANIZER", "EVENT_SERIES"];
+  const byType = new Map<string, Ent[]>();
+  for (const e of entities) {
+    const t = String(e.type ?? "OTHER");
+    (byType.get(t) ?? byType.set(t, []).get(t)!).push(e);
+  }
+  const sortedTypes = [...byType.keys()].sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  const nothing = entities.length === 0 && events.length === 0;
+  return (
+    <>
+      {sortedTypes.map((t) => (
+        <div key={t}>
+          <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-slate-500">{plural(ENTITY_LABEL[t] ?? title(t))}</div>
+          {byType.get(t)!.map((e, i) => {
+            const id = String(e.canonical_entity_id);
+            const route = (ENTITY_ROUTE[t] ?? ((x: string) => `/entities/${t}/${encodeURIComponent(x)}`))(id);
+            const review = String(e.identity_state ?? "") === "UNRESOLVED" || String(e.identity_state ?? "") === "POSSIBLE_DUPLICATE";
+            return (
+              <a key={i} href={`#${route}`} className="flex items-center justify-between gap-2 truncate rounded-md px-2 py-1.5 hover:bg-slate-800">
+                <span className="truncate text-slate-100">{String(e.name ?? id)}</span>
+                <span className="shrink-0 text-xs text-slate-500">{review ? "Needs data-quality review" : (ENTITY_LABEL[t] ?? title(t))}</span>
+              </a>
+            );
+          })}
+        </div>
+      ))}
+      {events.length > 0 && (
+        <div>
+          <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-500">Events</div>
+          {events.map((e, i) => (
+            <a key={i} href={`#/events/${e.canonical_event_id}`} className="flex items-center justify-between gap-2 truncate rounded-md px-2 py-1.5 hover:bg-slate-800">
+              <span className="truncate text-slate-100">{title(String(e.source_record_id ?? e.canonical_event_id))}</span>
+              <span className="shrink-0 text-xs text-slate-500">{String(e.source ?? "")}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {nothing && <div className="px-2 py-2 text-xs text-slate-600">No product results.</div>}
+    </>
+  );
+}
+
+function title(s: string): string {
+  return s.replace(/^[a-z]+:/, "").replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function plural(s: string): string {
+  return s.endsWith("s") ? s : `${s}s`;
 }
 
 function EnvBadge({ compact }: { compact?: boolean }) {

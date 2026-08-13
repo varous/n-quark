@@ -118,3 +118,19 @@ def test_event_detail_includes_interpreted(monkeypatch):
     assert body["interpreted"]["venue"]["state"] == "NOT_ANNOUNCED"
     assert body["interpreted"]["venue"]["canonical_entity_id"] is None
     app.dependency_overrides.clear()
+
+
+def test_confirm_existing_match_forwards_selected_canonical(oidc):
+    # §5B.2.6 §21 — the canonical selector forwards BOTH the review candidate and the operator-chosen
+    # existing canonical; the operator identity is server-set, never client-supplied.
+    fake = FakeGateway({CORRECT: {"new_state": "RESOLVED", "audited": True}})
+    app.dependency_overrides[get_admin_service] = lambda: AdminService(fake)
+    oidc.cookies.set(settings.session_cookie_name, auth.issue_session("op@clockwork-av.com", "VIEWER", auth_mode="oidc"))
+    r = oidc.post("/admin/v1/data-quality/correct",
+                  json={"action": "CONFIRM_EXISTING_MATCH", "candidate_id": "cand-1",
+                        "canonical_entity_id": "venue:kala-mandir", "actor": "attacker@evil.com"})
+    assert r.status_code == 200
+    sent = fake.sent[-1]["json"]
+    assert sent["action"] == "CONFIRM_EXISTING_MATCH"
+    assert sent["candidate_id"] == "cand-1" and sent["canonical_entity_id"] == "venue:kala-mandir"
+    assert sent["actor"] == "op@clockwork-av.com"        # client-supplied actor is ignored

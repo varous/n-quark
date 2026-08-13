@@ -651,8 +651,9 @@ class EntityResolutionService:
             if not cid:
                 continue
             a = agg.setdefault(cid, {"id": cid, "type": c.entity_type, "name": c.raw_name,
-                                     "sources": set()})
+                                     "sources": set(), "statuses": set()})
             a["sources"].add(c.source)
+            a["statuses"].add(c.resolution_status)
         # cross-type index: slug -> set of canonical types it exists as
         cross: dict[str, set[str]] = {}
         for a in agg.values():
@@ -660,17 +661,30 @@ class EntityResolutionService:
         known_artists = frozenset(_N.normalize_artist(a["name"]).normalized
                                   for a in agg.values() if a["type"] == "ARTIST")
 
-        counts: dict[str, int] = {}
+        counts: dict[str, int] = {}          # open issues only (already-repaired excluded)
+        open_by_problem: dict[str, int] = {}
+        repaired_by_problem: dict[str, int] = {}
         by_type: dict[str, dict[str, int]] = {"ARTIST": {}, "VENUE": {}, "ORGANIZER": {}}
         manifest: list[dict[str, Any]] = []
 
         def flag(a, problem, action, auto_safe, evidence):
-            counts[problem] = counts.get(problem, 0) + 1
-            by_type.setdefault(a["type"], {})[problem] = by_type.setdefault(a["type"], {}).get(problem, 0) + 1
+            # A canonical whose every candidate is already QUARANTINED has been governed-repaired: it is
+            # kept in the manifest for provenance (5B.2.6 §22) but never counted as an open problem, so
+            # the quality statistics don't imply an already-fixed issue is still outstanding.
+            statuses = a.get("statuses") or set()
+            repaired = bool(statuses) and statuses <= {R.QUARANTINED}
+            state = "repaired" if repaired else "open"
+            if repaired:
+                repaired_by_problem[problem] = repaired_by_problem.get(problem, 0) + 1
+            else:
+                counts[problem] = counts.get(problem, 0) + 1
+                open_by_problem[problem] = open_by_problem.get(problem, 0) + 1
+                by_type.setdefault(a["type"], {})[problem] = by_type.setdefault(a["type"], {}).get(problem, 0) + 1
             if len(manifest) < limit:
                 manifest.append({"canonical_entity_id": a["id"], "entity_type": a["type"],
                                  "name": a["name"], "problem_class": problem, "proposed_action": action,
                                  "auto_safe": auto_safe, "requires_review": not auto_safe,
+                                 "state": state, "repaired": repaired,
                                  "sources": sorted(a["sources"]), "evidence": evidence})
 
         clean = 0
@@ -693,11 +707,16 @@ class EntityResolutionService:
             else:
                 clean += 1
 
+        open_issues = sum(open_by_problem.values())
+        repaired_issues = sum(repaired_by_problem.values())
         return {"canonical_entities_audited": len(agg), "clean": clean,
                 "counts_by_problem": counts, "counts_by_type": by_type,
+                "open_issues": open_issues, "repaired_issues": repaired_issues,
+                "open_by_problem": open_by_problem, "repaired_by_problem": repaired_by_problem,
                 "manifest": manifest, "manifest_truncated": len(manifest) >= limit,
                 "note": "read-only audit; no canonical data mutated. auto_safe items are exact placeholder "
-                        "phrases eligible for deterministic suppression; everything else is review-gated."}
+                        "phrases eligible for deterministic suppression; everything else is review-gated. "
+                        "'repaired' items are already governed-quarantined and excluded from open counts."}
 
     # ---- review queue + governed corrections (5B.2.4) -------------------------------------------
     def review_queue(self, *, limit: int = 100) -> dict[str, Any]:
@@ -817,6 +836,16 @@ class EntityResolutionService:
                 "candidates_quarantined": quarantined, "actor": actor, "reason": reason,
                 "evidence_preserved": True, "rows_deleted": 0}
 
+    @staticmethod
+    def _is_known_canonical(session, canonical_entity_id: str, entity_type: str) -> bool:
+        """A canonical is 'known' if the registry holds at least one candidate of that exact type
+        resolved to it — this is what prevents CONFIRM_EXISTING_MATCH from accepting an arbitrary id."""
+        row = session.execute(
+            select(EntityResolutionCandidate.id).where(
+                EntityResolutionCandidate.candidate_canonical_entity_id == canonical_entity_id,
+                EntityResolutionCandidate.entity_type == entity_type).limit(1)).first()
+        return row is not None
+
     def apply_correction(self, *, action: str, actor: str, reason: str | None = None,
                          canonical_entity_id: str | None = None, candidate_id: str | None = None,
                          now: datetime | None = None) -> dict[str, Any]:
@@ -836,6 +865,7 @@ class EntityResolutionService:
             if c is None:
                 raise ValueError("candidate not found")
             prev = c.resolution_status
+            prev_canonical = c.candidate_canonical_entity_id
             ev = dict(c.evidence or {})
             if action == "CONFIRM_MULTI_ROLE":
                 ev["multi_role_confirmed"] = True
@@ -846,16 +876,26 @@ class EntityResolutionService:
             elif action == "REJECT_MATCH":
                 c.candidate_canonical_entity_id, c.resolution_status, new = None, R.UNRESOLVED, "REJECTED_MATCH"
             elif action == "CONFIRM_EXISTING_MATCH":
+                # Operator links the mention to an EXISTING canonical they selected (§5B.2.6 §21).
+                # The target must be a real canonical of the SAME type — never an arbitrary id.
+                if not canonical_entity_id:
+                    raise ValueError("canonical_entity_id (an existing canonical) required for CONFIRM_EXISTING_MATCH")
+                if not self._is_known_canonical(s, canonical_entity_id, c.entity_type):
+                    raise ValueError(f"{canonical_entity_id} is not a known {c.entity_type} canonical")
+                ev["confirmed_existing_match"] = canonical_entity_id
+                c.candidate_canonical_entity_id = canonical_entity_id
                 c.resolution_status, new = R.RESOLVED, R.RESOLVED
             else:
                 raise ValueError(f"unsupported action {action}")
             ev.setdefault("corrections", []).append({"action": action, "actor": actor, "reason": reason,
-                                                     "at": now.isoformat(), "previous_status": prev})
+                                                     "at": now.isoformat(), "previous_status": prev,
+                                                     "previous_canonical_entity_id": prev_canonical,
+                                                     "new_canonical_entity_id": c.candidate_canonical_entity_id})
             c.evidence = ev
             c.updated_at = now
             s.add(EntityResolutionHistory(
                 id=_uuid(), candidate_id=c.id, previous_status=prev, new_status=c.resolution_status,
-                previous_canonical_entity_id=c.candidate_canonical_entity_id,
+                previous_canonical_entity_id=prev_canonical,
                 new_canonical_entity_id=c.candidate_canonical_entity_id,
                 reason_code=f"CORRECTION:{action}", resolver_version=R.RESOLVER_VERSION, created_at=now))
         return {"candidate_id": candidate_id, "action": action, "actor": actor, "new_state": new,

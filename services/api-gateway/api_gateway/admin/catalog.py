@@ -14,13 +14,36 @@ from typing import Any
 from api_gateway.admin.gateway_client import DownstreamGateway
 
 CRAWL = "crawl"
+GRAPH = "graph"
 DEMAND = "artist_intelligence"
 ENTITIES = "/v1/internal/entity-resolution/entities"
+
+# Bounded server-side fan-out for venue aggregation (§5B.2.6 §11): the venue detail read model
+# never issues frontend N+1 requests and never traverses the whole graph.
+VENUE_EVENT_FANOUT = 60
 
 
 class CatalogAdminService:
     def __init__(self, gw: DownstreamGateway) -> None:
         self.gw = gw
+
+    async def _count(self, entity_type: str) -> int | None:
+        """Total registry-backed canonical count for a product type (Artists/Venues/Organizers).
+        Product totals come from crawl's authoritative registry — never raw graph-node counts."""
+        r = await self.gw.get(CRAWL, ENTITIES, params={"entity_type": entity_type, "limit": 1, "offset": 0})
+        if not r.ok:
+            return None
+        data = r.data if isinstance(r.data, dict) else {}
+        return data.get("count")
+
+    async def product_counts(self) -> dict[str, Any]:
+        """Registry-backed product cohort totals for the Overview (§5B.2.6 §5). Suppressed
+        (quarantined/review) canonicals are already excluded by the entities endpoint."""
+        artists = await self._count("ARTIST")
+        venues = await self._count("VENUE")
+        organizers = await self._count("ORGANIZER")
+        return {"available": artists is not None or venues is not None,
+                "artists": artists, "venues": venues, "organizers": organizers}
 
     async def _canonical(self, entity_type: str, *, limit: int, offset: int,
                          source: str | None = None) -> tuple[list[dict[str, Any]], int | None, bool]:
@@ -102,3 +125,45 @@ class CatalogAdminService:
         if has_events:
             items = [i for i in items if i["events_observed"] > 0]
         return {"available": ok, "count": count, "limit": limit, "offset": offset, "venues": items}
+
+    async def venue_detail(self, venue_id: str) -> dict[str, Any]:
+        """First-class Venue read model (§5B.2.6 §10/§11): activity, Artists who have appeared,
+        Organizers active here, Events observed, sources — CANONICAL relationships only (source-handle
+        projections are excluded). Bounded server-side fan-out; no frontend N+1, no full-graph pull."""
+        ent = await self.gw.get(CRAWL, f"/v1/internal/entity-resolution/entities/VENUE/{venue_id}")
+        if not ent.ok:
+            return {"available": False, "canonical_venue_id": venue_id}
+        data = dict(ent.data or {})
+        events: list[str] = list(data.get("linked_events") or [])
+        artists: dict[str, str] = {}
+        organizers: dict[str, str] = {}
+        fanned = events[:VENUE_EVENT_FANOUT]
+        for eid in fanned:
+            nb = await self.gw.get(GRAPH, f"/v1/graph/nodes/{eid}/neighbors", params={"direction": "both"})
+            if not nb.ok:
+                continue
+            for n in (nb.data or {}).get("neighbors", []):
+                node = n.get("node") or {}
+                nid, ntype = node.get("id"), (node.get("type") or "").lower()
+                if not nid:
+                    continue
+                name = (node.get("properties") or {}).get("display_name") or nid
+                if ntype == "artist" and nid.startswith("artist:"):
+                    artists.setdefault(nid, name)
+                elif ntype == "organizer" and nid.startswith("organizer:"):
+                    organizers.setdefault(nid, name)
+        return {
+            "available": True,
+            "canonical_venue_id": venue_id,
+            "name": data.get("canonical_name") or venue_id,
+            "city": (data.get("properties") or {}).get("city") or data.get("city"),
+            "events_observed": len(events),
+            "sources": data.get("sources") or [],
+            "last_observed": data.get("last_observed"),
+            "events": events,
+            "events_aggregated": len(fanned),
+            "events_truncated": len(events) > len(fanned),
+            "artists": [{"canonical_artist_id": k, "name": v} for k, v in artists.items()],
+            "organizers": [{"canonical_organizer_id": k, "name": v} for k, v in organizers.items()],
+            "source_handles": len(data.get("source_handles") or []),
+        }

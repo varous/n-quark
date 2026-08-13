@@ -106,3 +106,55 @@ def test_catalog_is_read_only(local):
     app.dependency_overrides[get_catalog_service] = lambda: _svc({})
     assert local.post("/admin/v1/catalog/artists").status_code == 405
     assert local.post("/admin/v1/catalog/venues").status_code == 405
+
+
+# ---- §5B.2.6 inc.6: product counts + first-class venue aggregation ------------------------------
+VENUE_ID = "venue:kala-mandir--kolkata"
+VENUE_ENTITY = f"crawl:/v1/internal/entity-resolution/entities/VENUE/{VENUE_ID}"
+NEIGHBORS = "graph:/v1/graph/nodes/event:e1/neighbors"
+
+
+def test_product_counts_come_from_registry(local):
+    # counts read the crawl canonical registry (never graph); no graph key is provided, yet counts resolve
+    app.dependency_overrides[get_catalog_service] = lambda: _svc({f"crawl:{ENTITIES}": {"count": 64}})
+    body = local.get("/admin/v1/catalog/counts").json()
+    assert body["available"] is True
+    assert body["artists"] == 64 and body["venues"] == 64 and body["organizers"] == 64
+
+
+def test_product_counts_degrade(local):
+    app.dependency_overrides[get_catalog_service] = lambda: _svc({}, unavailable={f"crawl:{ENTITIES}"})
+    body = local.get("/admin/v1/catalog/counts").json()
+    assert body["available"] is False and body["artists"] is None
+
+
+def test_venue_detail_aggregates_canonical_only(local):
+    # the venue detail collects Artists/Organizers from bounded graph fan-out — canonical nodes only;
+    # source-handle projections (boshow:artist:*) must never appear as Artists.
+    responses = {
+        VENUE_ENTITY: {"canonical_entity_id": VENUE_ID, "canonical_name": "Kala Mandir",
+                       "sources": ["district"], "linked_events": ["event:e1"], "last_observed": "2026-08-10",
+                       "source_handles": [{"source": "district", "handle": "x"}]},
+        NEIGHBORS: {"neighbors": [
+            {"relationship": "FEATURES", "direction": "in",
+             "node": {"id": "artist:arijit-singh", "type": "artist", "properties": {"display_name": "Arijit Singh"}}},
+            {"relationship": "FEATURES", "direction": "in",
+             "node": {"id": "boshow:artist:someone", "type": "source_handle", "properties": {"display_name": "Someone"}}},
+            {"relationship": "ORGANIZED_BY", "direction": "out",
+             "node": {"id": "organizer:bookmyshow", "type": "organizer", "properties": {"display_name": "BookMyShow"}}},
+        ]},
+    }
+    app.dependency_overrides[get_catalog_service] = lambda: _svc(responses)
+    body = local.get(f"/admin/v1/catalog/venues/{VENUE_ID}").json()
+    assert body["available"] is True and body["name"] == "Kala Mandir"
+    assert body["events_observed"] == 1
+    artist_ids = [a["canonical_artist_id"] for a in body["artists"]]
+    assert artist_ids == ["artist:arijit-singh"]                 # projection excluded
+    assert not any(i.startswith("boshow:") for i in artist_ids)
+    assert [o["canonical_organizer_id"] for o in body["organizers"]] == ["organizer:bookmyshow"]
+
+
+def test_venue_detail_degrades(local):
+    app.dependency_overrides[get_catalog_service] = lambda: _svc({}, unavailable={VENUE_ENTITY})
+    body = local.get(f"/admin/v1/catalog/venues/{VENUE_ID}").json()
+    assert body["available"] is False

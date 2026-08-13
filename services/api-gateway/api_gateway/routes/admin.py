@@ -371,6 +371,18 @@ async def catalog_venues(limit: int = Query(default=50, ge=1, le=200), offset: i
     return await svc.venues(limit=limit, offset=offset, has_events=has_events)
 
 
+@router.get("/catalog/venues/{venue_id:path}")
+async def catalog_venue_detail(venue_id: str, _: auth.Principal = Depends(auth.require_viewer),
+                               svc: CatalogAdminService = Depends(get_catalog_service)) -> dict[str, Any]:
+    return await svc.venue_detail(venue_id)
+
+
+@router.get("/catalog/counts")
+async def catalog_counts(_: auth.Principal = Depends(auth.require_viewer),
+                         svc: CatalogAdminService = Depends(get_catalog_service)) -> dict[str, Any]:
+    return await svc.product_counts()
+
+
 # ---- demand intelligence (Phase 5A.2; read-only; degrades gracefully) ---------------------------
 @router.get("/demand/overview")
 async def demand_overview(_: auth.Principal = Depends(auth.require_viewer),

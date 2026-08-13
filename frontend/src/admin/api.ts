@@ -127,6 +127,8 @@ export const api = {
   // ---- product catalog + coverage + movement (Phase 5B.2) ----
   catalogArtists: (f: Record<string, unknown>) => req<CatalogArtistList>(`/catalog/artists${qs(f)}`),
   catalogVenues: (f: Record<string, unknown>) => req<CatalogVenueList>(`/catalog/venues${qs(f)}`),
+  catalogVenueDetail: (id: string) => req<CatalogVenueDetail>(`/catalog/venues/${encodeURIComponent(id)}`),
+  catalogCounts: () => req<ProductCounts>("/catalog/counts"),
   artistCoverage: (id: string) => req<ArtistCoverage>(`/demand/artists/${encodeURIComponent(id)}/coverage`),
   artistMovement: (id: string) => req<ArtistMovement>(`/demand/artists/${encodeURIComponent(id)}/movement`),
   marketMovement: () => req<MarketMovement>("/market/movement"),
@@ -277,6 +279,15 @@ export type CatalogArtist = {
 export type CatalogArtistList = { available: boolean; monitoring_available: boolean; count: number | null; limit: number; offset: number; artists: CatalogArtist[] };
 export type CatalogVenue = { canonical_venue_id: string; name: string; events_observed: number; sources: string[]; last_observed: string | null };
 export type CatalogVenueList = { available: boolean; count: number | null; limit: number; offset: number; venues: CatalogVenue[] };
+export type CatalogVenueDetail = {
+  available: boolean; canonical_venue_id: string; name?: string; city?: string | null;
+  events_observed?: number; sources?: string[]; last_observed?: string | null;
+  events?: string[]; events_aggregated?: number; events_truncated?: boolean;
+  artists?: Array<{ canonical_artist_id: string; name: string }>;
+  organizers?: Array<{ canonical_organizer_id: string; name: string }>;
+  source_handles?: number;
+};
+export type ProductCounts = { available: boolean; artists: number | null; venues: number | null; organizers: number | null };
 export type CovState = "COLLECTED" | "ZERO_OBSERVED" | "NOT_COLLECTED" | "UNAVAILABLE" | "INSUFFICIENT_HISTORY" | string;
 export type ArtistCoverage = {
   available?: boolean; canonical_artist_id: string;
@@ -290,8 +301,8 @@ export type ArtistCoverage = {
 export type MovementItem = { canonical_artist_id?: string; video_id?: string; title?: string | null; relationship_type?: string; classification?: string; comparison_cohort?: string | null; observation_count?: number; baseline_sample_size?: number; supporting_values?: Record<string, number | null>; thresholds?: Record<string, number>; calculated_at?: string };
 export type ArtistMovement = { available?: boolean; canonical_artist_id?: string; videos_considered?: number; counts?: Record<string, number>; moving_owned?: number; moving_ecosystem?: number; highest_velocity_per_hour?: number | null; independent_active_channels?: number; cross_channel_activity?: boolean; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; disclaimer?: string };
 export type MarketMovement = { available?: boolean; artists_considered?: number; breakout_candidates?: MovementItem[]; rising?: MovementItem[]; cooling?: MovementItem[]; cross_channel_activity?: Array<Record<string, unknown>>; disclaimer?: string };
-export type DataQualityItem = { canonical_entity_id: string; entity_type: string; name: string; problem_class: string; proposed_action: string; auto_safe: boolean; requires_review: boolean; sources: string[]; evidence: Record<string, unknown> };
-export type DataQualityAudit = { available?: boolean; canonical_entities_audited?: number; clean?: number; counts_by_problem?: Record<string, number>; counts_by_type?: Record<string, Record<string, number>>; manifest?: DataQualityItem[]; manifest_truncated?: boolean; note?: string };
+export type DataQualityItem = { canonical_entity_id: string; entity_type: string; name: string; problem_class: string; proposed_action: string; auto_safe: boolean; requires_review: boolean; state?: "open" | "repaired"; repaired?: boolean; sources: string[]; evidence: Record<string, unknown> };
+export type DataQualityAudit = { available?: boolean; canonical_entities_audited?: number; clean?: number; counts_by_problem?: Record<string, number>; counts_by_type?: Record<string, Record<string, number>>; open_issues?: number; repaired_issues?: number; open_by_problem?: Record<string, number>; repaired_by_problem?: Record<string, number>; manifest?: DataQualityItem[]; manifest_truncated?: boolean; note?: string };
 
 // ---- research watchlist types (loose; the BFF is the source of truth) ----
 export type WatchTarget = {

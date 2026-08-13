@@ -1,6 +1,53 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.2 increment 5 — integrity product closure). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-13 (Phase 5B.2 increment 6 — market observatory UX closure). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 6 — market observatory UX closure (2026-08-13)
+
+Final product-comprehension pass over the trusted interpretation layer, before returning to YouTube
+collection. No entity-resolution architecture change (one governed-correction bug fixed). No migration.
+Affected services: crawl-service (audit/correction) + nquark-admin (gateway BFF + frontend).
+
+- **Information architecture** — the console reads as a market observatory: Overview / Explore
+  (Events·Artists·Venues·Organizers) / Monitor (Watchlist·Market Movement·Demand) / Coverage
+  (Collection·Captures) / Advanced (Data Quality·Analysis·Resolution·Graph·Diagnostics·All entities·
+  System). Dead infra-first Overview removed from `screens.tsx`.
+- **Overview redesign (§4–6)** — product-first: "what n-quark is seeing" from the **canonical registry**
+  (Events observed, Artists/Venues/Organizers identified, Artists monitored, Sources active) via a new
+  `/catalog/counts` BFF (registry totals, never raw graph-node counts); a **Needs-attention** grid backed
+  by real states (open identity-review items, capture failures, content-movement / demand coverage) with
+  honest explained-zero copy; demand-coverage + service-reachability cards kept distinct from evidence.
+- **Venue detail (§10–11)** — first-class: Activity, **Artists appearing here**, **Organizers active
+  here**, Events, sources — from a new bounded `/catalog/venues/{id}` read model (server-side graph
+  fan-out capped at 60 events, **canonical nodes only** — source-handle projections excluded; no frontend
+  N+1, no full-graph pull).
+- **Event detail (§8)** — product-first tabs (Overview·Sources·Changes·Demand) with the technical tabs
+  (Evidence·Entities·Relationships·Capture status) grouped under **Advanced**; the Overview tab leads with
+  Event → Who&where (integrity projection) → Ticketing; raw resolved-view fields moved under Advanced.
+- **Events list (§7)** — product columns (Event·Date·City·Source·Observed changes·Status); resolution/
+  state/transition counts no longer lead the market list.
+- **Global search (§18–19)** — product-first: grouped Artists/Venues/Organizers/Events with plain type
+  labels + product routes; reads the suppressing `/entities` endpoint so quarantined/invalid canonicals
+  and source projections never surface; review-required entities labelled "Needs data-quality review".
+- **Data Quality repaired/open (§22)** — `quality_audit` now distinguishes **open** vs already
+  **repaired** (governed-quarantined) issues: `open_issues`/`repaired_issues` + per-item `state`/`repaired`;
+  repaired items stay in the manifest for provenance but are **excluded from open counts**. UI shows them
+  struck-through with a "Repaired · quarantined" chip and no action.
+- **Review toolset closure (§20–21)** — **canonical match selector**: a review mention can be linked to an
+  operator-selected **existing** canonical via `CONFIRM_EXISTING_MATCH`, now **fixed** to actually set +
+  **validate** the target (`_is_known_canonical` — must be a real canonical of the same type; arbitrary ids
+  rejected end-to-end), audited with prev/new canonical. **Compound review**: ambiguous compounds show the
+  suggested parts read-only with "Confirm split" (re-resolves each part independently — never a combined
+  canonical) + Leave-unresolved. (Interactive part-editor that *creates* child mentions still deferred —
+  needs a new governed SPLIT action.)
+- Tests: crawl **233** (+3: audit repaired/open, CONFIRM_EXISTING_MATCH links selected canonical + rejects
+  arbitrary id), gateway **137** (+5: catalog counts×2, venue aggregation×2, confirm-existing-match
+  forwarding). frontend tsc/build/lint clean.
+- **Remaining**: full Demand default-view redesign (§13–15, coverage-first sections + Advanced ops),
+  interactive compound part-editor (governed SPLIT), and the authenticated live production walkthrough +
+  Fly reconciliation (operator-side — agent cannot complete OAuth).
+
+
 
 ## Phase 5B.2 increment 5 — entity-integrity product closure (2026-08-12, DEPLOYED)
 

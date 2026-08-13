@@ -1,79 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
-import { Badge, Card, Empty, ErrorBox, ExportButtons, Link, Loading, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
-import { DemandSummaryCard } from "./demand";
-
-const CARD_LABELS: Record<string, string> = {
-  active_tracked_events: "Active tracked events",
-  captures_total: "Captures (total)",
-  events_with_3plus_states: "Events ≥3 states",
-  transitions_total: "Transitions (total)",
-  resolved_artist_rate: "Resolved artist rate",
-  ambiguous_entity_candidates: "Ambiguous candidates",
-  unresolved_entity_candidates: "Unresolved candidates",
-  stale_tracked_events: "Stale tracked events",
-  failed_capture_jobs: "Failed capture jobs",
-  cross_source_entities: "Cross-source entities",
-};
-
-export function Overview() {
-  const { data, loading, error } = useAsync(() => api.dashboard(), []);
-  if (loading) return <Loading />;
-  if (error) return <ErrorBox message={error} />;
-  if (!data) return <Empty message="No data." />;
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
-        {Object.entries(data.cards).map(([k, v]) => (
-          <Stat key={k} label={CARD_LABELS[k] ?? k} value={typeof v === "number" && !Number.isInteger(v) ? v.toFixed(2) : v} />
-        ))}
-      </div>
-      <Card title="Sources">
-        <div className="grid gap-3 md:grid-cols-2">
-          {Object.entries(data.sources).map(([src, s]) => (
-            <div key={src} className="rounded border border-slate-800 p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <Link to={`/sources/${src}`} className="font-medium text-sky-400 hover:underline">{src}</Link>
-                <span className="text-xs text-slate-500">{s.tracked_events} tracked</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-xs text-slate-400">
-                <span>artists {s.resolved_artists}</span>
-                <span>venues {s.resolved_venues}</span>
-                <span>orgs {s.resolved_organizers}</span>
-                <span>series {s.series_links}</span>
-                <span>states {s.distinct_states}</span>
-                <span>transitions {s.transitions}</span>
-                <span>ambiguous {s.ambiguous}</span>
-                <span>unresolved {s.unresolved}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <AttentionQueue title="Recent capture failures" items={data.attention_queues.recent_capture_failures}
-          render={(q) => <><Badge label="Failed" /> <span className="text-slate-300">{fmt(q.canonical_event_id ?? q.job_id)}</span> <span className="text-slate-500">{fmt(q.result_code ?? q.status)}</span></>} />
-        <AttentionQueue title="Stale events" items={data.attention_queues.stale_events}
-          render={(q) => <Link to={`/events/${q.canonical_event_id}`}><Badge label="Stale" /> {fmt(q.source_record_id)}</Link>} />
-        <AttentionQueue title="Events without geography" items={data.attention_queues.events_without_geography}
-          render={(q) => <Link to={`/events/${q.canonical_event_id}`}>{fmt(q.source_record_id)}</Link>} />
-      </div>
-      <DemandSummaryCard />
-    </div>
-  );
-}
-
-function AttentionQueue({ title, items, render }: { title: string; items: Array<Record<string, unknown>>; render: (q: Record<string, unknown>) => React.ReactNode }) {
-  return (
-    <Card title={title}>
-      {items.length === 0 ? <Empty message="Clear." /> : (
-        <ul className="space-y-1.5 text-sm">
-          {items.map((q, i) => <li key={i} className="truncate">{render(q)}</li>)}
-        </ul>
-      )}
-    </Card>
-  );
-}
+import { Badge, Card, ErrorBox, ExportButtons, Link, Loading, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
 
 export function Sources() {
   const { data, loading, error } = useAsync(() => api.sources(), []);
@@ -143,15 +70,15 @@ export function Events() {
       {data && !data.available && <Unavailable />}
       {loading ? <Loading /> : (
         <Card>
+          {/* Product-first columns (§5B.2.6 §7): Event / Date / City / Source / status in plain language.
+              Resolution/state/transition counts live on the event's Advanced tabs, not the market list. */}
           <Table rows={data?.events ?? []} empty="No events match these filters." columns={[
-            { key: "title", header: "Title", render: (r) => <Link to={`/events/${r.canonical_event_id}`}>{r.title ?? r.source_record_id}</Link> },
+            { key: "title", header: "Event", render: (r) => <Link to={`/events/${r.canonical_event_id}`}>{r.title ?? r.source_record_id}</Link> },
+            { key: "starts_at", header: "Date", render: (r) => fmt(r.starts_at) },
+            { key: "city", header: "City", render: (r) => r.city ? fmt(r.city) : <span className="text-slate-600">—</span> },
             { key: "source", header: "Source" },
-            { key: "city", header: "City", render: (r) => fmt(r.city) },
-            { key: "starts_at", header: "Starts", render: (r) => fmt(r.starts_at) },
-            { key: "state_count", header: "States" },
-            { key: "transition_count", header: "Transitions" },
-            { key: "resolution_status", header: "Resolution", render: (r) => <Badge label={r.resolution_status} /> },
-            { key: "last_capture_status", header: "Capture", render: (r) => <Badge label={r.stale ? "Stale" : r.last_capture_status} /> },
+            { key: "state_count", header: "Observed changes", render: (r) => <span className="text-slate-400">{r.transition_count || 0}</span> },
+            { key: "last_capture_status", header: "Status", render: (r) => <Badge label={r.stale ? "Stale" : (r.last_capture_status ?? "Observed")} /> },
           ]} />
           <Pager offset={offset} limit={limit} count={data?.count ?? 0} onChange={setOffset} />
         </Card>

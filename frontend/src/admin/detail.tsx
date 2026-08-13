@@ -4,35 +4,51 @@ import { Badge, Card, Empty, ErrorBox, Link, Loading, Table, Unavailable, useAsy
 import { Pager } from "./screens";
 import { DemandSection, EventDemandContext } from "./demand";
 
-const TABS = ["Current", "Source records", "Timeline", "Evidence", "Entities", "Relationships", "Demand context", "Capture status"];
+// Product-first tabs lead; the technical/ontology tabs are grouped under Advanced (§5B.2.6 §8).
+const PRIMARY_TABS = ["Overview", "Sources", "Changes", "Demand"];
+const ADVANCED_TABS = ["Evidence", "Entities", "Relationships", "Capture status"];
 
 export function EventDetail({ id }: { id: string }) {
-  const [tab, setTab] = useState("Current");
+  const [tab, setTab] = useState("Overview");
   const { data, loading, error } = useAsync(() => api.eventDetail(id), [id]);
+  const title = (data?.current_view?.title as string | undefined) ?? shortName(id);
   return (
     <div className="space-y-4">
-      <div className="text-xs text-slate-500">Event · <span className="font-mono">{id}</span></div>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-100">{title}</h1>
+        <div className="mt-0.5 text-xs text-slate-500">Event · <span className="font-mono">{id}</span></div>
+      </div>
       {error && <ErrorBox message={error} />}
       {data && !data.available && <Unavailable />}
-      <div className="flex flex-wrap gap-1 border-b border-slate-800">
-        {TABS.map((t) => (
+      <div className="flex flex-wrap items-center gap-1 border-b border-slate-800">
+        {PRIMARY_TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm ${tab === t ? "border-b-2 border-sky-500 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}>{t}</button>
+        ))}
+        <span className="mx-1 h-4 w-px bg-slate-800" aria-hidden />
+        <span className="px-1 text-[10px] uppercase tracking-widest text-slate-600">Advanced</span>
+        {ADVANCED_TABS.map((t) => (
+          <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm ${tab === t ? "border-b-2 border-sky-500 text-slate-100" : "text-slate-500 hover:text-slate-300"}`}>{t}</button>
         ))}
       </div>
       {loading ? <Loading /> : !data ? <Empty message="Not found." /> : (
         <>
-          {tab === "Current" && <CurrentView d={data} />}
-          {tab === "Source records" && <SourceRecords records={data.source_records} />}
-          {tab === "Timeline" && <TimelineTab id={id} />}
+          {tab === "Overview" && <CurrentView d={data} />}
+          {tab === "Sources" && <SourceRecords records={data.source_records} />}
+          {tab === "Changes" && <TimelineTab id={id} />}
           {tab === "Evidence" && <EvidenceTab id={id} />}
           {tab === "Entities" && <EntitiesTab entities={data.resolved_entities} />}
           {tab === "Relationships" && <RelationshipsTab rels={data.relationships} />}
-          {tab === "Demand context" && <EventDemandContext eventId={id} />}
+          {tab === "Demand" && <EventDemandContext eventId={id} />}
           {tab === "Capture status" && <CaptureStatus id={id} d={data} />}
         </>
       )}
     </div>
   );
+}
+
+function shortName(id: string): string {
+  const tail = id.split(":").pop() ?? id;
+  return tail.replace(/-/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function EventIntegrity({ it }: { it: NonNullable<Awaited<ReturnType<typeof api.eventDetail>>["interpreted"]> }) {
@@ -81,23 +97,47 @@ function EventIntegrity({ it }: { it: NonNullable<Awaited<ReturnType<typeof api.
 function CurrentView({ d }: { d: Awaited<ReturnType<typeof api.eventDetail>> }) {
   const { open } = useDrawer();
   const cv = d.current_view;
-  const fields = ["title", "starts_at", "city", "organizer", "price_min", "currency", "fill_ratio", "source"];
+  const hasCommercial = cv.price_min != null || cv.currency != null || cv.fill_ratio != null;
   return (
     <div className="space-y-4">
-    {d.interpreted && <EventIntegrity it={d.interpreted} />}
-    <Card title="Current resolved view" right={<Badge label={String(cv.epistemic ?? "Observed")} />}>
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
-        {fields.map((f) => (
-          <div key={f}>
-            <dt className="text-xs uppercase text-slate-500">{f}</dt>
-            <dd className="text-slate-200">{fmt(cv[f])}</dd>
-          </div>
-        ))}
-      </dl>
-      <button className="mt-4 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800" onClick={() => open("Event current view (provenance)", cv)}>
-        Provenance
-      </button>
-    </Card>
+      {/* Event — name / when / where */}
+      <Card title="Event" right={<Badge label={String(cv.epistemic ?? "Observed")} />}>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
+          <div><dt className="text-xs uppercase text-slate-500">Date &amp; time</dt><dd className="text-slate-200">{fmt(cv.starts_at)}</dd></div>
+          <div><dt className="text-xs uppercase text-slate-500">City</dt><dd className="text-slate-200">{fmt(cv.city)}</dd></div>
+          <div><dt className="text-xs uppercase text-slate-500">Source</dt><dd className="text-slate-200">{fmt(cv.source)}</dd></div>
+        </dl>
+      </Card>
+
+      {/* Who & where — integrity-projected relationships (quarantined never shown as a link) */}
+      {d.interpreted && <EventIntegrity it={d.interpreted} />}
+
+      {/* Ticketing / commercial */}
+      <Card title="Ticketing">
+        {hasCommercial ? (
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
+            <div><dt className="text-xs uppercase text-slate-500">Price from</dt><dd className="text-slate-200">{cv.price_min != null ? `${fmt(cv.currency ?? "")} ${fmt(cv.price_min)}`.trim() : "Not observed"}</dd></div>
+            <div><dt className="text-xs uppercase text-slate-500">Fill ratio</dt><dd className="text-slate-200">{cv.fill_ratio != null ? fmt(cv.fill_ratio) : "Not observed"}</dd></div>
+          </dl>
+        ) : (
+          <p className="text-sm text-slate-500">No ticketing detail observed for this event yet.</p>
+        )}
+      </Card>
+
+      <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm">
+        <summary className="cursor-pointer text-slate-400">Resolved-view provenance (Advanced)</summary>
+        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
+          {["title", "starts_at", "city", "organizer", "price_min", "currency", "fill_ratio", "source"].map((f) => (
+            <div key={f}>
+              <dt className="text-xs uppercase text-slate-500">{f}</dt>
+              <dd className="text-slate-200">{fmt(cv[f])}</dd>
+            </div>
+          ))}
+        </dl>
+        <button className="mt-3 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800" onClick={() => open("Event current view (provenance)", cv)}>
+          Full provenance
+        </button>
+      </details>
     </div>
   );
 }
