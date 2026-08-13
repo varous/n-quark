@@ -1,6 +1,39 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-12 (Phase 5B.2 increment 4 — integrity enforcement). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-12 (Phase 5B.2 increment 5 — integrity product closure). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 5 — entity-integrity product closure (2026-08-12, DEPLOYED)
+
+Closed the gap between the integrity backend and the product experience. No migration; crawl + nquark-admin only.
+
+- **Event integrity projection**: `interpreted_relationships(event)` + `/events/{id}/interpreted-entities` —
+  a quarantined/placeholder mention is NEVER presented as a linked entity. Venue reads **NOT_ANNOUNCED**
+  (raw source preserved), review/role-conflict mentions read **NEEDS_REVIEW**, only RESOLVED canonicals are
+  real links. Gateway `event_detail` includes `interpreted`; the Event page leads with a "Who & where"
+  card in plain language ("Venue not announced", "N artists identified · M need review") — never inferring
+  integrity from graph edges/strings.
+- **Data Quality review workflow**: the screen gains a live **Needs review** queue with context-sensitive
+  governed actions (Confirm dual-role on ROLE_CONFLICT, Re-run, Reject — candidate-scoped, authenticated,
+  audited) + a **Suppress placeholder** action on the audit manifest + a **quality-metrics** strip.
+- **Quality-flow metrics**: `quality_metrics` + `/quality-metrics` — clean_single / placeholder_suppressed /
+  compound_split / role_conflict / review_required / resolved / operator_corrected, by type + source, open
+  review items, oldest review age, recently corrected, `interpretation_method=deterministic` (AI disabled).
+- **Production proof (real, read-only except the inc4 quarantine)**:
+  - **§16 flagship**: the two real District events that referenced `venue:venue-to-be-announced--kolkata`
+    (`ramayan-2026-buy-tickets`, `dirty-drivez-2025-buy-tickets`) now project **venue NOT_ANNOUNCED,
+    canonical null, raw "Venue to be announced" preserved** — no link to the quarantined venue; still
+    visible under Advanced (`include_flagged`); zero rows deleted.
+  - **§13 metrics**: 823 mentions processed — 805 clean_single / 11 compound_split / 815 resolved / 5
+    ambiguous / 1 unresolved / 2 quarantined / **0 open review** (the 16 audit cross-type cases are all
+    established dual-role, correctly resolved by the refined gate, not queued).
+  - **§19 regression**: re-resolving 20 District/Boshow events → **20/20 SUCCEEDED**; placeholder stays
+    suppressed from product Venues.
+- Tests: crawl **230** (+3 interpreted/metrics), gateway **132** (+2). frontend tsc/build/lint clean.
+- **Remaining**: the full compound-review split editor + existing-canonical select-search UI (§7/§8 — APIs
+  exist; UI wires the core actions), and the deferred Part B market-observatory UX (Overview/Events list/
+  Venue detail/Demand). Live ROLE_CONFLICT review items appear only for NEW conflicts (current prod cross-
+  type are all legitimate dual-role, surfaced via the audit rather than the live queue).
+
 
 ## Phase 5B.2 increment 4 — integrity enforcement + governed corrections (2026-08-12, DEPLOYED)
 
