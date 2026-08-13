@@ -114,3 +114,18 @@ async def test_confirm_multi_role_is_audited(session_factory):
         org2 = s.get(EntityResolutionCandidate, org.id)
         assert org2.evidence.get("multi_role_confirmed") is True
         assert org2.evidence["corrections"][-1]["actor"] == "op@x.com"
+
+
+@pytest.mark.asyncio
+async def test_established_same_type_not_suppressed_by_cross_type(session_factory):
+    # VENUE "Multi Hall" gets established; an ORGANIZER "Multi Hall" also exists (dual role).
+    await _svc(session_factory, *_event_node([_venue("Multi Hall")])).resolve_event(
+        canonical_event_id="event:v1", source="boshow", source_record_id="rv1")
+    await _svc(session_factory, *_event_node([], organizer="Multi Hall")).resolve_event(
+        canonical_event_id="event:o1", source="boshow", source_record_id="ro1")  # organizer → ROLE_CONFLICT (first dual)
+    # re-resolving the VENUE must STILL resolve it (established same-type canonical), not suppress it
+    await _svc(session_factory, *_event_node([_venue("Multi Hall")])).resolve_event(
+        canonical_event_id="event:v2", source="district", source_record_id="rv2")
+    with session_factory() as s:
+        venues = s.query(EntityResolutionCandidate).filter_by(entity_type="VENUE", raw_name="Multi Hall").all()
+    assert any(v.resolution_status == R.RESOLVED and v.candidate_canonical_entity_id for v in venues)

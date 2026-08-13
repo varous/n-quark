@@ -85,7 +85,7 @@ class EntityResolutionService:
         decisions: list[tuple[EntityEvidence, ResolutionResult]] = []
         for ev in evidence_list:
             # 5B.2.4 — interpretation GATE: no unresolved interpretation state may create a canonical.
-            gate = self._interpret_gate(ev, cross_index)
+            gate = self._interpret_gate(ev, cross_index, known)
             if gate is not None:
                 res = ResolutionResult(status=gate, canonical_entity_id=None, score=0.0,
                                        reason_code=gate)
@@ -195,7 +195,8 @@ class EntityResolutionService:
             idx.setdefault(_N.slug(raw), set()).add(etype)
         return idx
 
-    def _interpret_gate(self, ev: EntityEvidence, cross_index: dict[str, set[str]]) -> str | None:
+    def _interpret_gate(self, ev: EntityEvidence, cross_index: dict[str, set[str]],
+                        known: KnownEntities) -> str | None:
         """Return a non-product status (REVIEW_REQUIRED / ROLE_CONFLICT / PLACEHOLDER) when this mention
         must NOT create/match a canonical, else None. Consumes the mention's interpretation (set at
         extraction) plus a registry cross-type check — one place, no duplicated interpretation logic."""
@@ -205,12 +206,18 @@ class EntityResolutionService:
             return R.PLACEHOLDER
         if state == "AMBIGUOUS_COMPOUND":
             return R.REVIEW_REQUIRED
-        # cross-type / role conflict — identity already exists as a DIFFERENT canonical type.
+        # cross-type / role conflict — identity already exists as a DIFFERENT canonical type. Only gate a
+        # NEW wrong-type creation: an ESTABLISHED same-type canonical (already in known.name_map or a
+        # matching source handle) is a confirmed entity and resolves normally even if it is legitimately
+        # dual-role. This protects real dual-role entities from being suppressed on re-resolution.
+        if (ev.evidence or {}).get("multi_role_confirmed"):
+            return None
+        has_same_type_canonical = (ev.normalized_name in known.name_map
+                                   or (ev.source, ev.source_entity_handle) in known.handle_map)
+        if has_same_type_canonical:
+            return None
         other = sorted(t for t in cross_index.get(_N.slug(ev.raw_name), set()) if t != ev.entity_type)
         if other:
-            # a mention whose evidence already confirms LEGITIMATE_MULTI_ROLE is allowed to proceed.
-            if (ev.evidence or {}).get("multi_role_confirmed"):
-                return None
             return R.ROLE_CONFLICT
         return None
 
