@@ -73,10 +73,29 @@ keys regions by normalized label so Trends `West Bengal` aligns with graph `regi
 
 ## Identity resolution
 
-`canonical artist → bounded YouTube search → ranked candidates → deterministic evidence → RESOLVED /
-AMBIGUOUS / UNRESOLVED`. Name equality alone never resolves; a topic/official, known-handle, known-URL,
-or explicit-channel-id signal is required to clear the threshold. Ambiguous artists stay unresolved and
-auditable. Provider resolution never creates a canonical artist.
+`canonical artist → bounded YouTube search (DISCOVERY) → ranked candidates → AUTHORITATIVE channels.list
+verification → deterministic evidence → RESOLVED / AMBIGUOUS / UNRESOLVED`. Name equality alone never
+resolves; a topic/official, known-handle, known-URL, or explicit-channel-id signal is required to clear
+the threshold. Ambiguous artists stay unresolved and auditable. Provider resolution never creates a
+canonical artist.
+
+**Discovery vs verification (5B.2.7).** Search is candidate discovery; provider verification is a separate
+step. When search-only scoring is AMBIGUOUS, the top-N *plausible* candidates are verified via
+`channels.list` (not only pre-declared clear leaders), and the decision is re-made on the authoritative
+metadata (a verified exact channel-title match earns a bounded bonus). This lets a disambiguating channel
+resolve, while equally-named verified channels still stay AMBIGUOUS by the clear-leader margin — thresholds
+are never lowered to force resolution. A **candidate identity row is NOT a verified provider channel**: the
+funnel (`youtube_pipeline`) reports eligible artists → identity candidates → verified channels → needs
+review → unresolved → owned videos registered, and the UI labels *verified channels* distinctly from
+*identity candidates*.
+
+**Non-RESOLVED identities stay schedulable (5B.2.7).** A successful HTTP identity job is not terminal for
+the identity: AMBIGUOUS/UNRESOLVED artists are re-enqueued on a status-based cadence (UNRESOLVED → backoff
+retry; AMBIGUOUS → slower re-resolution). Re-enqueue eligibility is gated on the crawl product registry, so
+invalid/orphan/compound/quarantined canonicals never enter active YouTube monitoring (and it fails closed
+if the registry is unavailable). A verified channel automatically earns a one-time owned-uploads catalogue
+backfill (official uploads playlist, `relationship_type=OWNED_CONTENT`, never search) + recurring
+channel/video refresh.
 
 ## Data freshness
 

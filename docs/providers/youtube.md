@@ -10,9 +10,15 @@ or logs.
 
 | endpoint | YouTube call | quota | used for |
 |---|---|---|---|
-| `GET /v1/signals/youtube/search?q=` | `search.list` (type=channel) | **100 units** | identity discovery only |
-| `GET /v1/signals/youtube/channels/{id}/preview` | `channels.list` | 1 unit | channel snapshot |
-| `GET /v1/signals/youtube/channels/{id}/videos/preview` | `channels.list`+`playlistItems.list`+`videos.list` | ~3 units | recent videos |
+| `GET /v1/signals/youtube/search?q=` | `search.list` (type=channel) | **1 unit, independent Search-Queries quota (100 calls/day)** | identity discovery only |
+| `GET /v1/signals/youtube/channels/{id}/preview` | `channels.list` | 1 unit (general pool) | channel snapshot |
+| `GET /v1/signals/youtube/channels/{id}/videos/preview` | `channels.list`+`playlistItems.list`+`videos.list` | ~3 units (general pool) | recent videos |
+
+> **Quota model (current, post-June-2026 — 5B.2.7).** `search.list` is metered in a SEPARATE
+> "Search Queries" quota: 1 unit/call, default 100 calls/day. It is INDEPENDENT of the general
+> 10,000-unit/day pool used by `channels.list` / `playlistItems.list` / `videos.list` (1 unit each). The
+> two quotas are never summed into one usage total, and a search request is never double-counted into
+> the general pool. The obsolete `search.list = 100 general units` model has been removed.
 
 Runs in a deterministic mock when no API key is set, so the whole pipeline is demonstrable offline.
 
@@ -83,15 +89,20 @@ treated as exact. Views and video counts are `DIRECT_PROVIDER_VALUE`.
 
 ## Quota strategy
 
-Search (100 units) and reads (1 unit) are treated differently and accounted separately per provider/day
-(`requests`, `search_requests`, `search_quota_units`, `non_search_quota_units`, `successful_calls`,
-`failed_calls`, `quota_errors`). Discipline:
+Search (1 unit, independent Search-Queries quota) and general reads (1 unit, shared pool) are accounted
+in separate buckets that never mix. The diagnostic snapshot reports `search_queries` (used_calls /
+daily_quota_calls) and `general_pool` (used / usable / reserve) separately, plus a `reconciles` flag
+asserting the general total equals exactly GENERAL_READ + VIDEO_STATS_BATCH (no SEARCH, no sub-buckets).
+Discipline:
 
 - **search is for identity discovery, not measurement** — bounded, infrequent, and refused once
-  `YOUTUBE_MAX_SEARCHES_PER_DAY` (default 50) is spent (HTTP 429);
+  `YOUTUBE_MAX_SEARCHES_PER_DAY` (default 50, ≤ the 100/day provider Search quota) is spent (HTTP 429);
+- **identity resolution escalates to authoritative verification** — the top-N plausible candidates are
+  verified via `channels.list` (general pool) even when search-only scoring is ambiguous, so a
+  disambiguating channel can resolve; equally-named verified channels still stay AMBIGUOUS by margin;
 - **repeated collection uses known channel/video ids** via `channels.list` / `videos.list`, never search.
 
-Live run accounting example: 2 searches (200 units) + 6 reads (8 units), all successful.
+Live run accounting example: 2 searches (2 Search-Queries units) + 6 general reads (8 pool units).
 
 ## Refresh
 

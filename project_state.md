@@ -1,6 +1,60 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-13 (Phase 5B.2 increment 6 — market observatory UX closure). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-14 (Phase 5B.2 increment 7 — YouTube collection recovery). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 7 — YouTube collection recovery (2026-08-14, DEPLOYED)
+
+Made the stalled YouTube demand pipeline actually acquire real data. Deployed artist-intelligence +
+nquark-admin only. No migration.
+
+**Diagnosis (live prod)**: 67 canonical artists; YouTube identity **0 RESOLVED / 37 AMBIGUOUS /
+39 UNRESOLVED**; `GENERAL_READ = 0` every day (channels.list never invoked); videos = 0; scheduler
+`queued_due 0 / next_refresh null`. Three root causes:
+1. **Verification never ran for ambiguous** — `resolve_youtube` only called `channels.list` after a
+   search-only RESOLVED decision; real artists rarely clear the 0.70/0.20 threshold on search snippets
+   alone → AMBIGUOUS forever, GENERAL_READ 0.
+2. **Obsolete quota model + double-count** — `search.list` costed at 100 units (should be 1, independent
+   100/day quota); `total_used` summed the SEARCH bucket AND its `SEARCH:<purpose>` sub-buckets → 35
+   calls showed `used_total 7000`.
+3. **Scheduler terminal for non-RESOLVED** — only RESOLVED identities were re-queued; AMBIGUOUS/UNRESOLVED
+   were never re-attempted.
+
+**Fixes**:
+- **Verification wiring (§7/§8)**: `resolve_youtube` authoritatively verifies the top-N PLAUSIBLE
+  candidates via `channels.list` (not only pre-declared leaders), re-scores on the enriched metadata
+  (a verified exact-title match earns a bounded bonus), then decides among the verified pool. The
+  clear-leader margin still guards equally-named impostors — thresholds are NOT lowered.
+- **Quota model (§5/§6)**: `search.list` = 1 unit in an INDEPENDENT 100-call/day Search-Queries quota;
+  general reads draw the 10,000-unit pool; `general_used` excludes SEARCH + its sub-buckets (kills the
+  2× double-count); the snapshot reports the two quotas separately with a `reconciles` invariant.
+- **Scheduler (§9/§10)**: `enqueue_identity_reattempts` keeps AMBIGUOUS/UNRESOLVED schedulable on a
+  status-based cadence; eligibility gated on the crawl product registry (invalid/orphan/compound
+  canonicals excluded; fails closed if the registry is unavailable). Owned uploads persist
+  `relationship_type=OWNED_CONTENT` explicitly (§14). Terminology (§18/§19): coverage + Demand UI
+  distinguish **verified channels** from **identity candidates**; adds a `youtube_pipeline` funnel.
+- Also fixed a latent bug: the registry read requested `limit=500` (crawl caps at 200 → 422 → silent
+  fail-closed); now 200.
+
+**Production proof (real, bounded — §24 ladder A→F reached)**:
+- **A** quota corrected live: `reconciles: true`, `used_total 0` (was the 7000 double-count), SEARCH
+  reported independent (`cost_per_call 1`).
+- **B** `artist:arijit-singh` **UNRESOLVED → RESOLVED, verified=true** via `channels.list`
+  (`UCtFOW7jJXChfFNoucRFqRmw`); `artist:sounak-chattopadhyay` correctly stayed **AMBIGUOUS
+  (verified_no_clear_leader)** — verification ran, impostor protection held.
+- **C/D** verified channel → **50 owned uploads** via the official uploads playlist (not search),
+  50 registered as **OWNED_CONTENT / CHANNEL_UPLOADS**.
+- **E** **152 real content observations** (views/likes/comments) collected via videos.batchGetStats
+  (first observation; second follows on the next cadence — not fabricated).
+- **F** scheduler now **queued_due 67 / identity_jobs_due 67 / next_scheduled_refresh set** (was null);
+  **skipped_invalid=8** (the orphan/compound canonicals excluded). `GENERAL_READ 0→7`, verified_channels
+  `0→1`, owned videos `0→50`.
+- Honest caveat: today's SEARCH bucket carries stale old-model units (3500), so the AUTOMATIC scheduler
+  search path DEFERS (never fails/invalidates) until the next Pacific quota reset, after which the 67
+  re-attempt jobs flow. The manual bounded requeue proved the full causal chain now works.
+- Tests: artist-intelligence **129** (+8 recovery; quota tests updated to the current model), signal
+  **107**, gateway **137**. frontend tsc/build/lint clean.
+
+
 
 ## Phase 5B.2 increment 6 — market observatory UX closure (2026-08-13)
 
