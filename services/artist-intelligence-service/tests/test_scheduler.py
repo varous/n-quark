@@ -36,7 +36,7 @@ async def test_enqueue_is_idempotent(db):
     sched = DemandScheduler(service=svc)
     a = sched.enqueue_due(db)
     b = sched.enqueue_due(db)
-    assert a["jobs_created"] == 2          # channel + video
+    assert a["jobs_created"] == 3          # channel + video + catalogue (5B.2.8 §10)
     assert b["jobs_created"] == 0          # same window → no duplicates
     db.commit()
 
@@ -45,8 +45,8 @@ async def test_run_once_executes_and_reschedules(db):
     svc = await _resolve(db, _fake())
     sched = DemandScheduler(service=svc)
     out = await sched.run_once(db)
-    assert out["claimed"] == 2
-    assert out["outcomes"].get("SUCCEEDED") == 2
+    assert out["claimed"] == 3
+    assert out["outcomes"].get("SUCCEEDED") == 3
     # observations landed + jobs marked SUCCEEDED with a next_refresh_at
     assert db.execute(select(func.count()).select_from(ADO)).scalar_one() > 0
     jobs = db.execute(select(DemandRefreshJob)).scalars().all()

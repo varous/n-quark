@@ -415,12 +415,15 @@ class DemandService:
                                            display_name: str, hints: dict | None = None,
                                            purpose: str = "unresolved",
                                            others_have_backlog: bool = True,
-                                           near_reset: bool = False) -> dict[str, Any]:
+                                           near_reset: bool = False,
+                                           high_priority: bool = False) -> dict[str, Any]:
         """Quota-guarded wrapper over resolve_youtube for the identity-resolution queue. Honors the
-        dynamic per-purpose SEARCH allocation + global reserve; QUOTA_EXHAUSTED → defer, never invalidate."""
+        dynamic per-purpose SEARCH allocation + search reserve; QUOTA_EXHAUSTED → defer, never invalidate.
+        ``high_priority`` (new Watchlist / operator / evidence-triggered) may use the reserved capacity."""
         from artist_intelligence_service.quota import can_spend_search
         if not can_spend_search(db, PROVIDER_YOUTUBE, purpose, YT_SEARCH_UNITS,
-                                others_have_backlog=others_have_backlog, near_reset=near_reset):
+                                others_have_backlog=others_have_backlog, near_reset=near_reset,
+                                high_priority=high_priority):
             return {"status": "QUOTA_EXHAUSTED", "canonical_artist_id": canonical_artist_id}
         return await self.resolve_youtube(db, canonical_artist_id, query=display_name, hints=hints or {},
                                           search_purpose=purpose)

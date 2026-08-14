@@ -181,6 +181,12 @@ def scheduler_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     return intelligence.build_scheduler_state(db)
 
 
+@router.get("/demand/youtube-pipeline", summary="YouTube acquisition pipeline funnel + stuck states (5B.2.8)")
+def youtube_pipeline_route(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from artist_intelligence_service.pipeline import youtube_pipeline
+    return youtube_pipeline(db)
+
+
 @router.get("/demand/quota-buckets", summary="Per-bucket YouTube quota accounting (5A.3)")
 def quota_buckets(db: Session = Depends(get_db)) -> dict[str, Any]:
     return intelligence.build_quota_buckets(db)

@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     youtube_max_searches_per_day: int = 50       # operational self-cap (<= provider Search-Queries quota)
     youtube_channel_refresh_interval_seconds: int = 86400   # daily channel snapshot cadence
     youtube_video_refresh_interval_seconds: int = 43200     # recent-video snapshot cadence
+    # 5B.2.8 §10 — a verified channel retains a RECURRING bounded catalogue-discovery job so new uploads
+    # are detected without operator intervention (bounded depth ⇒ new uploads surface at the playlist head).
+    youtube_catalogue_refresh_interval_seconds: int = 86400  # daily incremental uploads re-enumeration
     youtube_recent_video_limit: int = 5          # bounded window of recent videos per artist
     # 5B.2.7: when search-only scoring is AMBIGUOUS, authoritatively verify the top-N plausible channel
     # candidates via channels.list (GENERAL pool) and re-decide on the enriched metadata. A verified exact

@@ -69,9 +69,14 @@ export function DemandIntelligence() {
   const universe = (data.artist_universe ?? {}) as Obj;
   const buckets = (data.quota_buckets ?? {}) as Obj;
 
+  const pipeline = (data.youtube_pipeline ?? {}) as Obj;
+
   return (
     <div className="space-y-6">
       <IntroLine />
+
+      {/* YouTube acquisition pipeline (5B.2.8) */}
+      {data.youtube_pipeline && <PipelineCard p={pipeline} />}
 
       {/* Artist universe (5A.3) */}
       {data.artist_universe && <ArtistUniverseCard u={universe} />}
@@ -159,6 +164,56 @@ export function DemandIntelligence() {
 
       <p className="text-xs text-slate-500">Inspect a specific artist from <Link to="/entities?entity_type=ARTIST">Entities → an artist</Link> (Demand Intelligence section), or open <span className="font-mono">#/demand/artists/&lt;canonical-artist-id&gt;</span>.</p>
     </div>
+  );
+}
+
+function PipelineCard({ p }: { p: Obj }) {
+  const id = (g(p, "identity") ?? {}) as Obj;
+  const oc = (g(p, "owned_content") ?? {}) as Obj;
+  const ss = (g(p, "snapshot_semantics") ?? {}) as Obj;
+  const sc = (g(p, "scheduler") ?? {}) as Obj;
+  const stuck = (g(p, "stuck_states") ?? {}) as Obj;
+  const anyStuck = Boolean(stuck.any_stuck);
+  const stuckItems = Object.entries(stuck).filter(([k, v]) => k !== "any_stuck"
+    && (v as Obj)?.count as number > 0);
+  return (
+    <Card title="YouTube acquisition pipeline" right={<Badge label={anyStuck ? "Attention" : "Observed"} />}>
+      <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">Identity</div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Eligible artists" value={fmt(g(p, "eligible_canonical_artists"))} />
+        <Stat label="Identity candidates" value={fmt(id.candidates)} />
+        <Stat label="Verified channels" value={fmt(id.verified_channels)} />
+        <Stat label="Needs review" value={fmt(id.needs_identity_review)} />
+        <Stat label="Unresolved" value={fmt(id.unresolved)} />
+        <Stat label="Quota deferred" value={fmt(id.quota_deferred)} />
+      </div>
+      <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-slate-500">Owned content</div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Channels with catalogue" value={fmt(oc.channels_with_catalogue)} />
+        <Stat label="Owned videos tracked" value={fmt(oc.owned_videos_tracked)} />
+        <Stat label="Videos observed" value={fmt(oc.videos_observed)} />
+        {/* §12/§21 — repeated temporal snapshots are DISTINCT from metric-observation rows */}
+        <Stat label="Videos w/ repeated observations" value={fmt(ss.videos_with_2plus_snapshots)} hint={`${fmt(ss.metric_observations)} metric obs`} />
+        <Stat label="Sufficient movement history" value={fmt(oc.videos_with_sufficient_movement_history)} />
+        <Stat label="Metric observations" value={fmt(ss.metric_observations)} />
+      </div>
+      <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-slate-500">Scheduler</div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <Stat label="Next identity job" value={fmt(sc.next_identity_job) || "—"} />
+        <Stat label="Next catalogue job" value={fmt(sc.next_catalogue_job) || "—"} />
+        <Stat label="Next stats job" value={fmt(sc.next_stats_job) || "—"} />
+      </div>
+      {anyStuck && (
+        <div className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-200">
+          <div className="mb-1 font-medium">Stuck acquisition states (diagnostic — nothing is auto-repaired)</div>
+          <ul className="space-y-0.5">
+            {stuckItems.map(([k, v]) => (
+              <li key={k}>{k.replace(/_/g, " ")}: <span className="font-semibold">{(v as Obj).count as number}</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
   );
 }
 

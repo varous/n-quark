@@ -238,6 +238,19 @@ def bucket_used(db: Session, provider: str, bucket: str, *, on: date | None = No
     return int(row or 0)
 
 
+def bucket_requests(db: Session, provider: str, bucket: str, *, on: date | None = None) -> int:
+    """Request (call) COUNT in a bucket today — the accounting unit for the independent Search-Queries
+    quota (100 calls/day). Using calls, not units, makes SEARCH gating robust to any historical
+    per-call unit-cost change: a day that accrued stale 100-unit search rows still gates on real calls."""
+    row = db.execute(
+        select(ProviderQuotaBucketDay.requests).where(
+            ProviderQuotaBucketDay.provider == provider,
+            ProviderQuotaBucketDay.quota_date == quota_date_for(provider, on=on),
+            ProviderQuotaBucketDay.bucket == bucket)
+    ).scalar_one_or_none()
+    return int(row or 0)
+
+
 def general_used(db: Session, provider: str, *, on: date | None = None) -> int:
     """Units drawn from the shared GENERAL pool = GENERAL_READ + VIDEO_STATS_BATCH ONLY.
 
@@ -258,20 +271,22 @@ total_used = general_used
 
 
 def search_calls_used(db: Session, provider: str, *, on: date | None = None) -> int:
-    """Search-Queries calls spent today (the independent quota; 1 call = 1 unit)."""
-    return bucket_used(db, provider, BUCKET_SEARCH, on=on)
+    """Search-Queries CALLS spent today (the independent 100/day quota; accounted by call count, not
+    units — robust to the pre-5B.2.7 100-unit rows that may linger on the current quota day)."""
+    return bucket_requests(db, provider, BUCKET_SEARCH, on=on)
 
 
 def can_spend(db: Session, provider: str, bucket: str, units: int, *, on: date | None = None) -> bool:
     """True iff spending ``units`` in ``bucket`` is within budget.
 
-    SEARCH is checked ONLY against its own independent Search-Queries quota (never the general pool). A
-    general-pool bucket is checked against BOTH its own budget and the shared general reserve — the reserve
-    is what makes 'target 95% utilization' safe (an operator/critical call always keeps headroom)."""
+    SEARCH is checked ONLY against its own independent Search-Queries quota, and by CALL COUNT (never the
+    general pool, never stale units). A general-pool bucket is checked against BOTH its own budget and the
+    shared general reserve — the reserve keeps 'target 95% utilization' safe (critical calls keep headroom)."""
+    if bucket == BUCKET_SEARCH:
+        # 1 search.list call = 1 unit; gate on call count so lingering 100-unit rows can't poison the day
+        return search_calls_used(db, provider, on=on) + units <= settings.youtube_search_daily_calls
     if bucket_used(db, provider, bucket, on=on) + units > bucket_budget(bucket):
         return False
-    if bucket == BUCKET_SEARCH:
-        return True                              # independent quota — not gated by the general pool
     if general_used(db, provider, on=on) + units > usable_units():
         return False
     return True
@@ -291,22 +306,35 @@ def search_purpose_budget(purpose: str) -> int:
 
 
 def search_purpose_used(db: Session, provider: str, purpose: str, *, on: date | None = None) -> int:
-    return bucket_used(db, provider, f"{BUCKET_SEARCH}:{purpose}", on=on)
+    # calls, not units — consistent with the call-based Search-Queries quota (5B.2.8)
+    return bucket_requests(db, provider, f"{BUCKET_SEARCH}:{purpose}", on=on)
+
+
+def search_reserve_calls() -> int:
+    """Calls held back from the ordinary backlog so high-priority work (new Watchlist / operator /
+    evidence-triggered) always has search headroom (5B.2.8 §4). Configured, never hard-coded."""
+    return int(settings.youtube_search_daily_calls * settings.youtube_search_alloc_reserve)
 
 
 def can_spend_search(db: Session, provider: str, purpose: str, units: int, *,
                      others_have_backlog: bool = True, near_reset: bool = False,
-                     on: date | None = None) -> bool:
-    """Dynamic per-purpose SEARCH allocation (5A.3.1).
+                     high_priority: bool = False, on: date | None = None) -> bool:
+    """Dynamic per-purpose SEARCH allocation (5A.3.1 + 5B.2.8 §4).
 
-    Always requires the SEARCH bucket cap + the global reserve to hold (``can_spend``). Within that, a
-    purpose may always use its own configured slice; it may BORROW beyond the slice only when other
-    purposes have no pending work (unused allocation is transferable) or the provider day is near reset
-    (use otherwise-idle budget). The reserve is never borrowable."""
+    Always requires the SEARCH call cap (``can_spend``). Ordinary backlog additionally keeps a configured
+    search RESERVE so a later high-priority target (new Watchlist / operator / new evidence) is never
+    starved; a ``high_priority`` job may use that reserve. Within the cap, a purpose may always use its own
+    configured slice, and may BORROW beyond it only when other purposes are idle or the day is near reset."""
     if not settings.youtube_search_allocation_enforced:
         return can_spend(db, provider, BUCKET_SEARCH, units, on=on)
     if not can_spend(db, provider, BUCKET_SEARCH, units, on=on):
         return False
+    if not high_priority:
+        # keep the reserve for high-priority intake (unless the day is near reset — then use idle budget)
+        reserve = search_reserve_calls()
+        if not near_reset and search_calls_used(db, provider, on=on) + units > (
+                settings.youtube_search_daily_calls - reserve):
+            return False
     used = search_purpose_used(db, provider, purpose, on=on)
     if used + units <= search_purpose_budget(purpose):
         return True            # within the purpose's own allocation
@@ -341,7 +369,8 @@ def bucket_snapshot(db: Session, provider: str, *, on: date | None = None) -> di
             "failed_calls": r.failed_calls if r else 0, "quota_errors": r.quota_errors if r else 0}
     # Two INDEPENDENT quotas — reported separately, never summed into a misleading universal value.
     gen_used = general_used(db, provider, on=on)
-    search_used = buckets[BUCKET_SEARCH]["used"]
+    # Search-Queries is a CALL quota: report by call count (robust to lingering pre-fix 100-unit rows).
+    search_calls = buckets[BUCKET_SEARCH]["requests"]
     # Reconciliation invariant: the general total equals exactly GENERAL_READ + VIDEO_STATS_BATCH units
     # (SEARCH and SEARCH:<purpose> sub-buckets are never added in). Diagnostics assert this holds.
     reconciles = gen_used == (buckets[BUCKET_GENERAL_READ]["used"] + buckets[BUCKET_VIDEO_BATCH]["used"])
@@ -349,9 +378,11 @@ def bucket_snapshot(db: Session, provider: str, *, on: date | None = None) -> di
         "provider": provider, "quota_date": day.isoformat(), "reset_tz": settings.youtube_quota_reset_tz,
         "model": "granular-independent-buckets-2026",
         "search_queries": {
-            "used_calls": search_used, "daily_quota_calls": settings.youtube_search_daily_calls,
-            "remaining_calls": max(settings.youtube_search_daily_calls - search_used, 0),
-            "cost_per_call": YT_SEARCH_UNITS, "independent": True},
+            "used_calls": search_calls, "daily_quota_calls": settings.youtube_search_daily_calls,
+            "remaining_calls": max(settings.youtube_search_daily_calls - search_calls, 0),
+            "reserve_calls": search_reserve_calls(),
+            "cost_per_call": YT_SEARCH_UNITS, "independent": True,
+            "note": "accounted by CALL COUNT; lingering pre-fix 100-unit rows do not affect gating"},
         "general_pool": {
             "daily_quota_units": settings.youtube_daily_quota_units,
             "target_utilization": settings.youtube_quota_target_utilization,

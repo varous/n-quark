@@ -239,6 +239,7 @@ export type DemandOverview = {
   quota: { days?: Array<Record<string, unknown>>; youtube_max_searches_per_day?: number } | null;
   quota_buckets: Record<string, unknown> | null;
   scheduler: Record<string, unknown> | null;
+  youtube_pipeline: Record<string, unknown> | null;
   artist_universe: Record<string, unknown> | null;
   downstream: Record<string, boolean>;
 };

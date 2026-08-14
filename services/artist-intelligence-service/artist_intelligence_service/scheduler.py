@@ -43,6 +43,7 @@ JOB_CATALOGUE = "YOUTUBE_CATALOGUE_BACKFILL"      # 5A.3: one-time bounded uploa
 _INTERVALS = {
     JOB_CHANNEL: lambda: settings.youtube_channel_refresh_interval_seconds,
     JOB_VIDEO: lambda: settings.youtube_video_refresh_interval_seconds,
+    JOB_CATALOGUE: lambda: settings.youtube_catalogue_refresh_interval_seconds,
 }
 
 
@@ -87,7 +88,8 @@ class DemandScheduler:
                 skipped += 1
                 continue
             priority = self._artist_priority(db, ident.canonical_artist_id)
-            for job_type in (JOB_CHANNEL, JOB_VIDEO):
+            # channel snapshot + recent-video snapshot + recurring bounded catalogue discovery (§10)
+            for job_type in (JOB_CHANNEL, JOB_VIDEO, JOB_CATALOGUE):
                 window = _window(now, _INTERVALS[job_type]())
                 dedup = f"{ident.canonical_artist_id}|{PROVIDER_YOUTUBE}|{job_type}|{window}"
                 if self._exists(db, dedup):
@@ -121,7 +123,11 @@ class DemandScheduler:
                                    priority: int = cad.P2_CONFIRMED_OR_STRONG,
                                    now: datetime | None = None) -> bool:
         now = now or _now()
-        dedup = f"{canonical_artist_id}|{PROVIDER_YOUTUBE}|{JOB_CATALOGUE}"
+        # windowed dedup (aligned with enqueue_due) so the catalogue recurs each cadence period instead of
+        # being permanently blocked by a one-time key — the immediate post-resolution backfill and the
+        # recurring enqueue share this key within a window, so there is never a duplicate.
+        window = _window(now, _INTERVALS[JOB_CATALOGUE]())
+        dedup = f"{canonical_artist_id}|{PROVIDER_YOUTUBE}|{JOB_CATALOGUE}|{window}"
         if self._active_exists(db, canonical_artist_id, JOB_CATALOGUE) or self._exists(db, dedup):
             return False
         self._add_job(db, dedup=dedup, canonical_artist_id=canonical_artist_id, job_type=JOB_CATALOGUE,
@@ -170,8 +176,11 @@ class DemandScheduler:
             if self._active_exists(db, art, JOB_IDENTITY) or self._exists(db, dedup):
                 continue
             display_name = (ident.identity_metadata or {}).get("query") or art
+            # deterministic priority: an artist with an upcoming/observed live event or multiple
+            # independent references outranks a low-value legacy candidate (§5) — no fused value score.
+            priority = self._artist_priority(db, art)
             self._add_job(db, dedup=dedup, canonical_artist_id=art, job_type=JOB_IDENTITY,
-                          external_identity_id=None, priority=cad.P4_GLOBAL_CANDIDATE, now=now,
+                          external_identity_id=None, priority=priority, now=now,
                           detail={"display_name": display_name, "reattempt": True})
             created += 1
         db.flush()
@@ -293,9 +302,12 @@ class DemandScheduler:
             near_provider_reset,
         )
         purpose = SEARCH_AMBIGUITY if ambiguous else SEARCH_UNRESOLVED
+        # high-priority work (upcoming event / multi-reference / operator) may draw the search reserve (§4/§5)
+        high_priority = (job.priority or cad.P4_GLOBAL_CANDIDATE) <= cad.P2_CONFIRMED_OR_STRONG
         out = await self.service.discover_identity_for_artist(
             db, job.canonical_artist_id, display_name=display_name, purpose=purpose,
-            others_have_backlog=(purpose == SEARCH_AMBIGUITY), near_reset=near_provider_reset(now=now))
+            others_have_backlog=(purpose == SEARCH_AMBIGUITY), near_reset=near_provider_reset(now=now),
+            high_priority=high_priority)
         status = out.get("status")
         if status == "QUOTA_EXHAUSTED":
             return self._defer(job, now, "QUOTA_EXHAUSTED")   # never invalidate; retry when budget resets
@@ -340,7 +352,11 @@ class DemandScheduler:
             band = cad.event_band_seconds(days_to_event)
             secs = min(base, band) if band is not None else base
             return now + timedelta(seconds=secs)
-        return None  # identity / catalogue are one-time (a fresh job is enqueued when needed)
+        if job.job_type == JOB_CATALOGUE:
+            # 5B.2.8 §10 — recurring bounded catalogue discovery (informational next-run; the actual
+            # re-enqueue is windowed via enqueue_due, same as channel/video).
+            return now + timedelta(seconds=settings.youtube_catalogue_refresh_interval_seconds)
+        return None  # identity is re-attempted via enqueue_identity_reattempts (status-based cadence)
 
     async def _event_proximity_days(self, artist: str) -> float | None:
         """Days to the nearest upcoming Indian event for a canonical artist, read LIVE from the graph

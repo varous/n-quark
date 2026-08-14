@@ -37,6 +37,7 @@ class DemandAdminService:
         sched = await self.gw.get(DEMAND, "/v1/internal/demand/scheduler")
         universe = await self.gw.get(DEMAND, "/v1/internal/demand/artist-universe")
         buckets = await self.gw.get(DEMAND, "/v1/internal/demand/quota-buckets")
+        pipeline = await self.gw.get(DEMAND, "/v1/internal/demand/youtube-pipeline")
         # "available" means the demand service answered at least one call — the console degrades the
         # whole panel (not the app) when this is false.
         parts = (cov, health, quota, sched, universe, buckets)
@@ -47,6 +48,7 @@ class DemandAdminService:
             "quota": quota.data if quota.ok else None,
             "quota_buckets": buckets.data if buckets.ok else None,
             "scheduler": sched.data if sched.ok else None,
+            "youtube_pipeline": pipeline.data if pipeline.ok else None,
             "artist_universe": universe.data if universe.ok else None,
             "downstream": {"coverage": cov.ok, "provider_health": health.ok, "quota": quota.ok,
                            "scheduler": sched.ok, "artist_universe": universe.ok,
