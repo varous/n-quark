@@ -151,3 +151,21 @@ async def test_video_stats_are_batch_bounded(db, monkeypatch):
     # 60 videos → ceil(60/50) = 2 batch requests (videos.list id limit is 50), never 60 per-video reads
     assert fake.calls["videos_batch"] == 2
     assert quota.bucket_snapshot(db, Y)["buckets"]["VIDEO_STATS_BATCH"]["requests"] == 2
+
+
+@pytest.mark.asyncio
+async def test_operational_cap_defers_not_fails(db, monkeypatch):
+    # operational cap (youtube_max_searches_per_day) below the 100/day provider quota → resolve_youtube
+    # raises QuotaExhausted; the identity path must DEFER (QUOTA_EXHAUSTED), never fail/invalidate.
+    from artist_intelligence_service.service import DemandService
+    from artist_intelligence_service.providers.youtube import YouTubeProvider
+    from tests.conftest import FakeSignal, candidate
+    monkeypatch.setattr(config.settings, "youtube_max_searches_per_day", 1)
+    monkeypatch.setattr(config.settings, "youtube_search_daily_calls", 100)
+    fake = FakeSignal(search={"cap artist": [candidate("UCcap", "Cap Artist", topic=True)]},
+                      channel={"UCcap": {"title": "Cap Artist", "subscriber_count": 1}})
+    svc = DemandService(youtube=YouTubeProvider(signal=fake))
+    await svc.discover_identity_for_artist(db, "artist:cap", display_name="Cap Artist")  # spends the 1
+    db.commit()
+    out = await svc.discover_identity_for_artist(db, "artist:cap2", display_name="Cap Artist")
+    assert out["status"] == "QUOTA_EXHAUSTED"    # deferred, not an exception, not FAILED

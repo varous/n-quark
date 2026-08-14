@@ -425,8 +425,14 @@ class DemandService:
                                 others_have_backlog=others_have_backlog, near_reset=near_reset,
                                 high_priority=high_priority):
             return {"status": "QUOTA_EXHAUSTED", "canonical_artist_id": canonical_artist_id}
-        return await self.resolve_youtube(db, canonical_artist_id, query=display_name, hints=hints or {},
-                                          search_purpose=purpose)
+        try:
+            return await self.resolve_youtube(db, canonical_artist_id, query=display_name,
+                                              hints=hints or {}, search_purpose=purpose)
+        except QuotaExhausted:
+            # hitting the operational search cap (youtube_max_searches_per_day, which may be < the 100/day
+            # provider quota) is a DEFERRAL, never a failure — the job reschedules for the next window and
+            # the retry budget is untouched (5B.2.8 §4/§6).
+            return {"status": "QUOTA_EXHAUSTED", "canonical_artist_id": canonical_artist_id}
 
     async def backfill_catalogue(self, db: Session, canonical_artist_id: str, *,
                                  depth: int | None = None,
