@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from signal_service.adapters.ticketing import (
     _india_city_region,
     _jsonld_events,
     _jsonld_price,
+    _district_ranked_slugs,
     _maybe_gunzip,
     _sitemap_slugs,
     event_from_boshow,
@@ -113,7 +115,8 @@ def test_district_event_from_jsonld() -> None:
     html = """
     <script type="application/ld+json">
     {"@context":"https://schema.org","@type":"Event","name":"Prateek Kuhad Live",
-     "startDate":"2026-09-12T19:00:00.000Z",
+     "startDate":"2026-09-12T19:00:00.000Z", "endDate":"2026-09-12T22:00:00.000Z",
+     "eventStatus":"https://schema.org/EventRescheduled",
      "location":{"@type":"Place","name":"Phoenix Marketcity","address":"Whitefield, Bengaluru, Karnataka 560048"},
      "offers":{"@type":"AggregateOffer","lowPrice":1499,"priceCurrency":"INR"},
      "performer":[{"@type":"Person","name":"Prateek Kuhad"}],
@@ -129,6 +132,33 @@ def test_district_event_from_jsonld() -> None:
     assert ev.artists == ["Prateek Kuhad"]
     assert ev.price_min == 1499.0 and ev.currency == "INR"
     assert ev.fill_ratio is None  # District has no sold-count
+    assert ev.ends_at is not None
+    assert ev.provider_lifecycle == "https://schema.org/EventRescheduled"
+    assert ev.source_start_value == "2026-09-12T19:00:00.000Z"
+    assert ev.source_time_precision == "START_END_DATETIME"
+    assert ev.source_timezone == "Asia/Kolkata"
+
+
+def test_district_discovery_ranks_current_inventory_not_first_n():
+    xml = """<urlset>
+      <url><loc>https://www.district.in/events/old-show-aug1-2025-buy-tickets</loc><lastmod>2026-08-14</lastmod></url>
+      <url><loc>https://www.district.in/events/future-show-sep2-2026-buy-tickets</loc><lastmod>2026-08-10</lastmod></url>
+      <url><loc>https://www.district.in/events/permanent-attraction-buy-tickets</loc><lastmod>2026-08-14</lastmod></url>
+    </urlset>"""
+    assert _district_ranked_slugs(xml, 2, today=date(2026, 8, 14)) == [
+        "future-show-sep2-2026-buy-tickets", "permanent-attraction-buy-tickets",
+    ]
+
+
+def test_jsonld_date_only_is_preserved_without_fabricated_midnight():
+    ev = event_from_jsonld(
+        {"name": "Date only", "startDate": "2026-09-12"}, "https://example/events/date-only",
+        source="district", source_event_id="date-only", country="India",
+    )
+    assert ev.starts_at is None
+    assert ev.event_date == "2026-09-12"
+    assert ev.source_start_value == "2026-09-12"
+    assert ev.source_time_precision == "DATE_ONLY"
 
 
 def test_skillbox_event_from_details() -> None:

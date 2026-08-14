@@ -192,6 +192,7 @@ class AdminService:
                      has_transitions: bool = False, q: str | None = None, city: str | None = None,
                      date_from: str | None = None, date_to: str | None = None,
                      capture_state: str | None = None, resolution_status: str | None = None,
+                     temporal_state: str | None = None, provider_lifecycle: str | None = None,
                      limit: int = 25, offset: int = 0) -> dict[str, Any]:
         cov = await self.gw.get(CRAWL, "/v1/internal/capture-schedule",
                                 params={"limit": 500, **({"source": source} if source else {})})
@@ -225,6 +226,10 @@ class AdminService:
                 and (not date_to or (r.get("starts_at") or "9999") <= date_to)
                 and (not rs or (r.get("resolution_status") or "") == rs)
             ]
+        if temporal_state:
+            rows = [r for r in rows if (r.get("lifecycle") or {}).get("temporal_state") == temporal_state.upper()]
+        if provider_lifecycle:
+            rows = [r for r in rows if (r.get("lifecycle") or {}).get("provider_lifecycle") == provider_lifecycle.upper()]
         for r in rows:
             r.pop("_blob", None)
         total = len(rows)
@@ -234,10 +239,13 @@ class AdminService:
 
     @staticmethod
     def _shallow_event(t: dict) -> dict[str, Any]:
+        from api_gateway.admin.event_lifecycle import lifecycle_from_properties
+        props = {"starts_at": t.get("starts_at"), "source": t.get("source")}
         return {
             "canonical_event_id": t.get("canonical_event_id"), "title": None, "source": t.get("source"),
             "source_record_id": t.get("source_record_id"), "city": t.get("city"),
-            "starts_at": None, "tracking_status": t.get("tracking_status"),
+            "starts_at": t.get("starts_at"), "tracking_status": t.get("tracking_status"),
+            "lifecycle": lifecycle_from_properties(props),
             "last_capture_status": t.get("last_capture_status"),
             "state_count": t.get("distinct_state_count"), "transition_count": t.get("transition_count"),
             "capture_gap_hours": t.get("capture_gap_hours"),
@@ -246,6 +254,7 @@ class AdminService:
         }
 
     async def _hydrate_event(self, t: dict, *, deep: bool) -> dict[str, Any]:
+        from api_gateway.admin.event_lifecycle import lifecycle_from_properties
         row = self._shallow_event(t)
         cid = t.get("canonical_event_id")
         title = organizer = None
@@ -257,6 +266,9 @@ class AdminService:
             row["title"] = title
             row["city"] = props.get("city") or row["city"]
             row["starts_at"] = props.get("starts_at")
+            row["ends_at"] = props.get("ends_at")
+            row["event_date"] = props.get("event_date")
+            row["lifecycle"] = lifecycle_from_properties(props)
             resolved = await self.gw.get(CRAWL, f"/v1/internal/events/{cid}/resolved-entities")
             ents = (resolved.data or {}).get("entities", []) if resolved.ok else []
             names = [str(e.get("raw_name")) for e in ents if e.get("raw_name")]
@@ -277,6 +289,7 @@ class AdminService:
         return "RESOLVED"
 
     async def event_detail(self, event_id: str) -> dict[str, Any]:
+        from api_gateway.admin.event_lifecycle import lifecycle_from_properties
         node = await self.gw.get(GRAPH, f"/v1/graph/nodes/{event_id}")
         neigh = await self.gw.get(GRAPH, f"/v1/graph/nodes/{event_id}/neighbors", params={"direction": "out"})
         resolved = await self.gw.get(CRAWL, f"/v1/internal/events/{event_id}/resolved-entities")
@@ -294,6 +307,7 @@ class AdminService:
                 "price_min": props.get("price_min"), "currency": props.get("currency"),
                 "fill_ratio": props.get("fill_ratio"), "source": props.get("source"),
                 "source_url": props.get("source_url"), "epistemic": "Observed" if node.ok else "Unknown",
+                "lifecycle": lifecycle_from_properties(props),
             },
             "relationships": self._relationships((neigh.data or {}).get("neighbors", []) if neigh.ok else []),
             "resolved_entities": (resolved.data or {}).get("entities", []) if resolved.ok else [],

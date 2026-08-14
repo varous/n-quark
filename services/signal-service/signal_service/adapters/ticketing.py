@@ -31,7 +31,8 @@ import gzip
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 from typing import Any, ClassVar, Protocol
 
 import httpx
@@ -96,6 +97,13 @@ class TicketingEvent:
     curator: str | None = None
     image_url: str | None = None
     source_city_id: str | None = None  # Phase 4C.1 — stable source city id, when the source exposes one
+    ends_at: datetime | None = None
+    event_date: str | None = None
+    provider_lifecycle: str | None = None
+    source_start_value: str | None = None
+    source_end_value: str | None = None
+    source_time_precision: str = "UNKNOWN"
+    source_timezone: str | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -287,6 +295,16 @@ def event_from_jsonld(
     if isinstance(org, list):
         org = org[0] if org else {}
     keywords = node.get("keywords")
+    raw_start = node.get("startDate") if isinstance(node.get("startDate"), str) else None
+    raw_end = node.get("endDate") if isinstance(node.get("endDate"), str) else None
+    date_only = bool(raw_start and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_start.strip()))
+    start = None if date_only else _parse_dt(raw_start)
+    end = _parse_dt(raw_end)
+    aware = bool(start and start.tzinfo is not None)
+    # District/other India JSON-LD pages describe local Indian event time. A date-only value remains
+    # a date (not midnight); a naive clock stays uncertainty-bearing rather than acquiring server UTC.
+    source_timezone = "Asia/Kolkata" if country.strip().lower() == "india" else None
+    precision = "DATE_ONLY" if date_only else ("START_END_DATETIME" if aware and end and end.tzinfo else ("START_DATETIME_ONLY" if aware else "UNKNOWN"))
     return TicketingEvent(
         source=source, source_event_id=source_event_id, event_slug=source_event_id,
         event_name=(node.get("name") or "").strip(), event_url=url,
@@ -295,9 +313,14 @@ def event_from_jsonld(
         curator=org.get("name") if isinstance(org, dict) else None,
         category=(keywords.split(",")[0].strip() if isinstance(keywords, str) and keywords else "Event"),
         language="", currency=currency, price_min=price,
-        is_free=(price == 0.0), starts_at=_parse_dt(node.get("startDate")),
+        is_free=(price == 0.0), starts_at=start,
         capacity=None, tickets_sold=None, verified=True,
         image_url=_jsonld_image(node.get("image")),
+        ends_at=end if end and end.tzinfo is not None else None,
+        event_date=raw_start if date_only else None,
+        provider_lifecycle=node.get("eventStatus") if isinstance(node.get("eventStatus"), str) else None,
+        source_start_value=raw_start, source_end_value=raw_end,
+        source_time_precision=precision, source_timezone=source_timezone,
         fetched_at=fetched_at or datetime.now(UTC),
     )
 
@@ -573,6 +596,40 @@ def _sitemap_slugs(xml: str, limit: int, sep: str = "/events/") -> list[str]:
     return slugs[:limit]
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def _district_ranked_slugs(xml: str, limit: int, *, today: date | None = None) -> list[str]:
+    """Prefer current dated inventory across the whole sitemap; never arbitrary first-N.
+
+    Slug dates are discovery hints only and never become Event evidence. Unknown-date pages remain
+    eligible behind current/future hints, ordered by sitemap freshness. Clearly historical hints are
+    omitted; extraction remains the authority for the actual schedule.
+    """
+    today = today or datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    entries = re.findall(r"<url>.*?<loc>([^<]+)</loc>.*?(?:<lastmod>([^<]+)</lastmod>)?.*?</url>", xml, re.DOTALL)
+    ranked: list[tuple[int, object, str]] = []
+    for loc, lastmod in entries:
+        if "/events/" not in loc:
+            continue
+        slug = loc.rstrip("/").split("/events/")[-1]
+        hint = None
+        for match in re.finditer(r"(?:^|-)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(\d{1,2})-(20\d{2})(?:-|$)", slug):
+            try:
+                hint = date(int(match.group(3)), _MONTHS[match.group(1)], int(match.group(2)))
+            except ValueError:
+                pass
+        if hint and hint < today:
+            continue
+        ranked.append((0 if hint else 1, hint or (lastmod or ""), slug))
+    ranked.sort(key=lambda row: (row[0], row[1] if row[0] == 0 else "", row[2]), reverse=False)
+    # Unknown-date entries use newest lastmod first without disturbing dated current inventory.
+    current = [r[2] for r in ranked if r[0] == 0]
+    unknown = [r[2] for r in sorted((r for r in ranked if r[0] == 1), key=lambda r: (r[1], r[2]), reverse=True)]
+    return (current + unknown)[:limit]
+
+
 def _maybe_gunzip(content: bytes, url: str) -> str:
     """Decode a sitemap body, transparently gunzipping ``.xml.gz`` children (Meetup ships these)."""
     if url.endswith(".gz") or content[:2] == b"\x1f\x8b":
@@ -591,7 +648,7 @@ class DistrictProvider:
         async with httpx.AsyncClient(timeout=25.0, headers=_BROWSER_HEADERS, follow_redirects=True) as c:
             r = await c.get(url)
             r.raise_for_status()
-            return _sitemap_slugs(r.text, limit)
+            return _district_ranked_slugs(r.text, limit)
 
     async def extract(self, event_ref: str) -> TicketingEvent:
         url = event_ref if event_ref.startswith("http") else f"{DISTRICT_BASE}/events/{event_ref}"
@@ -906,6 +963,16 @@ def normalize_event(event: TicketingEvent) -> list[NormalizedObservation]:
     ]
     if event.starts_at is not None:
         out.append(obs("starts_at", event.starts_at.isoformat(), 0.9))
+    if event.ends_at is not None:
+        out.append(obs("ends_at", event.ends_at.isoformat(), 0.9))
+    if event.event_date is not None:
+        out.append(obs("event_date", event.event_date, 0.9))
+    if event.provider_lifecycle is not None:
+        out.append(obs("provider_lifecycle", event.provider_lifecycle, 0.95))
+    out.append(obs("source_time_precision", event.source_time_precision, 0.99, {
+        "source_start_value": event.source_start_value, "source_end_value": event.source_end_value,
+        "source_timezone": event.source_timezone,
+    }))
     if event.price_min is not None:
         out.append(obs("price_min", event.price_min, 0.85, {"currency": event.currency, "is_free": event.is_free}))
     if event.image_url:
@@ -940,6 +1007,13 @@ def commercial_state(event: TicketingEvent) -> dict[str, Any]:
         "fill_ratio": event.fill_ratio,
         "availability": None,
         "starts_at": event.starts_at.isoformat() if event.starts_at else None,
+        "ends_at": event.ends_at.isoformat() if event.ends_at else None,
+        "event_date": event.event_date,
+        "provider_lifecycle": event.provider_lifecycle,
+        "source_time_precision": event.source_time_precision,
+        "source_timezone": event.source_timezone,
+        "source_start_value": event.source_start_value,
+        "source_end_value": event.source_end_value,
         "venue": event.venue_name or None,
         "status": None,
     }
@@ -954,6 +1028,10 @@ def commercial_state(event: TicketingEvent) -> dict[str, Any]:
         "tickets_sold": _status(event.tickets_sold),
         "fill_ratio": _status(event.fill_ratio),
         "starts_at": _status(values["starts_at"]),
+        "ends_at": _status(values["ends_at"]),
+        "event_date": _status(values["event_date"]),
+        "provider_lifecycle": _status(values["provider_lifecycle"]),
+        "source_time_precision": _status(values["source_time_precision"]),
         "venue": _status(values["venue"]),
         "availability": "NOT_SUPPORTED",  # Boshow exposes no availability enum
         "status": "NOT_SUPPORTED",        # Boshow exposes no event-status/cancellation enum

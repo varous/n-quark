@@ -1,6 +1,24 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-14 (Phase 5B.2 increment 8 — YouTube acquisition stabilization). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-14 (Phase 5B.3 increment 1 — Event lifecycle foundation). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.3 increment 1 — Event lifecycle foundation (2026-08-14, LOCAL / NOT DEPLOYED)
+
+Implemented the first coherent Phase 5B.3 boundary. Event product reads now expose independent,
+backend-derived temporal state and provider lifecycle. Derivation is evidence-bounded: date-only local
+today and timezone-naïve clock values remain UNKNOWN; start-only events never acquire an invented
+duration; PAST never means completed. District JSON-LD now preserves end time, eventStatus, original
+timestamp values, precision and source timezone. Shadow Ledger fields remain append-only and schedule
+changes retain their existing transition history.
+
+Collection cadence makes T+1/T+3/T+7 final captures configurable and gives a cancellation one bounded
+confirmation capture before stopping; historical Events remain stored. Events UI consumes BFF lifecycle
+state and supports temporal/provider filters. District's live sitemap was confirmed to mix historical
+entries into its first URLs; discovery now ranks the whole sitemap toward current/future inventory
+instead of arbitrary first-N. AllEvents official API is the leading governed candidate, but access is
+request/trial-based and no authorized credential exists, so no compliant bounded probe or adapter was
+attempted. Production deployment, live lifecycle proof, District/Boshow contribution audit, overview and
+Artist/Venue lifecycle integration remain the next increment.
 
 ## Phase 5B.2 increment 8 — YouTube acquisition stabilization & real movement (2026-08-14, DEPLOYED)
 

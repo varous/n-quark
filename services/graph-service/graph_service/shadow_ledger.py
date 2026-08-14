@@ -143,8 +143,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     # availability / event_status: an explicit null can mean the source *removed* the field.
     FieldSpec("availability", "availability", _norm_str, PUBLIC_AVAILABILITY_CHANGED, explicit_null_allowed=True),
     FieldSpec("starts_at", "starts_at", _norm_dt, EVENT_DATE_CHANGED),
+    FieldSpec("ends_at", "ends_at", _norm_dt, EVENT_DATE_CHANGED),
+    FieldSpec("event_date", "event_date", _norm_str, EVENT_DATE_CHANGED),
     FieldSpec("venue", "venue", _norm_str, VENUE_CHANGED),
     FieldSpec("status", "status", _norm_str, EVENT_STATUS_CHANGED, explicit_null_allowed=True),
+    FieldSpec("provider_lifecycle", "provider_lifecycle", _norm_str, EVENT_STATUS_CHANGED, explicit_null_allowed=True),
 )
 _SPEC_BY_NAME = {s.name: s for s in FIELD_SPECS}
 _PRICE_FIELDS = ("price_min", "currency")

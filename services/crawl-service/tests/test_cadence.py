@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from crawl_service.cadence import (
+    CANCELLED_CONFIRMATION,
     EVENT_DAY,
     FAR_FUTURE,
     FINAL,
@@ -63,8 +64,15 @@ def test_no_event_date_is_conservative():
     assert reason == NO_DATE and _hours(nxt) == 24
 
 
-def test_terminal_status_stops():
-    nxt, reason = compute_cadence(NOW, starts_at=NOW + timedelta(days=5), tracking_status="CANCELLED")
+def test_cancelled_gets_bounded_confirmation_capture():
+    nxt, reason = compute_cadence(NOW, starts_at=NOW + timedelta(days=5), provider_lifecycle="CANCELLED", lifecycle_observed_at=NOW)
+    assert nxt == NOW + timedelta(hours=24) and reason == CANCELLED_CONFIRMATION
+    nxt2, reason2 = compute_cadence(NOW + timedelta(hours=25), starts_at=NOW + timedelta(days=5), provider_lifecycle="CANCELLED", lifecycle_observed_at=NOW)
+    assert nxt2 is None and reason2 == TRACKING_STOPPED
+
+
+def test_stopped_status_stops():
+    nxt, reason = compute_cadence(NOW, starts_at=NOW + timedelta(days=5), tracking_status="STOPPED")
     assert nxt is None and reason == TRACKING_STOPPED
 
 

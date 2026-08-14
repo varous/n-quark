@@ -24,6 +24,8 @@ export function Sources() {
 
 const CAPTURE_STATES = ["SUCCESS", "RECORD_ABSENT", "SOURCE_UNAVAILABLE", "PARSE_ERROR"];
 const RESOLUTION_STATES = ["RESOLVED", "PARTIAL", "AMBIGUOUS", "UNRESOLVED", "POSSIBLE_MATCH", "CONFLICT", "NONE"];
+const TEMPORAL_STATES = ["UPCOMING", "ONGOING", "PAST", "UNKNOWN"];
+const PROVIDER_LIFECYCLES = ["SCHEDULED", "CANCELLED", "POSTPONED", "RESCHEDULED", "UNKNOWN"];
 
 export function Events() {
   const [params, setParams] = useHashQuery();
@@ -32,6 +34,7 @@ export function Events() {
   const f = {
     q: params.q ?? "", source: params.source ?? "", city: params.city ?? "",
     capture_state: params.capture_state ?? "", resolution_status: params.resolution_status ?? "",
+    temporal_state: params.temporal_state ?? "", provider_lifecycle: params.provider_lifecycle ?? "",
     has_transitions: params.has_transitions === "1", stale_only: params.stale_only === "1",
     date_from: params.date_from ?? "", date_to: params.date_to ?? "",
   };
@@ -50,6 +53,8 @@ export function Events() {
             placeholder="City" value={f.city} onChange={(e) => set({ city: e.target.value })} />
           <Select label="Capture state" value={f.capture_state} onChange={(v) => set({ capture_state: v })} options={["", ...CAPTURE_STATES]} />
           <Select label="Resolution" value={f.resolution_status} onChange={(v) => set({ resolution_status: v })} options={["", ...RESOLUTION_STATES]} />
+          <Select label="When" value={f.temporal_state} onChange={(v) => set({ temporal_state: v })} options={["", ...TEMPORAL_STATES]} />
+          <Select label="Listing change" value={f.provider_lifecycle} onChange={(v) => set({ provider_lifecycle: v })} options={["", ...PROVIDER_LIFECYCLES]} />
           <DateField label="From" value={f.date_from} onChange={(v) => set({ date_from: v })} />
           <DateField label="To" value={f.date_to} onChange={(v) => set({ date_to: v })} />
           <label className="flex items-center gap-1.5 text-sm text-slate-300">
@@ -78,7 +83,12 @@ export function Events() {
             { key: "city", header: "City", render: (r) => r.city ? fmt(r.city) : <span className="text-slate-600">—</span> },
             { key: "source", header: "Source" },
             { key: "state_count", header: "Observed changes", render: (r) => <span className="text-slate-400">{r.transition_count || 0}</span> },
-            { key: "last_capture_status", header: "Status", render: (r) => <Badge label={r.stale ? "Stale" : (r.last_capture_status ?? "Observed")} /> },
+            { key: "lifecycle", header: "Status", render: (r) => {
+              const lc = (r.lifecycle ?? {}) as Record<string, unknown>;
+              const temporal = { UPCOMING: "Upcoming", ONGOING: "Happening now", PAST: "Past event", UNKNOWN: "Time unknown" }[String(lc.temporal_state)] ?? "Time unknown";
+              const provider = String(lc.provider_lifecycle ?? "UNKNOWN");
+              return <Badge label={provider === "UNKNOWN" || provider === "SCHEDULED" ? temporal : `${temporal} · ${provider[0]}${provider.slice(1).toLowerCase()}`} />;
+            } },
           ]} />
           <Pager offset={offset} limit={limit} count={data?.count ?? 0} onChange={setOffset} />
         </Card>

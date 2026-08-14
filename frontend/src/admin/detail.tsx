@@ -98,10 +98,12 @@ function CurrentView({ d }: { d: Awaited<ReturnType<typeof api.eventDetail>> }) 
   const { open } = useDrawer();
   const cv = d.current_view;
   const hasCommercial = cv.price_min != null || cv.currency != null || cv.fill_ratio != null;
+  const lc = (cv.lifecycle ?? {}) as Record<string, unknown>;
+  const temporal = { UPCOMING: "Upcoming", ONGOING: "Happening now", PAST: "Past event", UNKNOWN: "Time unknown" }[String(lc.temporal_state)] ?? "Time unknown";
   return (
     <div className="space-y-4">
       {/* Event — name / when / where */}
-      <Card title="Event" right={<Badge label={String(cv.epistemic ?? "Observed")} />}>
+      <Card title="Event" right={<Badge label={temporal} />}>
         <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
           <div><dt className="text-xs uppercase text-slate-500">Date &amp; time</dt><dd className="text-slate-200">{fmt(cv.starts_at)}</dd></div>
           <div><dt className="text-xs uppercase text-slate-500">City</dt><dd className="text-slate-200">{fmt(cv.city)}</dd></div>

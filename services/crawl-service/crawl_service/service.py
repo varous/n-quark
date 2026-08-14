@@ -56,6 +56,8 @@ class SchedulerService:
             final_hours=self._cfg.cadence_final_hours,
             onsale_burst_hours=self._cfg.cadence_onsale_burst_hours,
             event_day_hours=self._cfg.cadence_event_day_hours,
+            post_event_offsets_days=self._cfg.cadence_post_event_offsets,
+            cancelled_confirmation_hours=self._cfg.cadence_cancelled_confirmation_hours,
         )
 
     # ---- enrollment ----------------------------------------------------------------------------
@@ -249,7 +251,9 @@ class SchedulerService:
                     tracked.last_state_change_at = now
                 next_at, cadence_reason = compute_cadence(
                     now, starts_at=_aware(tracked.starts_at), on_sale_at=_aware(tracked.on_sale_at),
-                    tracking_status=tracked.tracking_status, config=self._cadence,
+                    tracking_status=tracked.tracking_status, provider_lifecycle=tracked.event_status,
+                    lifecycle_observed_at=_aware(tracked.last_state_change_at),
+                    config=self._cadence,
                 )
                 job.status = "SUCCEEDED"
             elif outcome.result_code == SUCCESS_RECORD_ABSENT:
@@ -260,7 +264,9 @@ class SchedulerService:
                 tracked.last_success_at = now  # the request succeeded
                 next_at, cadence_reason = compute_cadence(
                     now, starts_at=_aware(tracked.starts_at), on_sale_at=_aware(tracked.on_sale_at),
-                    tracking_status=tracked.tracking_status, config=self._cadence,
+                    tracking_status=tracked.tracking_status, provider_lifecycle=tracked.event_status,
+                    lifecycle_observed_at=_aware(tracked.last_state_change_at),
+                    config=self._cadence,
                 )
                 job.status = "SUCCEEDED"
             elif decision.terminal:
@@ -387,9 +393,13 @@ class SchedulerService:
             if resolved.get("region_id"):
                 te.region_id = resolved["region_id"]
                 applied["region_id"] = resolved["region_id"]
+            status_changed = False
             if resolved.get("event_status"):
+                status_changed = te.event_status != resolved["event_status"]
                 te.event_status = resolved["event_status"]
                 applied["event_status"] = resolved["event_status"]
+                if status_changed:
+                    te.last_state_change_at = now
             if resolved.get("source_on_sale_at"):
                 te.source_on_sale_at = _parse_dt(resolved["source_on_sale_at"])
                 applied["source_on_sale_at"] = resolved["source_on_sale_at"]
@@ -407,10 +417,12 @@ class SchedulerService:
                 te.next_capture_at = None
                 te.cadence_reason = "city_not_in_allowlist"
                 applied["stopped"] = "city_not_in_allowlist"
-            elif date_changed and te.tracking_status in TRACKABLE:
+            elif (date_changed or status_changed) and te.tracking_status in TRACKABLE:
                 nxt, reason = compute_cadence(
                     now, starts_at=_aware(te.starts_at), on_sale_at=_aware(te.on_sale_at),
-                    tracking_status=te.tracking_status, config=self._cadence)
+                    tracking_status=te.tracking_status, provider_lifecycle=te.event_status,
+                    lifecycle_observed_at=_aware(te.last_state_change_at),
+                    config=self._cadence)
                 te.next_capture_at = nxt
                 te.cadence_reason = reason
                 applied["next_capture_at"] = _iso(nxt)

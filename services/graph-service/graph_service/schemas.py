@@ -76,6 +76,9 @@ class EventFeedItem(BaseModel):
     artists: list[str] = Field(default_factory=list)
     artist_ids: list[str] = Field(default_factory=list)
     starts_at: str | None = None
+    ends_at: str | None = None
+    event_date: str | None = None
+    provider_lifecycle: str | None = None
     price_min: float | None = None
     currency: str | None = None
     is_free: bool = False
@@ -110,6 +113,9 @@ class ShadowObserveRequest(BaseModel):
     fill_ratio: float | None = None
     availability: str | None = None
     starts_at: str | None = None
+    ends_at: str | None = None
+    event_date: str | None = None
+    provider_lifecycle: str | None = None
     venue: str | None = None
     status: str | None = None
     # Phase 1.1 capture integrity.

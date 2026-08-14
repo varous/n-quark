@@ -138,6 +138,13 @@ class Settings(BaseSettings):
     cadence_final_hours: int = 4           # final 14 days
     cadence_onsale_burst_hours: int = 2    # first 48h after on-sale (when known)
     cadence_event_day_hours: int = 2
+    cadence_post_event_offsets_days: str = "1,3,7"
+    cadence_cancelled_confirmation_hours: int = 24
+
+    @property
+    def cadence_post_event_offsets(self) -> tuple[int, ...]:
+        values = sorted({int(v.strip()) for v in self.cadence_post_event_offsets_days.split(",") if v.strip()})
+        return tuple(v for v in values if v > 0)
 
     def _with_second_source(self, base: frozenset[str]) -> frozenset[str]:
         if self.second_source_capture_enabled and self.second_source_name:

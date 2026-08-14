@@ -247,6 +247,10 @@ def _event_summary(event: TicketingEvent) -> dict[str, object]:
         "price_min": event.price_min,
         "currency": event.currency,
         "starts_at": event.starts_at.isoformat() if event.starts_at else None,
+        "ends_at": event.ends_at.isoformat() if event.ends_at else None,
+        "event_date": event.event_date,
+        "provider_lifecycle": event.provider_lifecycle,
+        "source_time_precision": event.source_time_precision,
         "tickets_sold": event.tickets_sold,
         "capacity": event.capacity,
         "fill_ratio": event.fill_ratio,
@@ -267,6 +271,15 @@ def _graph_event_props(event: TicketingEvent) -> dict[str, object]:
         props["organizer"] = event.curator  # name only — organizers aren't canonical entities yet
     if event.starts_at is not None:
         props["starts_at"] = event.starts_at.isoformat()
+    if event.ends_at is not None:
+        props["ends_at"] = event.ends_at.isoformat()
+    if event.event_date is not None:
+        props["event_date"] = event.event_date
+    if event.provider_lifecycle is not None:
+        props["provider_lifecycle"] = event.provider_lifecycle
+    props["source_time_precision"] = event.source_time_precision
+    if event.source_timezone:
+        props["source_timezone"] = event.source_timezone
     if event.price_min is not None:
         props["price_min"] = event.price_min
         props["currency"] = event.currency

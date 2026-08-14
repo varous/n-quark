@@ -177,6 +177,7 @@ export type EventRow = {
   city: string | null; starts_at: string | null; tracking_status: string; last_capture_status: string | null;
   state_count: number; transition_count: number; capture_gap_hours: number | null;
   enrichment_status: string | null; resolution_status: string | null; stale: boolean;
+  lifecycle: { temporal_state?: string; provider_lifecycle?: string; temporal_basis?: string };
 };
 export type InterpretedRelationships = {
   canonical_event_id: string;

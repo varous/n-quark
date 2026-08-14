@@ -20,9 +20,9 @@ POST_EVENT = "post_event_followup"
 POST_EVENT_COMPLETE = "post_event_complete"
 NO_DATE = "no_event_date"
 TRACKING_STOPPED = "tracking_stopped"
+CANCELLED_CONFIRMATION = "cancelled_confirmation"
 
-_TERMINAL_STATUSES = frozenset({"STOPPED", "CANCELLED", "NEEDS_REVIEW"})
-_POST_EVENT_OFFSETS_DAYS = (1, 3, 7)
+_TERMINAL_STATUSES = frozenset({"STOPPED", "NEEDS_REVIEW"})
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,8 @@ class CadenceConfig:
     final_hours: int = 4
     onsale_burst_hours: int = 2
     event_day_hours: int = 2
+    post_event_offsets_days: tuple[int, ...] = (1, 3, 7)
+    cancelled_confirmation_hours: int = 24
 
 
 def compute_cadence(
@@ -40,6 +42,8 @@ def compute_cadence(
     starts_at: datetime | None,
     on_sale_at: datetime | None = None,
     tracking_status: str = "ACTIVE",
+    provider_lifecycle: str | None = None,
+    lifecycle_observed_at: datetime | None = None,
     config: CadenceConfig | None = None,
 ) -> tuple[datetime | None, str]:
     cfg = config or CadenceConfig()
@@ -47,9 +51,13 @@ def compute_cadence(
     if tracking_status in _TERMINAL_STATUSES:
         return None, TRACKING_STOPPED
 
+    if (provider_lifecycle or tracking_status).upper() == "CANCELLED":
+        due = (lifecycle_observed_at or now) + timedelta(hours=cfg.cancelled_confirmation_hours)
+        return (due, CANCELLED_CONFIRMATION) if due > now else (None, TRACKING_STOPPED)
+
     # Post-event follow-ups take precedence once the event has started/passed.
     if starts_at is not None and now >= starts_at:
-        for days in _POST_EVENT_OFFSETS_DAYS:
+        for days in cfg.post_event_offsets_days:
             follow = starts_at + timedelta(days=days)
             if follow > now:
                 return follow, POST_EVENT

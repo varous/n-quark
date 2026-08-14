@@ -171,10 +171,12 @@ async def source_diagnostics(source: str, _: auth.Principal = Depends(auth.requi
 
 def _event_filters(source: str | None, stale_only: bool, has_transitions: bool, q: str | None,
                    city: str | None, date_from: str | None, date_to: str | None,
-                   capture_state: str | None, resolution_status: str | None) -> dict[str, Any]:
+                   capture_state: str | None, resolution_status: str | None,
+                   temporal_state: str | None = None, provider_lifecycle: str | None = None) -> dict[str, Any]:
     return {"source": source, "stale_only": stale_only, "has_transitions": has_transitions,
             "q": q, "city": city, "date_from": date_from, "date_to": date_to,
-            "capture_state": capture_state, "resolution_status": resolution_status}
+            "capture_state": capture_state, "resolution_status": resolution_status,
+            "temporal_state": temporal_state, "provider_lifecycle": provider_lifecycle}
 
 
 @router.get("/events")
@@ -187,12 +189,14 @@ async def events(source: str | None = Query(default=None),
                  date_to: str | None = Query(default=None),
                  capture_state: str | None = Query(default=None),
                  resolution_status: str | None = Query(default=None),
+                 temporal_state: str | None = Query(default=None),
+                 provider_lifecycle: str | None = Query(default=None),
                  limit: int = Query(default=25, ge=1, le=100),
                  offset: int = Query(default=0, ge=0),
                  _: auth.Principal = Depends(auth.require_viewer),
                  svc: AdminService = Depends(get_admin_service)) -> dict[str, Any]:
     f = _event_filters(source, stale_only, has_transitions, q, city, date_from, date_to,
-                       capture_state, resolution_status)
+                       capture_state, resolution_status, temporal_state, provider_lifecycle)
     return await svc.events(**f, limit=limit, offset=offset)
 
 
