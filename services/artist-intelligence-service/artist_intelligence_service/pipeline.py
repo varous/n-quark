@@ -126,6 +126,11 @@ def stuck_states(db: Session) -> dict[str, Any]:
             AEI.provider == PROVIDER_YOUTUBE, AEI.identity_type == "CHANNEL_ID",
             AEI.status.in_(("AMBIGUOUS", "UNRESOLVED"))).where(
             AEI.canonical_artist_id.not_in(resolved_artists) if resolved_artists else True)).all()}
+    # artists that have EVER had an identity job — they are inside the scheduling system (a non-resolved
+    # one between re-attempt windows, or an excluded invalid canonical, is not "stuck"). Only a
+    # non-resolved identity that NEVER entered identity scheduling is a genuine gap (§22).
+    identity_ever = {r[0] for r in db.execute(
+        select(distinct(JOB.canonical_artist_id)).where(JOB.job_type == JOB_IDENTITY)).all()}
     artists_with_videos = {r[0] for r in db.execute(
         select(distinct(YV.canonical_artist_id))).all()}
     cat_success = _artists_with_job(JOB_CATALOGUE, ("SUCCEEDED",))
@@ -144,7 +149,8 @@ def stuck_states(db: Session) -> dict[str, Any]:
     verified_no_videos_after_catalogue = (cat_success & resolved_artists) - artists_with_videos
     owned_videos_without_stats_job = artists_with_videos - vid_any
     stats_succeeded_no_observations = (vid_success & artists_with_videos) - obs_artists
-    nonresolved_without_retry = nonresolved_artists - identity_active
+    # genuinely never scheduled for identity discovery — NOT the between-window or excluded-invalid cohort
+    nonresolved_never_scheduled = nonresolved_artists - identity_ever - identity_active
 
     out = {
         "resolved_without_catalogue_job": {"count": len(resolved_without_catalogue),
@@ -155,8 +161,8 @@ def stuck_states(db: Session) -> dict[str, Any]:
                                            "sample": _s(owned_videos_without_stats_job)},
         "stats_succeeded_no_observations": {"count": len(stats_succeeded_no_observations),
                                             "sample": _s(stats_succeeded_no_observations)},
-        "nonresolved_without_retry": {"count": len(nonresolved_without_retry),
-                                      "sample": _s(nonresolved_without_retry)},
+        "nonresolved_never_scheduled": {"count": len(nonresolved_never_scheduled),
+                                        "sample": _s(nonresolved_never_scheduled)},
     }
     out["any_stuck"] = any(v["count"] > 0 for v in out.values())
     return out

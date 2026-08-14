@@ -169,3 +169,17 @@ async def test_operational_cap_defers_not_fails(db, monkeypatch):
     db.commit()
     out = await svc.discover_identity_for_artist(db, "artist:cap2", display_name="Cap Artist")
     assert out["status"] == "QUOTA_EXHAUSTED"    # deferred, not an exception, not FAILED
+
+
+def test_stuck_state_between_window_not_flagged(db):
+    # a non-resolved identity that has ALREADY had an identity job (between re-attempt windows, or an
+    # excluded invalid canonical) is NOT "never scheduled" — the detector must not flag it.
+    _identity(db, "artist:between", "AMBIGUOUS")
+    now = datetime.now(UTC)
+    from artist_intelligence_service.models import DemandRefreshJob as JOB
+    db.add(JOB(id="idj", dedup_key="idj", canonical_artist_id="artist:between", provider=Y,
+               job_type="YOUTUBE_IDENTITY_DISCOVERY", status="SUCCEEDED",
+               scheduled_at=now, created_at=now, updated_at=now, priority=40))
+    db.flush()
+    p = youtube_pipeline(db)
+    assert p["stuck_states"]["nonresolved_never_scheduled"]["count"] == 0
