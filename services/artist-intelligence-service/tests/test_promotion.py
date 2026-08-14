@@ -183,39 +183,40 @@ def _fill_purpose(db, purpose, searches):
 
 def test_search_allocation_enforced_by_purpose(db, monkeypatch):
     monkeypatch.setattr(config.settings, "youtube_search_allocation_enforced", True)
-    # discovery slice = 0.35*10000*0.40 = 1400 units = 14 searches; fill it, 15th over slice
-    _fill_purpose(db, quota.SEARCH_DISCOVERY, 14)
-    assert quota.search_purpose_used(db, "YOUTUBE", quota.SEARCH_DISCOVERY) == 1400
+    # 5B.2.7: search is 1 unit/call in the independent 100-call SEARCH quota; discovery slice = 100*0.40 = 40
+    _fill_purpose(db, quota.SEARCH_DISCOVERY, 40)
+    assert quota.search_purpose_used(db, "YOUTUBE", quota.SEARCH_DISCOVERY) == 40
     # over slice + others still have backlog → refused
-    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, 100,
+    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, quota.YT_SEARCH_UNITS,
                                   others_have_backlog=True) is False
 
 
 def test_unused_allocation_transfers(db, monkeypatch):
     monkeypatch.setattr(config.settings, "youtube_search_allocation_enforced", True)
-    _fill_purpose(db, quota.SEARCH_DISCOVERY, 14)          # own slice spent
-    # over slice but others idle → may borrow (bucket + reserve still hold)
-    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, 100,
+    _fill_purpose(db, quota.SEARCH_DISCOVERY, 40)          # own slice spent
+    # over slice but others idle → may borrow (the SEARCH 100-call cap still holds)
+    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, quota.YT_SEARCH_UNITS,
                                   others_have_backlog=False) is True
 
 
 def test_reserve_cannot_be_consumed(db, monkeypatch):
-    # tiny budget so the global usable cap (reserve) bites before any purpose slice
+    # 5B.2.7: the GENERAL-pool reserve protects channels.list headroom; SEARCH is an INDEPENDENT quota.
     monkeypatch.setattr(config.settings, "youtube_daily_quota_units", 1000)
     monkeypatch.setattr(config.settings, "youtube_quota_target_utilization", 0.2)  # usable=200
     m = quota.QuotaMeter()
-    m.read(units=200)                                      # consume 200 general-read units
+    m.read(units=200)                                      # consume the whole usable general pool
     quota.record_meter(db, "YOUTUBE", m)
-    # even borrowing / near reset cannot cross the usable cap (reserve stays protected)
-    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_UNRESOLVED, 100,
-                                  others_have_backlog=False, near_reset=True) is False
+    # general read cannot cross the usable cap (reserve stays protected)
+    assert quota.can_spend(db, "YOUTUBE", quota.BUCKET_GENERAL_READ, 1) is False
+    # search is independent of the general pool — its own 100/day cap is what protects it
+    assert quota.can_spend(db, "YOUTUBE", quota.BUCKET_SEARCH, 1) is True
 
 
 def test_near_reset_saturation(db, monkeypatch):
     monkeypatch.setattr(config.settings, "youtube_search_allocation_enforced", True)
-    _fill_purpose(db, quota.SEARCH_DISCOVERY, 14)          # slice spent
+    _fill_purpose(db, quota.SEARCH_DISCOVERY, 40)          # slice spent
     # over slice, others busy, but near reset → allowed to use otherwise-idle budget
-    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, 100,
+    assert quota.can_spend_search(db, "YOUTUBE", quota.SEARCH_DISCOVERY, quota.YT_SEARCH_UNITS,
                                   others_have_backlog=True, near_reset=True) is True
 
 

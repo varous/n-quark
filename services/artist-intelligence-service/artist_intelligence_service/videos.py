@@ -25,9 +25,14 @@ def upsert_video(db: Session, *, video_id: str, channel_id: str, canonical_artis
                  external_identity_id: str | None = None, title: str | None = None,
                  published_at: datetime | None = None, duration_seconds: int | None = None,
                  category: str | None = None, live_status: str | None = None,
+                 relationship_type: str = "OWNED_CONTENT", discovery_method: str = "CHANNEL_UPLOADS",
+                 availability_state: str = "AVAILABLE",
                  metadata: dict[str, Any] | None = None,
                  now: datetime | None = None) -> tuple[YouTubeVideo, bool]:
-    """Idempotent on video_id. Captures stable metadata once; refreshes last_observed_at + fills gaps."""
+    """Idempotent on video_id. Captures stable metadata once; refreshes last_observed_at + fills gaps.
+
+    5B.2.7 §14: ``relationship_type`` is persisted EXPLICITLY (never a silent default or later inference).
+    Uploads discovered through a verified artist channel are ``OWNED_CONTENT`` / ``CHANNEL_UPLOADS``."""
     now = now or _now()
     row = db.execute(select(YouTubeVideo).where(YouTubeVideo.video_id == video_id)).scalar_one_or_none()
     if row is not None:
@@ -50,6 +55,8 @@ def upsert_video(db: Session, *, video_id: str, channel_id: str, canonical_artis
         video_id=video_id, channel_id=channel_id, canonical_artist_id=canonical_artist_id,
         external_identity_id=external_identity_id, title=title, published_at=published_at,
         duration_seconds=duration_seconds, category=category, live_status=live_status,
+        relationship_type=relationship_type, discovery_method=discovery_method,
+        availability_state=availability_state,
         tracking_status="ACTIVE", first_seen_at=now, last_observed_at=now,
         metadata_json=metadata or {}, created_at=now, updated_at=now)
     db.add(row)

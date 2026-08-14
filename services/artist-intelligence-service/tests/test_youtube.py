@@ -77,7 +77,7 @@ async def test_quota_accounting(db):
     await svc.snapshot_youtube(db, ARTIST)     # channel read(1) + video read(3)
     row = db.execute(select(ProviderQuotaDay)).scalar_one()
     assert row.search_requests == 1
-    assert row.search_quota_units == 100
+    assert row.search_quota_units == 1        # 5B.2.7: search.list is 1 unit (independent quota), not 100
     assert row.non_search_quota_units >= 4
 
 

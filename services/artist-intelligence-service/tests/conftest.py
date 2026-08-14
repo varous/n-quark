@@ -69,7 +69,11 @@ class FakeSignal:
             raise RuntimeError("signal-service verify failed (transient)")
         if channel_id in self._found_ids():
             stats = self._channel.get(channel_id) or {}
-            return {"status": "FOUND", "channel_id": channel_id, "title": None, "handle": None,
+            return {"status": "FOUND", "channel_id": channel_id,
+                    # authoritative channels.list metadata (5B.2.7 §8) — present when the fixture sets it
+                    "title": stats.get("title"), "handle": stats.get("handle"),
+                    "topic_categories": stats.get("topic_categories"),
+                    "description": stats.get("description"),
                     "subscriber_count": stats.get("subscriber_count"),
                     "total_view_count": stats.get("total_view_count"),
                     "video_count": stats.get("video_count"), "mock": self.mock}

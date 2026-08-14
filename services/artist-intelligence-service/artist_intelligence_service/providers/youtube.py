@@ -2,8 +2,9 @@
 
 Acquisition (search / channel / videos) is delegated to signal-service so there is one ingestion path
 and the API key stays there. This provider adds the demand-layer semantics on top: deterministic
-identity resolution, normalized ``DemandDatum`` output, and nominal quota metering (search = 100 units,
-read = 1 unit) driven by which primitive it invoked.
+identity resolution (search discovery → authoritative channels.list verification), normalized
+``DemandDatum`` output, and nominal quota metering driven by which primitive it invoked — under the
+current model search.list is 1 unit in an INDEPENDENT Search-Queries quota, general reads are 1 unit.
 """
 
 from __future__ import annotations
@@ -258,6 +259,41 @@ def _score_candidate(query: str, cand: ArtistCandidate, hints: dict) -> tuple[fl
         score += 1.0
         signals.append("explicit_channel_id")
     return round(min(score, 1.0), 4), signals
+
+
+def _looks_music_channel(verification: dict[str, Any]) -> bool:
+    """Best-effort music-topic signal from authoritative channels.list metadata (topic categories or
+    a music-suggestive description). Only used as ADDITIONAL corroboration, never as certainty."""
+    topics = verification.get("topic_categories") or verification.get("topic_ids") or []
+    if any("music" in str(t).lower() for t in topics):
+        return True
+    desc = str(verification.get("description") or "").lower()
+    return any(w in desc for w in ("official artist channel", "official music", "musician", "singer", "vevo"))
+
+
+def score_with_verification(query: str, cand: ArtistCandidate, verification: dict[str, Any],
+                            hints: dict) -> tuple[float, list[str]]:
+    """Re-score a candidate using AUTHORITATIVE channels.list metadata (5B.2.7 §8).
+
+    Overlays the verified title/handle/topic onto the search-time evidence, re-runs the transparent
+    additive score, and — when the authoritative channel title exactly matches the query — adds a
+    bounded verification bonus. This is stronger evidence than a search snippet, but the clear-leader
+    margin in ``_decide`` still prevents an equally-named impostor from resolving."""
+    from artist_intelligence_service.config import settings
+    ev = dict(cand.evidence or {})
+    ev["title"] = verification.get("title") or ev.get("title")
+    if verification.get("handle"):
+        ev["handle"] = verification.get("handle")
+    if not ev.get("topic_signal") and _looks_music_channel(verification):
+        ev["topic_signal"] = True
+    enriched = ArtistCandidate(provider_id=cand.provider_id, identity_type=cand.identity_type,
+                               display_name=ev.get("title") or cand.display_name,
+                               canonical_url=cand.canonical_url, evidence=ev)
+    score, signals = _score_candidate(query, enriched, hints or {})
+    if "exact_name_match" in signals:
+        score = round(min(score + settings.youtube_authoritative_match_bonus, 1.0), 4)
+        signals = [*signals, "authoritative_title_verified"]
+    return score, signals
 
 
 def _decide(candidates: list[ArtistCandidate]) -> IdentityResolution:

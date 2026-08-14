@@ -30,8 +30,9 @@ from artist_intelligence_service.models import (
     DemandRefreshJob,
     YouTubeVideo,
 )
+from artist_intelligence_service.crawl_client import CrawlServiceClient
 from artist_intelligence_service.graph_client import GraphServiceClient
-from artist_intelligence_service.providers.base import AMBIGUOUS, PROVIDER_YOUTUBE, RESOLVED
+from artist_intelligence_service.providers.base import AMBIGUOUS, PROVIDER_YOUTUBE, RESOLVED, UNRESOLVED
 from artist_intelligence_service.service import DemandService
 
 JOB_CHANNEL = "YOUTUBE_CHANNEL_SNAPSHOT"
@@ -57,9 +58,11 @@ def _window(now: datetime, interval_s: int) -> str:
 
 class DemandScheduler:
     def __init__(self, service: DemandService | None = None,
-                 graph: GraphServiceClient | None = None) -> None:
+                 graph: GraphServiceClient | None = None,
+                 crawl: CrawlServiceClient | None = None) -> None:
         self.service = service or DemandService()
         self.graph = graph or GraphServiceClient()
+        self.crawl = crawl or CrawlServiceClient()
 
     # ---- enqueue: recurring channel/video refresh of RESOLVED identities ----------------------
     def enqueue_due(self, db: Session, *, now: datetime | None = None) -> dict[str, int]:
@@ -125,6 +128,54 @@ class DemandScheduler:
                       external_identity_id=external_identity_id, priority=priority, now=now)
         db.flush()
         return True
+
+    async def enqueue_identity_reattempts(self, db: Session, *,
+                                          now: datetime | None = None) -> dict[str, int | bool]:
+        """5B.2.7 §9/§10 — keep AMBIGUOUS/UNRESOLVED identities SCHEDULABLE.
+
+        A successful HTTP identity job is not terminal for the identity: an unresolved/ambiguous artist is
+        re-enqueued on a status-based cadence (UNRESOLVED → backoff retry; AMBIGUOUS → slower re-resolution)
+        in a fresh dedup window. Eligibility is gated on the crawl product registry so invalid canonicals
+        (quarantined / placeholder / compound / orphan) never enter active YouTube monitoring — and it
+        fails CLOSED (re-enqueues nothing) if the registry is unavailable, rather than monitoring junk."""
+        now = now or _now()
+        idents = db.execute(
+            select(ArtistExternalIdentity).where(
+                ArtistExternalIdentity.provider == PROVIDER_YOUTUBE,
+                ArtistExternalIdentity.identity_type == "CHANNEL_ID",
+                ArtistExternalIdentity.status.in_((AMBIGUOUS, UNRESOLVED)))).scalars().all()
+        if not idents:
+            return {"eligible": 0, "jobs_created": 0}
+        try:
+            rows = await self.crawl.artists(limit=500)
+            valid = {r.get("canonical_entity_id") or r.get("canonical_artist_id") or r.get("id")
+                     for r in rows}
+            valid.discard(None)
+        except Exception:  # noqa: BLE001 — registry unavailable → fail closed (never monitor invalid)
+            return {"eligible": len(idents), "jobs_created": 0, "registry_unavailable": True}
+        from artist_intelligence_service.watchlist import paused_canonical_artist_ids
+        paused = paused_canonical_artist_ids(db)
+        created = skipped_invalid = 0
+        for ident in idents:
+            art = ident.canonical_artist_id
+            if art not in valid:
+                skipped_invalid += 1
+                continue
+            if art in paused:
+                continue
+            interval = (settings.youtube_identity_reattempt_ambiguous_seconds if ident.status == AMBIGUOUS
+                        else settings.youtube_identity_reattempt_unresolved_seconds)
+            window = _window(now, interval)
+            dedup = f"{art}|{PROVIDER_YOUTUBE}|{JOB_IDENTITY}|reattempt|{window}"
+            if self._active_exists(db, art, JOB_IDENTITY) or self._exists(db, dedup):
+                continue
+            display_name = (ident.identity_metadata or {}).get("query") or art
+            self._add_job(db, dedup=dedup, canonical_artist_id=art, job_type=JOB_IDENTITY,
+                          external_identity_id=None, priority=cad.P4_GLOBAL_CANDIDATE, now=now,
+                          detail={"display_name": display_name, "reattempt": True})
+            created += 1
+        db.flush()
+        return {"eligible": len(idents), "jobs_created": created, "skipped_invalid": skipped_invalid}
 
     # ---- enqueue helpers ---------------------------------------------------------------------
     def _exists(self, db: Session, dedup: str) -> bool:
@@ -373,6 +424,7 @@ class DemandScheduler:
                        now: datetime | None = None) -> dict[str, Any]:
         now = now or _now()
         enq = self.enqueue_due(db, now=now)
+        reattempts = await self.enqueue_identity_reattempts(db, now=now)
         claimed = self.claim(db, worker_id=worker_id, now=now)
         outcomes: dict[str, int] = {}
         for job in claimed:
@@ -380,4 +432,5 @@ class DemandScheduler:
             outcomes[code] = outcomes.get(code, 0) + 1
             db.flush()
         db.commit()
-        return {"enqueued": enq, "claimed": len(claimed), "outcomes": outcomes}
+        return {"enqueued": enq, "identity_reattempts": reattempts,
+                "claimed": len(claimed), "outcomes": outcomes}

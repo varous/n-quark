@@ -308,13 +308,30 @@ async def build_coverage(db: Session, *, crawl: CrawlServiceClient | None = None
         select(func.count()).select_from(DemandRefreshJob)
         .where(DemandRefreshJob.status == "FAILED_TERMINAL")).scalar_one()
 
+    from artist_intelligence_service.videos import video_counts
+    vids = video_counts(db)
+    verified = yt_by_status.get(RESOLVED, 0)
+    ambiguous = yt_by_status.get(AMBIGUOUS, 0)
+    unresolved = yt_by_status.get(UNRESOLVED, 0)
+    candidates_total = sum(yt_by_status.values())
     return {
         "canonical_artists": canonical_artists,
         "youtube_identity_status": {
-            "resolved": yt_by_status.get(RESOLVED, 0),
-            "ambiguous": yt_by_status.get(AMBIGUOUS, 0),
-            "unresolved": yt_by_status.get(UNRESOLVED, 0),
-            "artists_with_youtube_identity": sum(yt_by_status.values())},
+            "resolved": verified, "ambiguous": ambiguous, "unresolved": unresolved,
+            "artists_with_youtube_identity": candidates_total,  # legacy field (candidate rows, NOT verified)
+            # 5B.2.7 §19 — a candidate identity row is NOT a verified provider identity; label them distinctly
+            "youtube_identity_candidates": candidates_total,
+            "verified_channels": verified,
+            "needs_identity_review": ambiguous},
+        # 5B.2.7 §18 — the honest stage-by-stage identity → content funnel
+        "youtube_pipeline": {
+            "eligible_canonical_artists": canonical_artists,
+            "identity_candidates": candidates_total,
+            "verified_channels": verified,
+            "needs_identity_review": ambiguous,
+            "unresolved": unresolved,
+            "owned_videos_registered": vids.get("videos_discovered", 0),
+            "owned_videos_active": vids.get("videos_active", 0)},
         "artists_with_demand_observation": artists_with_obs,
         "trends_mappings": trends_mappings, "trends_observations": trends_obs,
         "trends_api_vs_imported": {"imported_provider_export": imported,

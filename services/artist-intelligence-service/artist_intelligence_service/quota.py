@@ -26,9 +26,16 @@ from artist_intelligence_service.config import settings
 from artist_intelligence_service.models import ProviderQuotaBucketDay, ProviderQuotaDay
 from artist_intelligence_service.providers.base import PROVIDER_YOUTUBE
 
-# YouTube Data API v3 nominal quota costs (well-known constants; not the API key, just prices).
-YT_SEARCH_UNITS = 100
+# YouTube Data API v3 nominal quota costs (current model; not the API key, just prices).
+# Post-June-2026 semantics: search.list is metered in an INDEPENDENT "Search Queries" quota at 1 unit/call
+# (default 100 calls/day) — it is NOT 100 units against the general 10,000-unit pool. General endpoints
+# (channels.list, playlistItems.list, videos.list) are 1 unit each against the general pool.
+YT_SEARCH_UNITS = 1
 YT_READ_UNITS = 1
+
+# The SEARCH bucket is INDEPENDENT of the general pool: its budget is a call/day count, and its spend is
+# never summed into the general usage total. Only these buckets draw the shared general pool.
+GENERAL_POOL_BUCKETS = ("GENERAL_READ", "VIDEO_STATS_BATCH")
 
 # Quota buckets (5A.3).
 BUCKET_SEARCH = "SEARCH"
@@ -184,14 +191,18 @@ def record_meter(db: Session, provider: str, meter: QuotaMeter, *, on: date | No
 
 # ---- budget + reserve enforcement (5A.3) -------------------------------------------------------
 def _bucket_fraction(bucket: str) -> float:
+    # Only the general-pool buckets are fractions of the 10,000-unit pool; SEARCH is independent.
     return {
-        BUCKET_SEARCH: settings.youtube_bucket_fraction_search,
         BUCKET_GENERAL_READ: settings.youtube_bucket_fraction_general_read,
         BUCKET_VIDEO_BATCH: settings.youtube_bucket_fraction_video_batch,
     }.get(bucket, 0.0)
 
 
 def bucket_budget(bucket: str) -> int:
+    """Per-bucket daily budget. SEARCH is the INDEPENDENT Search-Queries quota (a call/day count);
+    GENERAL_READ / VIDEO_STATS_BATCH are fractions of the shared general 10,000-unit pool."""
+    if bucket == BUCKET_SEARCH:
+        return int(settings.youtube_search_daily_calls)
     return int(settings.youtube_daily_quota_units * _bucket_fraction(bucket))
 
 
@@ -227,23 +238,41 @@ def bucket_used(db: Session, provider: str, bucket: str, *, on: date | None = No
     return int(row or 0)
 
 
-def total_used(db: Session, provider: str, *, on: date | None = None) -> int:
+def general_used(db: Session, provider: str, *, on: date | None = None) -> int:
+    """Units drawn from the shared GENERAL pool = GENERAL_READ + VIDEO_STATS_BATCH ONLY.
+
+    Deliberately excludes the independent SEARCH bucket AND every ``SEARCH:<purpose>`` sub-bucket (which
+    are an allocation overlay, not additional spend) — so one provider request is never double-counted and
+    an independent quota is never summed into the general total (5B.2.7 §6)."""
     row = db.execute(
         select(func.coalesce(func.sum(ProviderQuotaBucketDay.units), 0)).where(
             ProviderQuotaBucketDay.provider == provider,
-            ProviderQuotaBucketDay.quota_date == quota_date_for(provider, on=on))
+            ProviderQuotaBucketDay.quota_date == quota_date_for(provider, on=on),
+            ProviderQuotaBucketDay.bucket.in_(GENERAL_POOL_BUCKETS))
     ).scalar_one()
     return int(row or 0)
 
 
-def can_spend(db: Session, provider: str, bucket: str, units: int, *, on: date | None = None) -> bool:
-    """True iff spending ``units`` in ``bucket`` keeps BOTH the bucket budget and the global reserve.
+# Back-compat alias: "total used" now means the honest general-pool total (never the mixed sum).
+total_used = general_used
 
-    Reserve enforcement is what makes 'target 95% utilization' safe: the scheduler stops/slows before
-    the last 5% so an operator/critical call always has headroom."""
+
+def search_calls_used(db: Session, provider: str, *, on: date | None = None) -> int:
+    """Search-Queries calls spent today (the independent quota; 1 call = 1 unit)."""
+    return bucket_used(db, provider, BUCKET_SEARCH, on=on)
+
+
+def can_spend(db: Session, provider: str, bucket: str, units: int, *, on: date | None = None) -> bool:
+    """True iff spending ``units`` in ``bucket`` is within budget.
+
+    SEARCH is checked ONLY against its own independent Search-Queries quota (never the general pool). A
+    general-pool bucket is checked against BOTH its own budget and the shared general reserve — the reserve
+    is what makes 'target 95% utilization' safe (an operator/critical call always keeps headroom)."""
     if bucket_used(db, provider, bucket, on=on) + units > bucket_budget(bucket):
         return False
-    if total_used(db, provider, on=on) + units > usable_units():
+    if bucket == BUCKET_SEARCH:
+        return True                              # independent quota — not gated by the general pool
+    if general_used(db, provider, on=on) + units > usable_units():
         return False
     return True
 
@@ -310,13 +339,30 @@ def bucket_snapshot(db: Session, provider: str, *, on: date | None = None) -> di
             "used": used, "budget": bucket_budget(b), "remaining": max(bucket_budget(b) - used, 0),
             "requests": r.requests if r else 0, "successful_calls": r.successful_calls if r else 0,
             "failed_calls": r.failed_calls if r else 0, "quota_errors": r.quota_errors if r else 0}
-    used_total = total_used(db, provider, on=on)
+    # Two INDEPENDENT quotas — reported separately, never summed into a misleading universal value.
+    gen_used = general_used(db, provider, on=on)
+    search_used = buckets[BUCKET_SEARCH]["used"]
+    # Reconciliation invariant: the general total equals exactly GENERAL_READ + VIDEO_STATS_BATCH units
+    # (SEARCH and SEARCH:<purpose> sub-buckets are never added in). Diagnostics assert this holds.
+    reconciles = gen_used == (buckets[BUCKET_GENERAL_READ]["used"] + buckets[BUCKET_VIDEO_BATCH]["used"])
     return {
         "provider": provider, "quota_date": day.isoformat(), "reset_tz": settings.youtube_quota_reset_tz,
+        "model": "granular-independent-buckets-2026",
+        "search_queries": {
+            "used_calls": search_used, "daily_quota_calls": settings.youtube_search_daily_calls,
+            "remaining_calls": max(settings.youtube_search_daily_calls - search_used, 0),
+            "cost_per_call": YT_SEARCH_UNITS, "independent": True},
+        "general_pool": {
+            "daily_quota_units": settings.youtube_daily_quota_units,
+            "target_utilization": settings.youtube_quota_target_utilization,
+            "usable_units": usable_units(), "reserve_units": reserve_units(),
+            "used": gen_used, "remaining_usable": max(usable_units() - gen_used, 0)},
+        "reconciles": reconciles,
+        # legacy fields kept for existing readers — now the HONEST general-pool total (not the mixed sum)
         "daily_quota_units": settings.youtube_daily_quota_units,
         "target_utilization": settings.youtube_quota_target_utilization,
         "usable_units": usable_units(), "reserve_units": reserve_units(),
-        "used_total": used_total, "remaining_usable": max(usable_units() - used_total, 0),
+        "used_total": gen_used, "remaining_usable": max(usable_units() - gen_used, 0),
         "buckets": buckets,
         "search_allocation": search_allocation_snapshot(db, provider, on=on),
     }

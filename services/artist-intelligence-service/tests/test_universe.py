@@ -135,8 +135,9 @@ async def test_search_partitioned_into_bucket(db):
     svc = _svc()
     await svc.resolve_youtube(db, ARTIST, query="Arijit Singh", hints={"provider_id": CID})
     snap = quota.bucket_snapshot(db, PROVIDER_YOUTUBE)
-    assert snap["buckets"]["SEARCH"]["used"] == 100         # one search = 100 units in the SEARCH bucket
+    assert snap["buckets"]["SEARCH"]["used"] == 1           # one search = 1 unit (independent quota)
     assert snap["buckets"]["GENERAL_READ"]["used"] >= 1     # the channels.list verify is a general read
+    assert snap["reconciles"] is True                       # general total = GENERAL_READ + VIDEO_BATCH
 
 
 def test_quota_reset_follows_provider_tz(monkeypatch):
@@ -147,9 +148,8 @@ def test_quota_reset_follows_provider_tz(monkeypatch):
 
 
 def test_reserve_prevents_over_scheduling(db, monkeypatch):
-    # shrink the budget so the SEARCH bucket is already at its cap → can_spend refuses
-    monkeypatch.setattr(config.settings, "youtube_daily_quota_units", 100)
-    monkeypatch.setattr(config.settings, "youtube_bucket_fraction_search", 0.5)   # budget = 50 units
+    # 5B.2.7: SEARCH is capped by its own independent Search-Queries quota; at 0 calls/day it refuses
+    monkeypatch.setattr(config.settings, "youtube_search_daily_calls", 0)
     assert quota.can_spend(db, PROVIDER_YOUTUBE, quota.BUCKET_SEARCH, quota.YT_SEARCH_UNITS) is False
 
 
@@ -158,7 +158,7 @@ async def test_quota_exhausted_defers_not_invalidates(db, monkeypatch):
     # queue an identity job, then force the SEARCH budget to zero → the job must DEFER, not fail/invalidate
     DemandScheduler(service=svc).enqueue_identity_discovery(db, ARTIST, display_name="Arijit Singh")
     db.commit()
-    monkeypatch.setattr(config.settings, "youtube_daily_quota_units", 0)
+    monkeypatch.setattr(config.settings, "youtube_search_daily_calls", 0)   # independent SEARCH quota spent
     out = await DemandScheduler(service=svc).run_once(db)
     assert out["outcomes"].get("DEFERRED", 0) == 1
     job = db.execute(select(DemandRefreshJob).where(DemandRefreshJob.job_type == JOB_IDENTITY)).scalar_one()

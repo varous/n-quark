@@ -97,11 +97,20 @@ class Settings(BaseSettings):
 
     # --- YouTube (via signal-service). The API key lives in signal-service secrets, not here. ---
     youtube_enabled: bool = False
-    youtube_search_enabled: bool = True          # identity discovery only (bounded, 100 units/search)
-    youtube_max_searches_per_day: int = 50       # quota discipline: refuse further searches past this
+    youtube_search_enabled: bool = True          # identity discovery only (search.list)
+    # Current YouTube model (post-June-2026): search.list is metered in an INDEPENDENT "Search Queries"
+    # quota — 1 unit/call, default 100 calls/day — NOT 100 units against the general 10,000-unit pool.
+    youtube_search_daily_calls: int = 100        # provider Search-Queries quota (independent bucket)
+    youtube_max_searches_per_day: int = 50       # operational self-cap (<= provider Search-Queries quota)
     youtube_channel_refresh_interval_seconds: int = 86400   # daily channel snapshot cadence
     youtube_video_refresh_interval_seconds: int = 43200     # recent-video snapshot cadence
     youtube_recent_video_limit: int = 5          # bounded window of recent videos per artist
+    # 5B.2.7: when search-only scoring is AMBIGUOUS, authoritatively verify the top-N plausible channel
+    # candidates via channels.list (GENERAL pool) and re-decide on the enriched metadata. A verified exact
+    # channel-title match earns this bonus — authoritative evidence beyond a search snippet — but the
+    # clear-leader margin still guards against equally-named impostors (thresholds are NOT lowered).
+    youtube_verify_top_n: int = 3                 # max plausible candidates provider-verified per resolve
+    youtube_authoritative_match_bonus: float = 0.30
     youtube_daily_quota_units: int = 10000       # informational cap for quota diagnostics
 
     # --- Google Trends: provider-neutral + feature-gated. Modes: OFFICIAL_API | IMPORT | DISABLED. ---
@@ -120,6 +129,10 @@ class Settings(BaseSettings):
     demand_scheduler_max_attempts: int = 5
     demand_scheduler_backoff_base_seconds: int = 300
     demand_scheduler_backoff_max_seconds: int = 21600
+    # 5B.2.7 §9 — a successful HTTP identity job does NOT terminate scheduling: AMBIGUOUS/UNRESOLVED
+    # identities are re-enqueued on a status-based cadence so they remain schedulable (never terminal).
+    youtube_identity_reattempt_unresolved_seconds: int = 21600   # UNRESOLVED → retry/backoff (6h)
+    youtube_identity_reattempt_ambiguous_seconds: int = 86400    # AMBIGUOUS → slower re-resolution (24h)
 
     # --- Phase 5A.3: artist universe & demand saturation (all OFF by default). ---
     # Automatic onboarding: a canonical ARTIST without a YouTube identity is enqueued for identity

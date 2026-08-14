@@ -83,9 +83,10 @@ export function DemandIntelligence() {
       <Card title="Coverage" right={<Badge label="Observed" />}>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
           <Stat label="Canonical artists" value={fmt(cov.canonical_artists)} />
-          <Stat label="With YouTube identity" value={fmt(ytStatus.artists_with_youtube_identity)} />
-          <Stat label="Resolved" value={fmt(ytStatus.resolved)} />
-          <Stat label="Ambiguous" value={fmt(ytStatus.ambiguous)} />
+          {/* 5B.2.7 §19 — a candidate identity row is NOT a verified provider channel */}
+          <Stat label="Verified channels" value={fmt(ytStatus.verified_channels ?? ytStatus.resolved)} />
+          <Stat label="Identity candidates" value={fmt(ytStatus.youtube_identity_candidates ?? ytStatus.artists_with_youtube_identity)} />
+          <Stat label="Needs identity review" value={fmt(ytStatus.needs_identity_review ?? ytStatus.ambiguous)} />
           <Stat label="Unresolved" value={fmt(ytStatus.unresolved)} />
           <Stat label="With observations" value={fmt(cov.artists_with_demand_observation)} />
           <Stat label="Regions covered" value={fmt(cov.regions_covered)} />
@@ -176,7 +177,8 @@ function ArtistUniverseCard({ u }: { u: Obj }) {
         <Stat label="Confirmed live India" value={fmt(india.confirmed_live_india)} />
         <Stat label="India demand observed" value={fmt(india.india_demand_observed)} />
         <Stat label="India market candidate" value={fmt(india.india_market_candidate)} />
-        <Stat label="With YT identity" value={fmt(yt.artists_with_youtube_identity)} />
+        <Stat label="Verified channels" value={fmt(yt.verified_channels ?? yt.resolved)} />
+        <Stat label="Identity candidates" value={fmt(yt.youtube_identity_candidates ?? yt.artists_with_youtube_identity)} />
         <Stat label="With observations" value={fmt(g(u, "artists_with_demand_observation"))} />
         <Stat label="Videos discovered" value={fmt(vids.videos_discovered)} />
         <Stat label="Videos tracked" value={fmt(vids.videos_active)} />

@@ -35,6 +35,7 @@ from artist_intelligence_service.providers.google_trends import (
 )
 from artist_intelligence_service.providers.youtube import YouTubeProvider
 from artist_intelligence_service.quota import (
+    BUCKET_GENERAL_READ,
     BUCKET_SEARCH,
     YT_SEARCH_UNITS,
     QuotaMeter,
@@ -141,33 +142,47 @@ class DemandService:
         self.youtube.meter = meter
         rejected: list[dict[str, Any]] = []
         verification_unavailable = False
+        verified_leader_pool = 0
         try:
             candidates = await self.youtube.search_artist(query, limit=limit, purpose=search_purpose)
             for c in candidates:
                 c.score, c.signals = ytprov._score_candidate(query, c, hints or {})
             candidates.sort(key=lambda c: c.score, reverse=True)
 
-            # Consider ranked candidates: each must clear the deterministic policy AND verify.
-            remaining = list(candidates)
-            chosen = None
-            verified = None
-            while remaining:
-                decision = ytprov._decide(remaining)
-                if decision.status != RESOLVED or decision.chosen is None:
-                    break  # no remaining candidate is a clear deterministic leader
-                cand = decision.chosen
+            # 5B.2.7 §7/§8 — search is candidate DISCOVERY; provider verification is a SEPARATE step.
+            # Authoritatively verify (channels.list) the top-N PLAUSIBLE candidates — not only when
+            # search-only scoring already declares a clear leader — so ambiguous-by-snippet artists can
+            # still reach the authoritative check. Re-score each verified candidate on its channels.list
+            # metadata, then decide among the VERIFIED pool (the margin rule still guards impostors).
+            plausible = [c for c in candidates
+                         if c.score >= ytprov.AMBIGUOUS_FLOOR][: settings.youtube_verify_top_n]
+            verified_cands: list = []
+            verified_by_id: dict[str, dict[str, Any]] = {}
+            for cand in plausible:
+                if not can_spend(db, PROVIDER_YOUTUBE, BUCKET_GENERAL_READ, 1):
+                    verification_unavailable = True     # general pool reserve reached → defer, don't resolve
+                    break
                 try:
                     v = await self.youtube.verify_channel(cand.provider_id)
                 except Exception:  # noqa: BLE001 — network/provider failure: cannot verify, cannot resolve
                     verification_unavailable = True
                     break
                 if v.get("status") == "FOUND":
-                    chosen, verified = cand, v
-                    break
-                # authoritative CHANNEL_NOT_FOUND → record + drop this candidate, re-decide on the rest
-                rejected.append({"provider_id": cand.provider_id, "score": cand.score,
-                                 "signals": cand.signals, "verification_result": "CHANNEL_NOT_FOUND"})
-                remaining = [r for r in remaining if r.provider_id != cand.provider_id]
+                    cand.score, cand.signals = ytprov.score_with_verification(query, cand, v, hints or {})
+                    verified_cands.append(cand)
+                    verified_by_id[cand.provider_id] = v
+                else:
+                    rejected.append({"provider_id": cand.provider_id, "score": cand.score,
+                                     "signals": cand.signals, "verification_result": "CHANNEL_NOT_FOUND"})
+            verified_leader_pool = len(verified_cands)
+            chosen = None
+            verified = None
+            if verified_cands:
+                verified_cands.sort(key=lambda c: c.score, reverse=True)
+                decision = ytprov._decide(verified_cands)
+                if decision.status == RESOLVED and decision.chosen is not None:
+                    chosen = decision.chosen
+                    verified = verified_by_id.get(chosen.provider_id)
         finally:
             record_meter(db, PROVIDER_YOUTUBE, meter)
 
@@ -199,11 +214,16 @@ class DemandService:
                     "identity_id": identity.id, "provider_id": identity.provider_id,
                     "verified": True, "rejected_candidates": rejected, "candidates": cand_meta["candidates"]}
 
-        # Nothing verified: reason reflects why (unverifiable transient vs no deterministic/verified leader).
+        # Nothing verified: the reason distinguishes a transient/deferred verification from a genuinely
+        # ambiguous authoritative result and from candidates that do not exist at the provider.
         if verification_unavailable:
             status, reason = AMBIGUOUS, "verification_unavailable"
+        elif verified_leader_pool > 0:
+            # authoritative channels.list succeeded but no single verified channel is a clear leader
+            # (e.g. equally-named verified channels) — genuinely ambiguous, not a wiring gap.
+            status, reason = AMBIGUOUS, "verified_no_clear_leader"
         elif rejected:
-            status, reason = UNRESOLVED, "all_leaders_provider_not_found"
+            status, reason = UNRESOLVED, "all_candidates_provider_not_found"
         else:
             decision = ytprov._decide(candidates)  # AMBIGUOUS/UNRESOLVED per the pure policy
             status, reason = decision.status, decision.reason
@@ -445,6 +465,8 @@ class DemandService:
                 external_identity_id=identity.id, title=v.get("title"),
                 published_at=ytprov._parse_ts(v.get("published_at")),
                 duration_seconds=None, category=None, live_status=None,
+                # 5B.2.7 §14 — explicit: these are the artist's OWN uploads via the official uploads playlist
+                relationship_type="OWNED_CONTENT", discovery_method="CHANNEL_UPLOADS",
                 metadata={"source": "uploads_playlist"}, now=observed_at)
             created += 1 if is_new else 0
         return {"status": "OK", "canonical_artist_id": canonical_artist_id, "channel_id": cid,
