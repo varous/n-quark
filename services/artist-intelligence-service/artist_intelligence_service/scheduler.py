@@ -147,7 +147,7 @@ class DemandScheduler:
         if not idents:
             return {"eligible": 0, "jobs_created": 0}
         try:
-            rows = await self.crawl.artists(limit=500)
+            rows = await self.crawl.artists(limit=200)   # crawl caps entities at 200; registry is small
             valid = {r.get("canonical_entity_id") or r.get("canonical_artist_id") or r.get("id")
                      for r in rows}
             valid.discard(None)
