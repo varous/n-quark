@@ -1,6 +1,49 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-14 (Phase 5B.2 increment 7 — YouTube collection recovery). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-14 (Phase 5B.2 increment 8 — YouTube acquisition stabilization). Branch `main`. Repo: github.com/varous/n-quark._
+
+## Phase 5B.2 increment 8 — YouTube acquisition stabilization & real movement (2026-08-14, DEPLOYED)
+
+Proved the repaired spine runs continuously through the NATURAL scheduler and that real time-series
+evidence reaches the movement engine. Deployed artist-intelligence + nquark-admin. No migration.
+
+- **Quota-day robustness (§2)** — the independent Search-Queries quota (100/day) is now accounted and
+  gated by **CALL COUNT** (`requests`), not units. This is immune to the lingering pre-5B.2.7 100-unit
+  search rows on the current quota day (which the Pacific reset had not yet cleared) — those were blocking
+  the natural scheduler (`can_spend(SEARCH)` compared stale 3506 units against the 100 budget). No rows
+  were cleared. `bucket_snapshot.search_queries` reports by call count.
+- **Search pacing + reserve (§4/§5)** — bounded batch/tick + quota-aware deferral (existing) + a configured
+  **search reserve** (`youtube_search_alloc_reserve`) now protected for high-priority work (new Watchlist /
+  operator / event-evidence); ordinary backlog keeps it. Identity re-attempts use deterministic
+  `_artist_priority`, so event/multi-reference artists outrank legacy candidates (no fused value score).
+- **Deferral, not failure (§6)** — hitting the operational search cap (`youtube_max_searches_per_day`, which
+  may be < the 100/day provider quota) now **defers** (`QUOTA_EXHAUSTED`) instead of becoming
+  `FAILED_RETRYABLE`. Non-RESOLVED identities remain schedulable (windowed re-attempt); RESOLVED →
+  channel/video refresh + recurring catalogue.
+- **Catalogue recurrence (§10)** — a verified channel retains a **recurring** bounded catalogue-discovery
+  job (windowed enqueue + informational next-run) to detect new uploads without operator action.
+- **Pipeline diagnostics (§12/§18/§20/§22)** — new `pipeline.youtube_pipeline` + `/demand/youtube-pipeline`:
+  identity funnel, owned-content, honest **snapshot semantics** (metric observations ≠ temporal snapshots;
+  videos with 1 / 2+ / 3+ snapshots), scheduler next-jobs, and **stuck-state** detectors
+  (resolved-without-catalogue / verified-no-videos / videos-without-stats / stats-without-obs /
+  nonresolved-never-scheduled). Diagnostics only — never auto-repairs identity. Demand UI gains a compact
+  pipeline card (verified channels, repeated observations vs metric observations, next jobs, stuck alert).
+- **Production proof (natural, §24 A→G all reached)**:
+  - **A** quota robust: search `used_calls 54 / 100`, `reconciles true`, general 27 — stale units no longer
+    gate (54 calls, not 3506 units).
+  - **B/C** the natural scheduler (`run_once`) processed the identity backlog and verified a **2nd channel**
+    (verified_channels **1→2**), with **32 clean QUOTA_EXHAUSTED deferrals** (no spurious failures).
+  - **D/E** verified channels entered catalogue discovery + video-stats scheduling automatically.
+  - **F** a genuine **2nd hourly snapshot** landed (09:37 → 10:56 UTC) → **all 50 owned videos now have 2
+    real snapshots**; metric_observations 152→298 (correctly = 50 videos × ~3 metrics × 2 snapshots + prior).
+  - **G** the real movement engine consumed them: video `Wy8ZbIx4HYc` (Arijit Singh) **+206 views / 1.316h
+    = 156.55 views/hr**; **25/50 videos positive velocity**. Movement classification stays
+    **INSUFFICIENT_HISTORY** (2 < `movement_min_observations`=3) — honest; acceleration/breakout not forced.
+  - Invalid cohort: **8 orphan/compound demand refs remain excluded** from monitoring; `any_stuck false`.
+  - No fake timestamps/data; the 2nd snapshot is a real provider fetch 1.3h after the first (ongoing
+    natural stats cadence is the 12h video interval).
+- Tests: artist-intelligence **140** (+11 stabilization), signal **107**, gateway **137**. frontend clean.
+
 
 ## Phase 5B.2 increment 7 — YouTube collection recovery (2026-08-14, DEPLOYED)
 

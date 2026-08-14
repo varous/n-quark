@@ -93,9 +93,30 @@ review → unresolved → owned videos registered, and the UI labels *verified c
 the identity: AMBIGUOUS/UNRESOLVED artists are re-enqueued on a status-based cadence (UNRESOLVED → backoff
 retry; AMBIGUOUS → slower re-resolution). Re-enqueue eligibility is gated on the crawl product registry, so
 invalid/orphan/compound/quarantined canonicals never enter active YouTube monitoring (and it fails closed
-if the registry is unavailable). A verified channel automatically earns a one-time owned-uploads catalogue
-backfill (official uploads playlist, `relationship_type=OWNED_CONTENT`, never search) + recurring
-channel/video refresh.
+if the registry is unavailable). A verified channel automatically earns an owned-uploads catalogue backfill
+(official uploads playlist, `relationship_type=OWNED_CONTENT`, never search) + recurring channel/video/
+**catalogue** refresh.
+
+**Acquisition pipeline diagnostics (5B.2.8).** `/v1/internal/demand/youtube-pipeline` exposes the whole
+funnel in product terms — identity (candidates / verified channels / needs review / unresolved / quota
+deferred), owned content (channels with catalogue / owned videos / videos observed / videos with ≥2
+snapshots / videos with sufficient movement history), scheduler next-jobs, and **stuck-state** detectors
+for impossible states (resolved-without-catalogue, verified-no-videos-after-catalogue,
+owned-videos-without-stats-job, stats-succeeded-no-observations, nonresolved-never-scheduled). These are
+diagnostics only; nothing is auto-repaired.
+
+**Snapshot semantics (5B.2.8).** views / likes / comments recorded at one collection time are **3 metric
+observations = 1 temporal snapshot**. The diagnostics report metric-observation count and temporal-snapshot
+count **separately** (videos with 1 / 2+ / 3+ distinct snapshot timestamps). Velocity needs ≥2 snapshots;
+movement classification (NORMAL / RISING / BREAKOUT_CANDIDATE / COOLING) needs
+`movement_min_observations` (3) — with fewer, the honest state is INSUFFICIENT_HISTORY (velocity may still
+be available). Movement thresholds are unchanged; nothing is forced to a flashy state.
+
+**Search pacing (5B.2.8).** The identity backlog is paced: bounded jobs per scheduler tick, quota-aware
+deferral (deferrals reschedule and never burn the retry budget), deterministic per-artist priority
+(upcoming-event / multi-reference artists outrank legacy candidates), and a protected Search-Queries
+reserve for high-priority intake — so a large backlog can never consume the whole daily search allowance
+in one burst and new Watchlist artists are never starved.
 
 ## Data freshness
 

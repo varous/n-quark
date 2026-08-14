@@ -19,6 +19,14 @@ or logs.
 > 10,000-unit/day pool used by `channels.list` / `playlistItems.list` / `videos.list` (1 unit each). The
 > two quotas are never summed into one usage total, and a search request is never double-counted into
 > the general pool. The obsolete `search.list = 100 general units` model has been removed.
+>
+> **Quota-day accounting (5B.2.8).** The Search-Queries quota is gated by **call count** (`requests`), not
+> units — so any historical per-call unit-cost change (e.g. pre-5B.2.7 100-unit rows lingering on the
+> current provider quota day until the next Pacific reset) can never poison gating: 54 real calls read as
+> 54, not 5,400 units. The quota day rolls at midnight in the provider reset tz (`youtube_quota_reset_tz`).
+> A configured share (`youtube_search_alloc_reserve`) of the Search quota is reserved for high-priority
+> work (new Watchlist / operator / evidence-triggered); ordinary backlog keeps it. Hitting the operational
+> cap (`youtube_max_searches_per_day`, ≤ the provider quota) **defers** (never fails/invalidates).
 
 Runs in a deterministic mock when no API key is set, so the whole pipeline is demonstrable offline.
 
