@@ -850,7 +850,7 @@ class EntityResolutionService:
             stored = (evidence.get("interpretation") or {}).get("type_classification")
             result = stored or classify_type(
                 raw=c.raw_name, requested_role=c.entity_type,
-                source_field=evidence.get("source_field"), structured_type=evidence.get("structured_type"),
+                source_field=evidence.get("source_field"), schema_type=evidence.get("structured_type"),
                 existing_types=cross.get(_N.slug(c.raw_name), set())).to_dict()
             outcome, pred = result["outcome"], result["predicted_type"]
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
