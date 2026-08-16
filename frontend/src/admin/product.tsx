@@ -152,7 +152,7 @@ export function ArtistDetail({ id }: { id: string }) {
       {/* 2. Current picture — plain sentences */}
       <Card title="Current picture">
         <ul className="space-y-1.5 text-sm text-slate-300">
-          <li>{events > 0 ? `${events} live event${events === 1 ? "" : "s"} observed` : "No live events observed yet"}
+          <li>{events > 0 ? `${events} event${events === 1 ? "" : "s"} observed` : "No events observed yet"}
             {c.live_activity?.cities?.length ? ` · ${c.live_activity.cities.slice(0, 4).join(" · ")}` : ""}</li>
           <li>{ytVerified
             ? `YouTube monitoring active — ${yt.owned_videos_tracked ?? 0} video${(yt.owned_videos_tracked ?? 0) === 1 ? "" : "s"} tracked`
@@ -173,6 +173,8 @@ export function ArtistDetail({ id }: { id: string }) {
           ]} />
           <CoverageCard title="Live activity" rows={[
             ["Events observed", events > 0 ? String(events) : "No events observed yet"],
+            ["Upcoming Events", String(c.live_activity?.upcoming_events ?? 0)],
+            ["Past Events", String(c.live_activity?.past_events ?? 0)],
             ["Cities", c.live_activity?.cities?.length ? c.live_activity.cities.join(" · ") : "None observed"],
             ["Venues", covNum(c.live_activity?.venues_count, "events")],
             ["Organizers worked with", covNum(c.live_activity?.organizers_count, "events")],

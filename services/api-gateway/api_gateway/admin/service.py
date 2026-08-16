@@ -100,7 +100,28 @@ class AdminService:
     # ---- sources --------------------------------------------------------------------------------
     async def sources(self) -> dict[str, Any]:
         d = await self.dashboard()
-        return {"sources": [{"source": k, **v} for k, v in d["sources"].items()]}
+        rows = []
+        for source, summary in d["sources"].items():
+            cov = await self.gw.get(CRAWL, "/v1/internal/capture-schedule",
+                                    params={"source": source, "limit": 500})
+            ent = await self.gw.get(CRAWL, "/v1/internal/entity-resolution/coverage",
+                                    params={"source": source})
+            events = (cov.data or {}).get("events", []) if cov.ok else []
+            types = (ent.data or {}).get("by_entity_type", {}) if ent.ok else {}
+            lifecycle = {state: sum(1 for e in events if (e.get("lifecycle") or {}).get("temporal_state") == state)
+                         for state in ("UPCOMING", "ONGOING", "PAST", "UNKNOWN")}
+            canonical = {e.get("canonical_event_id") for e in events if e.get("canonical_event_id")}
+            rows.append({"source": source, **summary,
+                         "canonical_events": len(canonical),
+                         "unique_cities": len({e.get("city") for e in events if e.get("city")}),
+                         "date_time_complete": sum(bool(e.get("starts_at")) for e in events),
+                         "provider_lifecycle_complete": sum(e.get("provider_lifecycle") != "UNKNOWN" for e in events),
+                         "upcoming": lifecycle["UPCOMING"], "ongoing": lifecycle["ONGOING"],
+                         "past": lifecycle["PAST"], "time_unknown": lifecycle["UNKNOWN"],
+                         "artist_mentions": types.get("ARTIST", {}).get("mentions", 0),
+                         "venue_mentions": types.get("VENUE", {}).get("mentions", 0),
+                         "organizer_mentions": types.get("ORGANIZER", {}).get("mentions", 0)})
+        return {"sources": rows}
 
     async def source_detail(self, source: str) -> dict[str, Any]:
         cov = await self.gw.get(CRAWL, "/v1/internal/capture-schedule", params={"source": source, "limit": 500})

@@ -125,3 +125,20 @@ manifest for provenance (`state:"repaired"`, `repaired:true`) but are excluded f
 - No address/geocoding source yet, so venue geography is `DIRECT_SOURCE_GEOGRAPHY_ONLY` (from the event).
 - Deferred (not in scope): another ticketing source, poster OCR, social/organizer-site crawling, LLM
   resolution, canonical **event** merging / duplicate-event write-back, demand/sales scoring, a review UI.
+
+## Entity-type interpretation (5B.3 Increment 2)
+
+Before matching or canonical creation, mentions receive an inspectable weighted classification combining
+provider field role, structured schema type, same-event roles, existing cross-type canonicals, governed
+operator evidence, address context, and normalized strong/weak vocabulary families for Artist, Venue,
+and Organizer. Spelling variants and organization-shaped names contribute evidence but no term is an
+absolute rule. Results are `CLEAR_TYPE`, `ROLE_CONFLICT`, `AMBIGUOUS_TYPE`, or `UNKNOWN`; conflicts and
+ambiguity enter existing non-product review states. AI adjudication remains disabled.
+
+Production root cause was loss of raw source-field/schema context after graph projection plus literal
+treatment of Boshow `name_of_artist`, which sometimes contains a venue or business. The production
+read-only audit classified 984 mentions: 935 clear, 44 role conflicts, and 5 ambiguous. It identified
+Skinny Mos's existing Artist/Venue collision and India Business Helpline's organization evidence. These
+are governed repair candidates: preserve evidence, quarantine/re-resolve, repair projection, retain the
+audit trail. No bulk type mutation was performed. District structured `organizer` is now preserved;
+Boshow organizer remains not observed where the contract supplies none.

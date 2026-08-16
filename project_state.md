@@ -1048,3 +1048,20 @@ Phase 3.1 evidence-based canonical layer so the graph has one id convention. (3)
 city-overlapping source so cross-source entity convergence becomes non-zero in practice. Deferred:
 matcher/threshold calibration against a real labelled overlap cohort, and accepted-match consensus
 write-back — both still relevant once an overlapping source exists.
+
+## Phase 5B.3 Increment 2 — lifecycle and entity typing (2026-08-16)
+
+Lifecycle is now one explicit backend contract, implemented from shared fixtures in crawl scheduling
+and the Admin BFF. Raw start/end/date precision/timezone and per-source provider status are preserved;
+past is temporal, never a claim that an event was completed. Production had 468 canonical events:
+170 upcoming and 298 past. Ten old-past rows were diagnosed as legacy normal-poll schedules; the new
+cadence stops them when recalculated, while recently-past rows receive only bounded final captures.
+
+Entity typing now runs a weighted, auditable source-role/schema/canonical/cohort/vocabulary classifier
+before canonical creation. A read-only production audit flagged 49 historical mentions for governed
+review, including Skinny Mos cross-typed as Artist/Venue and India Business Helpline as ambiguous
+Artist/Organizer; no canonical was retyped or deleted. District preserves structured organizer evidence
+(416 mentions, 217 canonical organizers across 434 tracked listings). Boshow's sampled contract supplied
+no trustworthy organizer evidence, so its organizer state remains not observed. District/Boshow had
+414/54 canonical events and zero canonical event overlap in the current tracked cohort. AllEvents remains
+SUPPLEMENTARY / ACCESS_PENDING; no adapter or probe was created.

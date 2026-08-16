@@ -282,3 +282,11 @@ observe them — no canonical id, YouTube id, SQL, or curl.
   canonical — the target stays *Waiting for stronger evidence* with an auditable `canonical_unverified`
   note. `GET /admin/v1/research/watchlist/canonical-integrity` audits orphan canonical references across
   watch targets / candidates / identities / observations (never auto-rewritten).
+
+## Lifecycle and source contribution (5B.3 Increment 2)
+
+Event filters and read models consume backend temporal/provider lifecycle state; React performs no time
+inference. Overview separates events observed, upcoming, happening now, and past. Artist and Venue detail
+separate upcoming from past activity. The Sources coverage table now reports canonical events, cities,
+temporal distribution, date/time and provider-lifecycle completeness, entity evidence including organizer
+coverage, and existing freshness/health fields. Counts describe the supported canonical cohort only.

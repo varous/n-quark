@@ -24,3 +24,16 @@ Event and its evidence remain queryable. Cancellation receives one configurable 
 (24 hours by default), then stops. No listing presence/absence implies completion, attendance, or
 sell-through.
 
+## Production closure (2026-08-16)
+
+The crawl scheduler and Admin BFF use the same lifecycle fixture contract: end time wins when present;
+otherwise start time is the boundary; date-only today and missing/naive time evidence remain UNKNOWN.
+Provider lifecycle (`SCHEDULED`, `CANCELLED`, `POSTPONED`, `RESCHEDULED`, `UNKNOWN`) is orthogonal and
+retained per source, so disagreement is representable rather than collapsed. Ongoing events use the
+event-day capture window; recently-past events receive bounded follow-ups; old-past events stop normal
+polling; cancelled events receive bounded confirmation; postponed events use reduced monitoring.
+
+The deployed diagnostic reported 468 canonical events (170 UPCOMING, 0 ONGOING, 298 PAST, 0 UNKNOWN),
+all 468 with provider lifecycle UNKNOWN in the migrated historical cohort, no current disagreement,
+288 recently-past rows awaiting bounded final capture, and 10 legacy old-past schedules still awaiting
+cadence recalculation. The diagnostic is observational and does not fabricate or rewrite source claims.

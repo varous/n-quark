@@ -28,3 +28,16 @@ References checked 2026-08-14:
 - https://developer.allevents.in/apis
 - https://allevents.in/pages/events-api
 
+## Executable source descriptors (2026-08-16)
+
+The signal service exposes inspectable descriptors for role, acquisition mode, provenance, automation
+posture, continuous-collection permission, claim authority, and policy reference. District is a production
+public SSR/JSON-LD source with schedule, venue, organizer, ticketing, and lifecycle authority. Boshow is a
+production public logged-out API source with schedule, venue, lineup, and ticketing authority; organizer
+is deliberately absent. AllEvents is represented as supplementary, authorized-API-required,
+continuous-collection-disabled, and ACCESS_PENDING.
+
+District's deployed ranked discovery selected 100 current/future slugs spanning 2026-08-16 through
+2026-08-20 in 0.63 seconds. The tracked baseline is 434 District listings (414 canonical events, 95
+cities) and 66 Boshow listings (54 canonical events, 6 cities), with no canonical event overlap. This is
+observed contribution, not total-market coverage or a universal source score.
