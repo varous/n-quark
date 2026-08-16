@@ -46,6 +46,7 @@ export function Overview() {
   const artists = counts.artists;
   const venues = counts.venues;
   const organizers = counts.organizers;
+  const eventLifecycle = counts.events?.by_temporal_state ?? {};
   const monitored = demand.artists_with_demand_observation ?? null;
   const ytVerified = demand.resolved_youtube_artists ?? 0;
 
@@ -76,7 +77,10 @@ export function Overview() {
         </div>
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <StatTile label="Events observed" value={num(c.active_tracked_events)} tone="brand" to="/events" caption="tracked in the market" />
+          <StatTile label="Events observed" value={countOr(counts.events?.canonical_events ?? null)} tone="brand" to="/events" caption="historical corpus" />
+          <StatTile label="Upcoming" value={num(eventLifecycle.UPCOMING ?? 0)} tone="good" to="/events?temporal_state=UPCOMING" caption="current supply" />
+          <StatTile label="Happening now" value={num(eventLifecycle.ONGOING ?? 0)} tone="brand" to="/events?temporal_state=ONGOING" caption="time-supported" />
+          <StatTile label="Past" value={num(eventLifecycle.PAST ?? 0)} to="/events?temporal_state=PAST" caption="historical intelligence" />
           <StatTile label="Artists identified" value={countOr(artists)} tone="good" to="/artists" caption="registry-backed" />
           <StatTile label="Venues identified" value={countOr(venues)} to="/venues" caption="registry-backed" />
           <StatTile label="Organizers identified" value={countOr(organizers)} to="/organizers" caption="registry-backed" />

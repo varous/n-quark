@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     cadence_event_day_hours: int = 2
     cadence_post_event_offsets_days: str = "1,3,7"
     cadence_cancelled_confirmation_hours: int = 24
+    cadence_postponed_hours: int = 48
 
     @property
     def cadence_post_event_offsets(self) -> tuple[int, ...]:

@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from crawl_service.lifecycle import provider_lifecycle as normalize_lifecycle
+from crawl_service.lifecycle import temporal_state
+
 # Cadence reasons (stable, explainable labels).
 FAR_FUTURE = "far_future_or_not_on_sale"
 MID = "mid_15_30_days"
@@ -21,6 +24,8 @@ POST_EVENT_COMPLETE = "post_event_complete"
 NO_DATE = "no_event_date"
 TRACKING_STOPPED = "tracking_stopped"
 CANCELLED_CONFIRMATION = "cancelled_confirmation"
+POSTPONED_MONITORING = "postponed_monitoring"
+ONGOING = "ongoing"
 
 _TERMINAL_STATUSES = frozenset({"STOPPED", "NEEDS_REVIEW"})
 
@@ -34,12 +39,16 @@ class CadenceConfig:
     event_day_hours: int = 2
     post_event_offsets_days: tuple[int, ...] = (1, 3, 7)
     cancelled_confirmation_hours: int = 24
+    postponed_hours: int = 48
 
 
 def compute_cadence(
     now: datetime,
     *,
     starts_at: datetime | None,
+    ends_at: datetime | None = None,
+    event_date: str | None = None,
+    local_timezone: str | None = None,
     on_sale_at: datetime | None = None,
     tracking_status: str = "ACTIVE",
     provider_lifecycle: str | None = None,
@@ -51,14 +60,24 @@ def compute_cadence(
     if tracking_status in _TERMINAL_STATUSES:
         return None, TRACKING_STOPPED
 
-    if (provider_lifecycle or tracking_status).upper() == "CANCELLED":
+    lifecycle = normalize_lifecycle(provider_lifecycle or tracking_status)
+    if lifecycle == "CANCELLED":
         due = (lifecycle_observed_at or now) + timedelta(hours=cfg.cancelled_confirmation_hours)
         return (due, CANCELLED_CONFIRMATION) if due > now else (None, TRACKING_STOPPED)
+    if lifecycle == "POSTPONED":
+        return now + timedelta(hours=cfg.postponed_hours), POSTPONED_MONITORING
 
-    # Post-event follow-ups take precedence once the event has started/passed.
-    if starts_at is not None and now >= starts_at:
+    temporal = temporal_state(starts_at=starts_at, ends_at=ends_at, event_date=event_date,
+                              evaluated_at=now, local_timezone=local_timezone)
+    if temporal["temporal_state"] == "ONGOING":
+        return now + timedelta(hours=cfg.event_day_hours), ONGOING
+    # Post-event follow-ups take precedence after the trustworthy end (or start if duration unknown).
+    if temporal["temporal_state"] == "PAST":
+        anchor = ends_at or starts_at
+        if anchor is None:
+            return None, POST_EVENT_COMPLETE
         for days in cfg.post_event_offsets_days:
-            follow = starts_at + timedelta(days=days)
+            follow = anchor + timedelta(days=days)
             if follow > now:
                 return follow, POST_EVENT
         return None, POST_EVENT_COMPLETE

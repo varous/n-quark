@@ -313,6 +313,9 @@ export function VenueDetail({ id }: { id: string }) {
   const events = data.events ?? [];
   const artists = data.artists ?? [];
   const organizers = data.organizers ?? [];
+  const lifecycle = (data.event_lifecycle ?? []) as Array<{ canonical_event_id: string; lifecycle: { temporal_state?: string } }>;
+  const upcoming = lifecycle.filter((e) => e.lifecycle?.temporal_state === "UPCOMING");
+  const past = lifecycle.filter((e) => e.lifecycle?.temporal_state === "PAST");
   return (
     <div className="space-y-6">
       {/* Venue — where is this */}
@@ -377,6 +380,14 @@ export function VenueDetail({ id }: { id: string }) {
           </>
         )}
       </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title={`Upcoming Events · ${upcoming.length}`}>
+          {upcoming.length ? <ul className="space-y-1 text-sm">{upcoming.map((e) => <li key={e.canonical_event_id}><a href={`#/events/${encodeURIComponent(e.canonical_event_id)}`} className="text-slate-300 hover:text-brand-200">{shortName(e.canonical_event_id)}</a></li>)}</ul> : <Empty message="No upcoming events observed." />}
+        </Card>
+        <Card title={`Past Events · ${past.length}`}>
+          {past.length ? <ul className="space-y-1 text-sm">{past.slice(0, 20).map((e) => <li key={e.canonical_event_id}><a href={`#/events/${encodeURIComponent(e.canonical_event_id)}`} className="text-slate-300 hover:text-brand-200">{shortName(e.canonical_event_id)}</a></li>)}</ul> : <Empty message="No past events observed." />}
+        </Card>
+      </div>
 
       <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm">
         <summary className="cursor-pointer text-slate-400">Evidence &amp; sources</summary>

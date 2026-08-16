@@ -8,6 +8,8 @@ from crawl_service.cadence import (
     MID,
     NO_DATE,
     ONSALE_BURST,
+    ONGOING,
+    POSTPONED_MONITORING,
     POST_EVENT,
     POST_EVENT_COMPLETE,
     TRACKING_STOPPED,
@@ -57,6 +59,16 @@ def test_post_event_followups_then_complete():
     later = starts + timedelta(days=8)
     nxt2, reason2 = compute_cadence(later, starts_at=starts)
     assert nxt2 is None and reason2 == POST_EVENT_COMPLETE
+
+
+def test_ongoing_uses_high_value_cadence_until_real_end():
+    nxt, reason = compute_cadence(NOW, starts_at=NOW - timedelta(hours=1), ends_at=NOW + timedelta(hours=2))
+    assert reason == ONGOING and _hours(nxt) == 2
+
+
+def test_postponed_uses_reduced_monitoring():
+    nxt, reason = compute_cadence(NOW, starts_at=NOW + timedelta(days=5), provider_lifecycle="EventPostponed")
+    assert reason == POSTPONED_MONITORING and _hours(nxt) == 48
 
 
 def test_no_event_date_is_conservative():

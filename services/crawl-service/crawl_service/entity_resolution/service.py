@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from crawl_service.config import Settings, settings
 from crawl_service.entity_resolution import normalizers as _N
@@ -82,10 +82,14 @@ class EntityResolutionService:
 
         known = self._known_for(evidence_list)
         cross_index = self._cross_type_index()
+        cohort_roles: dict[str, set[str]] = {}
+        for item in evidence_list:
+            cohort_roles.setdefault(_N.slug(item.raw_name), set()).add(item.entity_type)
         decisions: list[tuple[EntityEvidence, ResolutionResult]] = []
         for ev in evidence_list:
             # 5B.2.4 — interpretation GATE: no unresolved interpretation state may create a canonical.
-            gate = self._interpret_gate(ev, cross_index, known)
+            gate = self._interpret_gate(ev, cross_index, known,
+                                        cohort_roles=cohort_roles.get(_N.slug(ev.raw_name), set()))
             if gate is not None:
                 res = ResolutionResult(status=gate, canonical_entity_id=None, score=0.0,
                                        reason_code=gate)
@@ -196,7 +200,7 @@ class EntityResolutionService:
         return idx
 
     def _interpret_gate(self, ev: EntityEvidence, cross_index: dict[str, set[str]],
-                        known: KnownEntities) -> str | None:
+                        known: KnownEntities, cohort_roles: set[str] | None = None) -> str | None:
         """Return a non-product status (REVIEW_REQUIRED / ROLE_CONFLICT / PLACEHOLDER) when this mention
         must NOT create/match a canonical, else None. Consumes the mention's interpretation (set at
         extraction) plus a registry cross-type check — one place, no duplicated interpretation logic."""
@@ -205,6 +209,25 @@ class EntityResolutionService:
         if state == "PLACEHOLDER":
             return R.PLACEHOLDER
         if state == "AMBIGUOUS_COMPOUND":
+            return R.REVIEW_REQUIRED
+        # Phase 5B.3.2 — source role is strong but not absolute. Cohort roles, structured schema,
+        # canonical/type history and inspectable vocabulary evidence are combined before creation.
+        from crawl_service.entity_resolution.type_classifier import (
+            AMBIGUOUS_TYPE, ROLE_CONFLICT as TYPE_ROLE_CONFLICT, classify_type,
+        )
+        existing_types = set(cross_index.get(_N.slug(ev.raw_name), set()))
+        classification = classify_type(
+            raw=ev.raw_name, requested_role=ev.entity_type,
+            source_field=(ev.evidence or {}).get("source_field"),
+            schema_type=(ev.evidence or {}).get("structured_type"),
+            existing_types=existing_types, cohort_roles=cohort_roles,
+            operator_confirmed_types=set((ev.evidence or {}).get("operator_confirmed_types") or []),
+            is_address_context=bool((ev.evidence or {}).get("address_context")),
+        )
+        ev.evidence.setdefault("interpretation", {})["type_classification"] = classification.to_dict()
+        if classification.outcome == TYPE_ROLE_CONFLICT:
+            return R.ROLE_CONFLICT
+        if classification.outcome == AMBIGUOUS_TYPE:
             return R.REVIEW_REQUIRED
         # cross-type / role conflict — identity already exists as a DIFFERENT canonical type. Only gate a
         # NEW wrong-type creation: an ESTABLISHED same-type canonical (already in known.name_map or a
@@ -804,6 +827,59 @@ class EntityResolutionService:
             "recently_corrected": recently[:10],
             "interpretation_method": "deterministic",  # AI adjudicator disabled
         }
+
+    def type_quality_diagnostics(self) -> dict[str, Any]:
+        """Bounded classifier + Organizer extraction diagnostics. Read-only; never retypes."""
+        from crawl_service.entity_resolution.type_classifier import classify_type
+        with self._sf() as s:
+            rows = s.execute(select(EntityResolutionCandidate)).scalars().all()
+            tracked_by_source = dict(s.execute(
+                select(TrackedEvent.source, func.count()).group_by(TrackedEvent.source)).all())
+        cross: dict[str, set[str]] = {}
+        for c in rows:
+            if c.candidate_canonical_entity_id and c.resolution_status == R.RESOLVED:
+                cross.setdefault(_N.slug(c.raw_name), set()).add(c.entity_type)
+        outcomes: dict[str, int] = {}
+        predicted: dict[str, int] = {}
+        by_source: dict[str, dict[str, int]] = {}
+        suspects: list[dict[str, Any]] = []
+        organizer: dict[str, dict[str, int]] = {}
+        organizer_canonicals: dict[str, set[str]] = {}
+        for c in rows:
+            evidence = c.evidence or {}
+            stored = (evidence.get("interpretation") or {}).get("type_classification")
+            result = stored or classify_type(
+                raw=c.raw_name, requested_role=c.entity_type,
+                source_field=evidence.get("source_field"), structured_type=evidence.get("structured_type"),
+                existing_types=cross.get(_N.slug(c.raw_name), set())).to_dict()
+            outcome, pred = result["outcome"], result["predicted_type"]
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            predicted[pred] = predicted.get(pred, 0) + 1
+            by_source.setdefault(c.source, {})[outcome] = by_source.setdefault(c.source, {}).get(outcome, 0) + 1
+            if outcome in {"ROLE_CONFLICT", "AMBIGUOUS_TYPE"} and len(suspects) < 100:
+                suspects.append({"canonical_id": c.candidate_canonical_entity_id,
+                                 "current_type": c.entity_type, "name": c.raw_name,
+                                 "suspected_type": pred, "source": c.source,
+                                 "source_role": evidence.get("source_field"), "classification": result,
+                                 "recommended_action": "governed_review_and_re-resolution",
+                                 "auto_safe": False, "requires_review": True})
+            if c.entity_type == ORGANIZER:
+                d = organizer.setdefault(c.source, {"mentions_extracted": 0, "mentions_resolved": 0})
+                d["mentions_extracted"] += 1
+                d["mentions_resolved"] += int(c.resolution_status == R.RESOLVED)
+                if c.candidate_canonical_entity_id:
+                    organizer_canonicals.setdefault(c.source, set()).add(c.candidate_canonical_entity_id)
+        for source in set(tracked_by_source) | set(organizer):
+            d = organizer.setdefault(source, {"mentions_extracted": 0, "mentions_resolved": 0})
+            d["events_tracked"] = tracked_by_source.get(source, 0)
+            d["canonical_organizers_represented"] = len(organizer_canonicals.get(source, set()))
+            d["source_does_not_provide_or_not_observed"] = max(0, d["events_tracked"] - d["mentions_extracted"])
+        return {"mentions_classified": len(rows), "by_outcome": outcomes,
+                "by_predicted_type": predicted, "by_source": by_source,
+                "likely_wrong_type_historical": len(suspects), "suspects": suspects,
+                "organizer_coverage": organizer, "operator_corrected": sum(
+                    1 for c in rows if (c.evidence or {}).get("corrections")),
+                "note": "read-only classifier audit; suspects require governed review; no type mutation."}
 
     def quarantine_canonical(self, canonical_entity_id: str, *, reason: str, actor: str,
                              now: datetime | None = None) -> dict[str, Any]:

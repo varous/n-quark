@@ -285,11 +285,12 @@ export type CatalogVenueDetail = {
   available: boolean; canonical_venue_id: string; name?: string; city?: string | null;
   events_observed?: number; sources?: string[]; last_observed?: string | null;
   events?: string[]; events_aggregated?: number; events_truncated?: boolean;
+  event_lifecycle?: Array<{ canonical_event_id: string; lifecycle: { temporal_state?: string; provider_lifecycle?: string } }>;
   artists?: Array<{ canonical_artist_id: string; name: string }>;
   organizers?: Array<{ canonical_organizer_id: string; name: string }>;
   source_handles?: number;
 };
-export type ProductCounts = { available: boolean; artists: number | null; venues: number | null; organizers: number | null };
+export type ProductCounts = { available: boolean; artists: number | null; venues: number | null; organizers: number | null; events?: { canonical_events?: number; by_temporal_state?: Record<string, number>; by_provider_lifecycle?: Record<string, number> } | null };
 export type CovState = "COLLECTED" | "ZERO_OBSERVED" | "NOT_COLLECTED" | "UNAVAILABLE" | "INSUFFICIENT_HISTORY" | string;
 export type ArtistCoverage = {
   available?: boolean; canonical_artist_id: string;

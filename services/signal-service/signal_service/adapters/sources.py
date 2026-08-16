@@ -18,6 +18,30 @@ from signal_service.config import settings
 
 CITY_FILTER_MISMATCH = "CITY_FILTER_MISMATCH"
 
+SOURCE_DESCRIPTORS: dict[str, dict[str, Any]] = {
+    "district": {"source_role": "PRIMARY_DISCOVERY", "acquisition_mode": "PUBLIC_SSR_JSONLD",
+                 "provenance_level": "SOURCE_PAGE", "automation_posture": "ROBOTS_ALLOWED_PUBLIC_PAGES",
+                 "continuous_collection_allowed": True,
+                 "claim_authority": ["SCHEDULE", "VENUE", "ORGANIZER", "TICKETING", "LIFECYCLE"],
+                 "policy_checked_at": "2026-08-16", "policy_reference": "https://www.district.in/robots.txt",
+                 "disposition": "PRODUCTION"},
+    "boshow": {"source_role": "PRIMARY_DISCOVERY", "acquisition_mode": "PUBLIC_ANONYMOUS_SEARCH_API",
+               "provenance_level": "SOURCE_API", "automation_posture": "PUBLIC_LOGGED_OUT_ENDPOINT",
+               "continuous_collection_allowed": True,
+               "claim_authority": ["SCHEDULE", "VENUE", "LINEUP", "TICKETING"],
+               "policy_checked_at": "2026-08-16", "policy_reference": "https://www.boshow.in/robots.txt",
+               "disposition": "PRODUCTION"},
+    "allevents": {"source_role": "SUPPLEMENTARY_EVIDENCE", "acquisition_mode": "OFFICIAL_API_PENDING",
+                  "provenance_level": "AGGREGATOR", "automation_posture": "AUTHORIZED_API_REQUIRED",
+                  "continuous_collection_allowed": False, "claim_authority": ["DISCOVERY"],
+                  "policy_checked_at": "2026-08-14", "policy_reference": "https://allevents.in/pages/events-api",
+                  "disposition": "ACCESS_PENDING"},
+}
+
+
+def source_descriptors() -> list[dict[str, Any]]:
+    return [{"source": key, **value} for key, value in SOURCE_DESCRIPTORS.items()]
+
 
 @dataclass
 class AcceptedRecord:

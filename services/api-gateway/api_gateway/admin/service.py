@@ -245,7 +245,7 @@ class AdminService:
             "canonical_event_id": t.get("canonical_event_id"), "title": None, "source": t.get("source"),
             "source_record_id": t.get("source_record_id"), "city": t.get("city"),
             "starts_at": t.get("starts_at"), "tracking_status": t.get("tracking_status"),
-            "lifecycle": lifecycle_from_properties(props),
+            "lifecycle": t.get("lifecycle") or lifecycle_from_properties(props),
             "last_capture_status": t.get("last_capture_status"),
             "state_count": t.get("distinct_state_count"), "transition_count": t.get("transition_count"),
             "capture_gap_hours": t.get("capture_gap_hours"),
@@ -312,6 +312,8 @@ class AdminService:
             "relationships": self._relationships((neigh.data or {}).get("neighbors", []) if neigh.ok else []),
             "resolved_entities": (resolved.data or {}).get("entities", []) if resolved.ok else [],
             "source_records": (recs.data or {}).get("represented_by", []) if recs.ok else [],
+            "source_lifecycle_claims": (recs.data or {}).get("source_lifecycle_claims", []) if recs.ok else [],
+            "provider_lifecycle_disagreement": bool((recs.data or {}).get("provider_lifecycle_disagreement")) if recs.ok else False,
             "available": node.available,
         }
 

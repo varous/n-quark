@@ -269,6 +269,15 @@ def _graph_event_props(event: TicketingEvent) -> dict[str, object]:
     }
     if event.curator:
         props["organizer"] = event.curator  # name only — organizers aren't canonical entities yet
+        props["organizer_source_field"] = "organizer" if event.source == "district" else "curator_name"
+    if event.organizer_schema_type:
+        props["organizer_schema_type"] = event.organizer_schema_type
+    props["performer_source_field"] = "performer" if event.source == "district" else "name_of_artist"
+    if event.artist_schema_types:
+        props["performer_schema_types"] = event.artist_schema_types
+    props["venue_source_field"] = "location" if event.source == "district" else "location"
+    if event.venue_schema_type:
+        props["venue_schema_type"] = event.venue_schema_type
     if event.starts_at is not None:
         props["starts_at"] = event.starts_at.isoformat()
     if event.ends_at is not None:

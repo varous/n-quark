@@ -16,6 +16,12 @@ from signal_service.config import settings
 router = APIRouter(prefix="/v1/internal/sources", tags=["sources (internal)"])
 
 
+@router.get("/descriptors", summary="Governed supply-source descriptors")
+def descriptors() -> dict[str, object]:
+    rows = src.source_descriptors()
+    return {"count": len(rows), "sources": rows}
+
+
 def _require_managed(source: str) -> None:
     if source not in src.managed_sources():
         raise HTTPException(status.HTTP_404_NOT_FOUND,

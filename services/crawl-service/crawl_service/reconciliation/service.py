@@ -16,6 +16,7 @@ from crawl_service.enrichment.clients import GraphReader
 from crawl_service.enrichment.resolver import resolve_field
 from crawl_service.enrichment.service import EnrichmentService
 from crawl_service.models import EventMatchCandidate, TrackedEvent
+from crawl_service.lifecycle import provider_lifecycle
 from crawl_service.reconciliation import matcher as M
 from crawl_service.reconciliation.views import EventView
 
@@ -196,12 +197,23 @@ class ReconciliationService:
                     (EventMatchCandidate.left_canonical_event_id == event_id)
                     | (EventMatchCandidate.right_canonical_event_id == event_id))
             ).scalars().all()
-        records = [{"source": event_id.split(":", 1)[0] if ":" in event_id else "unknown",
-                    "canonical_event_id": event_id, "self": True}]
+            tracked = s.execute(select(TrackedEvent).where(
+                TrackedEvent.canonical_event_id == event_id)).scalars().all()
+        records = [{"source": t.source, "source_record_id": t.source_record_id,
+                    "canonical_event_id": event_id, "self": True,
+                    "provider_lifecycle": provider_lifecycle(t.event_status)} for t in tracked]
+        if not records:
+            records = [{"source": "unknown", "canonical_event_id": event_id, "self": True,
+                        "provider_lifecycle": "UNKNOWN"}]
         for r in rows:
             other = (r.right_source, r.right_source_record_id, r.right_canonical_event_id) \
                 if r.left_canonical_event_id == event_id \
                 else (r.left_source, r.left_source_record_id, r.left_canonical_event_id)
             records.append({"source": other[0], "source_record_id": other[1],
-                            "canonical_event_id": other[2], "via_match": r.id, "self": False})
-        return {"canonical_event_id": event_id, "represented_by": records}
+                            "canonical_event_id": other[2], "via_match": r.id, "self": False,
+                            "provider_lifecycle": "UNKNOWN"})
+        claims = [{"source": r["source"], "source_record_id": r.get("source_record_id"),
+                   "provider_lifecycle": r.get("provider_lifecycle", "UNKNOWN")} for r in records]
+        return {"canonical_event_id": event_id, "represented_by": records,
+                "source_lifecycle_claims": claims,
+                "provider_lifecycle_disagreement": len({c["provider_lifecycle"] for c in claims}) > 1}

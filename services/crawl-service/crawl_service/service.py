@@ -58,6 +58,7 @@ class SchedulerService:
             event_day_hours=self._cfg.cadence_event_day_hours,
             post_event_offsets_days=self._cfg.cadence_post_event_offsets,
             cancelled_confirmation_hours=self._cfg.cadence_cancelled_confirmation_hours,
+            postponed_hours=self._cfg.cadence_postponed_hours,
         )
 
     # ---- enrollment ----------------------------------------------------------------------------
@@ -251,6 +252,8 @@ class SchedulerService:
                     tracked.last_state_change_at = now
                 next_at, cadence_reason = compute_cadence(
                     now, starts_at=_aware(tracked.starts_at), on_sale_at=_aware(tracked.on_sale_at),
+                    ends_at=_aware(tracked.ends_at), event_date=tracked.event_date,
+                    local_timezone=tracked.source_timezone,
                     tracking_status=tracked.tracking_status, provider_lifecycle=tracked.event_status,
                     lifecycle_observed_at=_aware(tracked.last_state_change_at),
                     config=self._cadence,
@@ -264,6 +267,8 @@ class SchedulerService:
                 tracked.last_success_at = now  # the request succeeded
                 next_at, cadence_reason = compute_cadence(
                     now, starts_at=_aware(tracked.starts_at), on_sale_at=_aware(tracked.on_sale_at),
+                    ends_at=_aware(tracked.ends_at), event_date=tracked.event_date,
+                    local_timezone=tracked.source_timezone,
                     tracking_status=tracked.tracking_status, provider_lifecycle=tracked.event_status,
                     lifecycle_observed_at=_aware(tracked.last_state_change_at),
                     config=self._cadence,
@@ -387,6 +392,12 @@ class SchedulerService:
                     te.starts_at = new_dt
                     date_changed = True
                     applied["starts_at"] = new_dt.isoformat()
+            if "end_at" in resolved:
+                new_end = _parse_dt(resolved["end_at"])
+                if new_end and _aware(te.ends_at) != _aware(new_end):
+                    te.ends_at = new_end
+                    date_changed = True
+                    applied["ends_at"] = new_end.isoformat()
             if resolved.get("city"):
                 te.city = resolved["city"]
                 applied["city"] = resolved["city"]
@@ -420,6 +431,8 @@ class SchedulerService:
             elif (date_changed or status_changed) and te.tracking_status in TRACKABLE:
                 nxt, reason = compute_cadence(
                     now, starts_at=_aware(te.starts_at), on_sale_at=_aware(te.on_sale_at),
+                    ends_at=_aware(te.ends_at), event_date=te.event_date,
+                    local_timezone=te.source_timezone,
                     tracking_status=te.tracking_status, provider_lifecycle=te.event_status,
                     lifecycle_observed_at=_aware(te.last_state_change_at),
                     config=self._cadence)

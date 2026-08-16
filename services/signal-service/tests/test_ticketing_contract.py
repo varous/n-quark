@@ -8,6 +8,16 @@ import pytest
 from signal_service.adapters import contract
 from signal_service.adapters.contract import TicketingAdapter, get_adapter
 from signal_service.adapters.ticketing import EventNotFound, TicketingEvent
+from signal_service.adapters.sources import SOURCE_DESCRIPTORS
+
+
+def test_source_governance_descriptors_are_complete():
+    required = {"source_role", "acquisition_mode", "provenance_level", "automation_posture",
+                "continuous_collection_allowed", "claim_authority", "policy_checked_at", "policy_reference"}
+    assert required <= SOURCE_DESCRIPTORS["district"].keys()
+    assert required <= SOURCE_DESCRIPTORS["boshow"].keys()
+    assert SOURCE_DESCRIPTORS["allevents"]["disposition"] == "ACCESS_PENDING"
+    assert SOURCE_DESCRIPTORS["allevents"]["continuous_collection_allowed"] is False
 
 
 def _event(**over) -> TicketingEvent:

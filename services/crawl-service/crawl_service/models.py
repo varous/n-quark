@@ -40,6 +40,10 @@ class TrackedEvent(Base):
     canonical_event_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    source_time_precision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     on_sale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # ACTIVE | POST_EVENT | STOPPED | NEEDS_REVIEW | CANCELLED
     tracking_status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")

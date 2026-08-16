@@ -104,6 +104,9 @@ class TicketingEvent:
     source_end_value: str | None = None
     source_time_precision: str = "UNKNOWN"
     source_timezone: str | None = None
+    artist_schema_types: list[str] = field(default_factory=list)
+    venue_schema_type: str | None = None
+    organizer_schema_type: str | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -291,6 +294,7 @@ def event_from_jsonld(
     if isinstance(perf, dict):
         perf = [perf]
     artists = [p["name"].strip() for p in perf if isinstance(p, dict) and p.get("name")]
+    artist_schema_types = [str(p.get("@type") or "") for p in perf if isinstance(p, dict) and p.get("name")]
     org = node.get("organizer") or {}
     if isinstance(org, list):
         org = org[0] if org else {}
@@ -321,6 +325,9 @@ def event_from_jsonld(
         provider_lifecycle=node.get("eventStatus") if isinstance(node.get("eventStatus"), str) else None,
         source_start_value=raw_start, source_end_value=raw_end,
         source_time_precision=precision, source_timezone=source_timezone,
+        artist_schema_types=artist_schema_types,
+        venue_schema_type=(str(loc.get("@type")) if isinstance(loc, dict) and loc.get("@type") else None),
+        organizer_schema_type=(str(org.get("@type")) if isinstance(org, dict) and org.get("@type") else None),
         fetched_at=fetched_at or datetime.now(UTC),
     )
 

@@ -61,6 +61,11 @@ def quality_metrics(svc: EntityResolutionService = Depends(get_entity_resolution
     return svc.quality_metrics()
 
 
+@router.get("/type-quality", summary="Entity type + Organizer extraction diagnostics (read-only)")
+def type_quality(svc: EntityResolutionService = Depends(get_entity_resolution_service)) -> dict[str, Any]:
+    return svc.type_quality_diagnostics()
+
+
 @router.get("/review-queue", summary="Live interpretation review items (internal, 5B.2.4)")
 def review_queue(
     limit: int = Query(default=100, ge=1, le=500),

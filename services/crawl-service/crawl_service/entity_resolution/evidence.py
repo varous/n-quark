@@ -108,6 +108,9 @@ def extract_event_entities(
                       # Phase 5B.2.4 — interpretation carried on the mention; the resolver gates on it.
                       "interpretation": {"state": interpretation, "expected_role": ARTIST,
                                          "review_required": interpretation != "CLEAN_SINGLE"},
+                      "source_field": props.get("performer_source_field") or "performer_or_lineup",
+                      "structured_type": next((t for i, t in enumerate(props.get("performer_schema_types") or [])
+                                                if i < len(performer_names) and performer_names[i] == name), None),
                       **extra}))
 
     for name in performer_names:
@@ -139,7 +142,10 @@ def extract_event_entities(
                 source_entity_handle=_handle(source, VENUE, venue_name),
                 raw_name=vn.raw, normalized_name=vn.normalized, observed_at=observed_at,
                 confidence=0.85, provenance=prov,
-                evidence={"city": city, "region_id": region_id, "is_generic": vn.is_generic},
+                evidence={"city": city, "region_id": region_id, "is_generic": vn.is_generic,
+                          "source_field": props.get("venue_source_field") or "location",
+                          "structured_type": props.get("venue_schema_type"),
+                          "address_context": bool("\n" in venue_name or any(ch.isdigit() for ch in venue_name))},
             )
 
     # ---- organizer (event property, from schema.org organizer / Boshow curator) -----------------
@@ -152,7 +158,10 @@ def extract_event_entities(
                 canonical_event_id=canonical_event_id,
                 source_entity_handle=_handle(source, ORGANIZER, str(organizer_name)),
                 raw_name=on.raw, normalized_name=on.normalized, observed_at=observed_at,
-                confidence=0.7, provenance=prov, evidence={"city": city},
+                confidence=0.7, provenance=prov,
+                evidence={"city": city,
+                          "source_field": props.get("organizer_source_field") or "organizer",
+                          "structured_type": props.get("organizer_schema_type")},
             )
 
     # ---- event series (derived from the event title + organizer/venue context) ------------------

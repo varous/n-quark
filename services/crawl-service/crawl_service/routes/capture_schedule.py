@@ -16,6 +16,7 @@ from crawl_service.db import SessionLocal
 from crawl_service.deps import get_scheduler
 from crawl_service.models import ScheduledCaptureJob, TrackedEvent
 from crawl_service.service import SchedulerService, _aware, _iso
+from crawl_service.lifecycle import provider_lifecycle, temporal_state
 
 router = APIRouter(prefix="/v1/internal/capture-schedule", tags=["capture-schedule (internal)"])
 
@@ -33,6 +34,13 @@ def _coverage(te: TrackedEvent, now: datetime, job: ScheduledCaptureJob | None) 
         "source": te.source, "source_record_id": te.source_record_id,
         "canonical_event_id": te.canonical_event_id, "city": te.city,
         "tracking_status": te.tracking_status,
+        "starts_at": _iso(_aware(te.starts_at)), "ends_at": _iso(_aware(te.ends_at)),
+        "event_date": te.event_date, "source_time_precision": te.source_time_precision,
+        "source_timezone": te.source_timezone,
+        "provider_lifecycle": provider_lifecycle(te.event_status),
+        "lifecycle": temporal_state(starts_at=_aware(te.starts_at), ends_at=_aware(te.ends_at),
+                                    event_date=te.event_date, evaluated_at=now,
+                                    local_timezone=te.source_timezone),
         "next_capture_at": _iso(next_at), "cadence_reason": te.cadence_reason,
         "priority": te.priority, "priority_reason": te.priority_reason,
         "last_attempt_at": _iso(_aware(te.last_attempt_at)),
@@ -64,6 +72,39 @@ def list_schedule(
         tracked = s.execute(stmt).scalars().all()
         items = [_coverage(te, now, None) for te in tracked]
     return {"count": len(items), "events": items}
+
+
+@router.get("/lifecycle-diagnostics", summary="Canonical Event lifecycle and polling diagnostics")
+def lifecycle_diagnostics() -> dict[str, Any]:
+    now = datetime.now(UTC)
+    with SessionLocal() as s:
+        rows = s.execute(select(TrackedEvent).where(
+            TrackedEvent.canonical_event_id.is_not(None))).scalars().all()
+    temporal_counts = {k: 0 for k in ("UPCOMING", "ONGOING", "PAST", "UNKNOWN")}
+    provider_counts = {k: 0 for k in ("SCHEDULED", "CANCELLED", "POSTPONED", "RESCHEDULED", "UNKNOWN")}
+    date_only = uncertain = recent_final = old_past_polling = 0
+    claims: dict[str, set[str]] = {}
+    for te in rows:
+        life = temporal_state(starts_at=_aware(te.starts_at), ends_at=_aware(te.ends_at),
+                              event_date=te.event_date, evaluated_at=now,
+                              local_timezone=te.source_timezone)
+        state, pl = life["temporal_state"], provider_lifecycle(te.event_status)
+        temporal_counts[state] += 1
+        provider_counts[pl] += 1
+        date_only += int(life["temporal_basis"] == "DATE_ONLY")
+        uncertain += int(life["temporal_basis"] == "UNKNOWN")
+        recent_final += int(state == "PAST" and te.cadence_reason == "post_event_followup"
+                            and te.next_capture_at is not None)
+        old_past_polling += int(state == "PAST" and te.next_capture_at is not None
+                                and te.cadence_reason not in {"post_event_followup", "cancelled_confirmation"})
+        claims.setdefault(te.canonical_event_id, set()).add(pl)
+    return {"canonical_events": len(rows), "by_temporal_state": temporal_counts,
+            "by_provider_lifecycle": provider_counts, "date_only_events": date_only,
+            "time_precision_uncertain": uncertain,
+            "provider_lifecycle_disagreements": sum(1 for values in claims.values() if len(values) > 1),
+            "recently_past_awaiting_final_capture": recent_final,
+            "old_past_still_normally_polled": old_past_polling,
+            "evaluated_at": now.isoformat()}
 
 
 @router.get("/{source}/{source_record_id}", summary="Capture coverage for one event (internal)")

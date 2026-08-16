@@ -42,8 +42,10 @@ class CatalogAdminService:
         artists = await self._count("ARTIST")
         venues = await self._count("VENUE")
         organizers = await self._count("ORGANIZER")
+        lifecycle = await self.gw.get(CRAWL, "/v1/internal/capture-schedule/lifecycle-diagnostics")
         return {"available": artists is not None or venues is not None,
-                "artists": artists, "venues": venues, "organizers": organizers}
+                "artists": artists, "venues": venues, "organizers": organizers,
+                "events": (lifecycle.data or {}) if lifecycle.ok else None}
 
     async def _canonical(self, entity_type: str, *, limit: int, offset: int,
                          source: str | None = None) -> tuple[list[dict[str, Any]], int | None, bool]:
@@ -139,6 +141,7 @@ class CatalogAdminService:
         organizers: dict[str, str] = {}
         fanned = events[:VENUE_EVENT_FANOUT]
         for eid in fanned:
+            evnode = await self.gw.get(GRAPH, f"/v1/graph/nodes/{eid}")
             nb = await self.gw.get(GRAPH, f"/v1/graph/nodes/{eid}/neighbors", params={"direction": "both"})
             if not nb.ok:
                 continue
@@ -152,6 +155,10 @@ class CatalogAdminService:
                     artists.setdefault(nid, name)
                 elif ntype == "organizer" and nid.startswith("organizer:"):
                     organizers.setdefault(nid, name)
+            props = (evnode.data or {}).get("properties", {}) if evnode.ok else {}
+            from api_gateway.admin.event_lifecycle import lifecycle_from_properties
+            data.setdefault("event_lifecycle", []).append({"canonical_event_id": eid,
+                                                            "lifecycle": lifecycle_from_properties(props)})
         return {
             "available": True,
             "canonical_venue_id": venue_id,
@@ -161,6 +168,7 @@ class CatalogAdminService:
             "sources": data.get("sources") or [],
             "last_observed": data.get("last_observed"),
             "events": events,
+            "event_lifecycle": data.get("event_lifecycle", []),
             "events_aggregated": len(fanned),
             "events_truncated": len(events) > len(fanned),
             "artists": [{"canonical_artist_id": k, "name": v} for k, v in artists.items()],
