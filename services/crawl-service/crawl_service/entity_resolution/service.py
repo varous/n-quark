@@ -216,6 +216,9 @@ class EntityResolutionService:
             AMBIGUOUS_TYPE, ROLE_CONFLICT as TYPE_ROLE_CONFLICT, classify_type,
         )
         existing_types = set(cross_index.get(_N.slug(ev.raw_name), set()))
+        # Same-role history is self-confirming and must not drown out independent conflicting
+        # evidence (especially when auditing legacy canonicals created before this gate existed).
+        existing_types.discard(ev.entity_type)
         classification = classify_type(
             raw=ev.raw_name, requested_role=ev.entity_type,
             source_field=(ev.evidence or {}).get("source_field"),
@@ -847,11 +850,12 @@ class EntityResolutionService:
         organizer_canonicals: dict[str, set[str]] = {}
         for c in rows:
             evidence = c.evidence or {}
-            stored = (evidence.get("interpretation") or {}).get("type_classification")
-            result = stored or classify_type(
+            # Re-evaluate against the current cross-type registry. Stored classifications are
+            # point-in-time decision evidence and can predate a later conflicting canonical.
+            result = classify_type(
                 raw=c.raw_name, requested_role=c.entity_type,
                 source_field=evidence.get("source_field"), schema_type=evidence.get("structured_type"),
-                existing_types=cross.get(_N.slug(c.raw_name), set())).to_dict()
+                existing_types=(cross.get(_N.slug(c.raw_name), set()) - {c.entity_type})).to_dict()
             outcome, pred = result["outcome"], result["predicted_type"]
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             predicted[pred] = predicted.get(pred, 0) + 1
