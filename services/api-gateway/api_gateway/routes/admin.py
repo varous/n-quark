@@ -24,9 +24,11 @@ from api_gateway.admin.deps import (
     get_audit_store,
     get_catalog_service,
     get_demand_service,
+    get_social_service,
     get_watchlist_service,
 )
 from api_gateway.admin.service import AdminService
+from api_gateway.admin.social import SocialAdminService
 from api_gateway.admin.watchlist import WatchlistAdminService, WatchlistError
 from api_gateway.config import settings
 
@@ -415,6 +417,31 @@ async def demand_artist_observations(artist_id: str,
 async def demand_artist_coverage(artist_id: str, _: auth.Principal = Depends(auth.require_viewer),
                                  svc: DemandAdminService = Depends(get_demand_service)) -> dict[str, Any]:
     return await svc.coverage(artist_id)
+
+
+# ---- social evidence (Phase 5C.1; read-only coverage/diagnostics; no raw-source export) ----------
+@router.get("/social/overview")
+async def social_overview(_: auth.Principal = Depends(auth.require_viewer),
+                          svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
+    return await svc.overview()
+
+
+@router.get("/social/identities")
+async def social_identities(canonical_entity_id: str | None = Query(default=None),
+                            platform: str | None = Query(default=None),
+                            limit: int = Query(default=200, ge=1, le=500),
+                            _: auth.Principal = Depends(auth.require_viewer),
+                            svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
+    return await svc.identities(canonical_entity_id=canonical_entity_id, platform=platform, limit=limit)
+
+
+@router.get("/social/mentions")
+async def social_mentions(canonical_entity_id: str | None = Query(default=None),
+                          platform: str | None = Query(default=None),
+                          limit: int = Query(default=100, ge=1, le=500),
+                          _: auth.Principal = Depends(auth.require_viewer),
+                          svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
+    return await svc.mentions(canonical_entity_id=canonical_entity_id, platform=platform, limit=limit)
 
 
 @router.get("/demand/artists/{artist_id:path}/movement")

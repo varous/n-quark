@@ -71,3 +71,16 @@ n-quark keeps and sells. The two are never conflated: transforming source eviden
 intelligence does not cure a prohibited acquisition. Descriptor extensions (`raw_content_retention`,
 `derived_embedding_basis`, `commercial_raw_export`, `provenance_retention`, …) are future guidance — add
 them only where the existing descriptor cannot already express the concept.
+
+## Social source descriptors (5C.1, 2026-08-17)
+
+signal-service now exposes governed **social** source descriptors alongside ticketing (see
+`GET /v1/signals/social/descriptors` and [docs/social-signal.md](social-signal.md)). Instagram and
+Facebook are `OFFICIAL_ACCOUNT_EVIDENCE` acquired via the official Meta Graph API (authorized token
+required); Reddit is `COMMUNITY_EVIDENCE`, access/commercial-review pending. Each descriptor reports an
+honest `access_state` (DISABLED / CREDENTIAL_UNAVAILABLE / ACCESS_PENDING / MOCK / PRODUCTION) — Axis A
+(acquisition posture) — plus transformation-posture fields (`raw_content_retention=EPHEMERAL`,
+`expressive_content_retention=false`, `commercial_raw_export=false`, `derived_embedding_basis=CANONICAL`,
+`provenance_retention=REQUIRED`) — Axis B. There is no scraping fallback: absent authorized access is
+reported, never worked around, and no login-wall/CAPTCHA circumvention or individual-user (follower/
+commenter) collection is performed.

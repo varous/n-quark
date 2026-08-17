@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
-import { Badge, Card, ErrorBox, ExportButtons, Link, Loading, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
+import { Badge, Card, Empty, ErrorBox, ExportButtons, Link, Loading, Section, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
 
 export function Sources() {
   const { data, loading, error } = useAsync(() => api.sources(), []);
@@ -284,5 +284,53 @@ export function Health() {
         </div>
       </Card>
     </div>
+  );
+}
+
+// Social evidence coverage/diagnostics (Phase 5C.1) — read-only. Social mentions are evidence, never
+// canonical truth; access state is honest; no raw post content is shown or exported.
+export function Social() {
+  const { data, loading, error } = useAsync(() => api.socialOverview(), []);
+  if (loading) return <Loading label="Loading social coverage…" />;
+  if (error) return <ErrorBox message={error} />;
+  if (!data || data.available === false || !data.coverage) return <Unavailable what="social coverage" />;
+  const cov = data.coverage;
+  const wl = data.watchlist ?? {};
+  const platforms = cov.by_platform ?? {};
+  return (
+    <Section title="Social evidence" subtitle="Watchlist-driven social signal collection. Mentions are evidence only — no social post becomes a canonical Event, and raw post content is never retained (claims + provenance only).">
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Card><div className="text-2xl font-semibold text-slate-100">{String(cov.total_identities ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Social identities</div></Card>
+        <Card><div className="text-2xl font-semibold text-slate-100">{String(cov.total_mentions ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Mentions (evidence)</div></Card>
+        <Card><div className="text-2xl font-semibold text-amber-300">{String(cov.unresolved_mentions ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Unresolved evidence</div></Card>
+        <Card><div className="text-2xl font-semibold text-slate-100">{String(wl.eligible_now ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Eligible now</div></Card>
+      </div>
+      <div className="mb-4 text-xs text-slate-500">
+        Social acquisition {cov.social_enabled ? <span className="text-emerald-300">enabled</span> : <span className="text-slate-400">disabled</span>}
+        {" · "}platforms: {(cov.platforms_enabled ?? []).join(", ") || "none"}
+      </div>
+      {Object.keys(platforms).length === 0
+        ? <Empty message="No social identities linked yet. Associate public accounts with canonical Artists/Venues/Organizers to begin." />
+        : (
+          <div className="space-y-2.5">
+            {Object.entries(platforms).map(([plat, p]) => {
+              const row = p as Record<string, unknown>;
+              return (
+                <Card key={plat}>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+                    <span className="font-medium text-slate-100">{plat}</span>
+                    <span className="text-xs text-slate-500">identities {String(row.identities ?? 0)}</span>
+                    <span className="text-xs text-slate-500">mentions {String(row.mentions ?? 0)}</span>
+                    <span className="text-xs text-slate-500">entities {String(row.canonical_entities ?? 0)}</span>
+                    {Number(row.access_pending ?? 0) > 0 && <Badge label={`access-pending ${String(row.access_pending)}`} />}
+                    {row.last_access_state ? <span className="text-xs text-slate-400">access: {String(row.last_access_state)}</span> : null}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      <p className="mt-3 text-xs text-slate-600">{cov.note}</p>
+    </Section>
   );
 }

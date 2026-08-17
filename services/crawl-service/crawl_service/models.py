@@ -331,3 +331,82 @@ class EntitySupersession(Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SocialIdentity(Base):
+    """A public social account associated with a canonical Artist/Venue/Organizer (Phase 5C.1).
+
+    An external identity/evidence source — NOT a competing canonical entity system. Canonical ownership
+    stays with the registry/resolution layer; this row only *associates* a platform account with an
+    existing ``canonical_entity_id`` and carries the watchlist scheduling state for acquisition.
+    Multiple accounts per canonical (and per platform) are supported; associations are auditable."""
+
+    __tablename__ = "social_identity"
+    __table_args__ = (
+        # idempotent association; the same account may legitimately front more than one canonical, and a
+        # canonical may hold several accounts on one platform — uniqueness is the full triple.
+        Index("uq_social_identity", "canonical_entity_id", "platform", "handle", unique=True),
+        Index("ix_social_identity_canonical", "canonical_entity_id"),
+        Index("ix_social_identity_due", "platform", "collection_state", "next_eligible_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_entity_id: Mapped[str] = mapped_column(String(600), nullable=False)
+    canonical_entity_type: Mapped[str] = mapped_column(String(24), nullable=False)  # ARTIST|VENUE|ORGANIZER
+    platform: Mapped[str] = mapped_column(String(24), nullable=False)               # INSTAGRAM|FACEBOOK|REDDIT
+    platform_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    handle: Mapped[str] = mapped_column(String(255), nullable=False)
+    account_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    evidence_role: Mapped[str] = mapped_column(String(40), nullable=False, default="OFFICIAL_ACCOUNT_EVIDENCE")
+    verification_state: Mapped[str] = mapped_column(String(24), nullable=False, default="ASSERTED")  # ASSERTED|VERIFIED|REJECTED
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="OPERATOR")  # provenance of the association
+    collection_state: Mapped[str] = mapped_column(String(24), nullable=False, default="ELIGIBLE")  # ELIGIBLE|DEFERRED|ACCESS_PENDING|DISABLED
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_access_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provenance: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SocialMention(Base):
+    """Durable, provenance-bearing social evidence (Phase 5C.1).
+
+    A social post/mention is EVIDENCE, never canonical truth, and never auto-creates a canonical Event.
+    Per docs/data-doctrine.md the raw caption/media is ephemeral — this row stores only the extracted
+    factual *claims*, a content hash for change detection, and provenance. There is deliberately NO raw
+    caption/media column. Idempotent on ``(platform, platform_post_id)``. ``processing_status`` +
+    ``claim_type`` are the clean seam for the 5C.2 deterministic classifier (unset here)."""
+
+    __tablename__ = "social_mention"
+    __table_args__ = (
+        Index("uq_social_mention", "platform", "platform_post_id", unique=True),
+        Index("ix_social_mention_canonical", "canonical_entity_id"),
+        Index("ix_social_mention_processing", "processing_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_account: Mapped[str] = mapped_column(String(255), nullable=False)
+    social_identity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    platform_post_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    post_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    canonical_entity_id: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    canonical_entity_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    linked_canonical_entity_ids: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    extracted_claims: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    evidence_role: Mapped[str] = mapped_column(String(40), nullable=False, default="SOCIAL_DISCOVERY")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    parser_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    provenance: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
+    processing_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNPROCESSED")  # 5C.2 seam
+    claim_type: Mapped[str | None] = mapped_column(String(32), nullable=True)                          # 5C.2 seam (unset in 5C.1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

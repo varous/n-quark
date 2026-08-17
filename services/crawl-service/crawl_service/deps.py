@@ -17,6 +17,7 @@ _enricher: EnrichmentService | None = None
 _pilot: PilotService | None = None
 _reconciler: ReconciliationService | None = None
 _probe: ProbeService | None = None
+_social = None
 _entity_resolver: EntityResolutionService | None = None
 _governance: GovernanceService | None = None
 
@@ -84,3 +85,11 @@ def get_probe_service() -> ProbeService:
     if _probe is None:
         _probe = ProbeService(settings.signal_service_url)
     return _probe
+
+
+def get_social_service() -> "SocialAcquisitionService":  # noqa: F821
+    global _social
+    if _social is None:
+        from crawl_service.social import SocialAcquisitionService
+        _social = SocialAcquisitionService(SessionLocal, settings)
+    return _social

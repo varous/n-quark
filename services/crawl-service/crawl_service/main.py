@@ -14,6 +14,7 @@ from crawl_service.routes.entity_resolution import router as entity_resolution_r
 from crawl_service.routes.governance import router as governance_router
 from crawl_service.routes.reconciliation import events_router as reconciliation_events_router
 from crawl_service.routes.reconciliation import router as reconciliation_router
+from crawl_service.routes.social import router as social_router
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -47,6 +48,7 @@ app.include_router(entity_resolution_router)
 app.include_router(entity_entities_router)
 app.include_router(entity_events_router)
 app.include_router(governance_router)
+app.include_router(social_router)
 
 
 @app.get("/health")
@@ -58,6 +60,7 @@ async def health() -> dict[str, object]:
         "capture_enrichment_enabled": settings.capture_enrichment_enabled,
         "reconciliation_enabled": settings.reconciliation_enabled,
         "entity_resolution_enabled": settings.entity_resolution_enabled,
+        "social_enabled": settings.social_enabled,
         "media_observation_enabled": settings.media_observation_enabled,
         "collector_enabled": settings.collector_enabled,
         "collector_sources": sorted(settings.collector_source_set),

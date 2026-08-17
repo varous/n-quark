@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { AuthProvider, ConnectError, LoginScreen, useAuth } from "./auth";
 import { DrawerProvider, Link, useHashRoute } from "./ui";
-import { Captures, Diagnostics, Events, Health, Sources } from "./screens";
+import { Captures, Diagnostics, Events, Health, Social, Sources } from "./screens";
 import { Resolution } from "./workbench";
 import { EntityDetail, Entities, EventDetail, Graph } from "./detail";
 import { ArtistDemand, DemandIntelligence } from "./demand";
@@ -29,6 +29,7 @@ const NAV: NavGroup[] = [
   ] },
   { group: "Coverage", items: [
     { to: "/sources", label: "Collection", icon: "feed" },
+    { to: "/social", label: "Social", icon: "pulse" },
     { to: "/captures", label: "Captures", icon: "camera" },
   ] },
   { group: "Advanced", items: [
@@ -94,6 +95,7 @@ function Router({ hash }: { hash: string }) {
     case "resolution": return <Resolution />;
     case "graph": return <Graph initialRoot={params.get("root") ?? undefined} />;
     case "captures": return <Captures />;
+    case "social": return <Social />;
     case "diagnostics": return <Diagnostics />;
     case "health": return <Health />;
     default: return <Overview />;

@@ -117,6 +117,8 @@ export const api = {
   // Bounded export honouring active filters. Returns the BFF href (opened as a download link).
   exportHref: (table: string, format: "csv" | "json", f: Record<string, unknown>) =>
     `${API_BASE}/export/${table}${qs({ ...f, format })}`,
+  // ---- social evidence (Phase 5C.1; read-only coverage/diagnostics) ----
+  socialOverview: () => req<SocialOverview>("/social/overview"),
   // ---- demand intelligence (Phase 5A.2; read-only) ----
   demandOverview: () => req<DemandOverview>("/demand/overview"),
   demandSummary: () => req<DemandSummary>("/demand/summary"),
@@ -230,6 +232,21 @@ export type SystemHealth = {
   canonical_counts?: Record<string, number | null>;
 };
 export type SearchResult = { query: string; results: { events: Array<Record<string, unknown>>; entities: Array<Record<string, unknown>> } };
+
+// ---- social evidence types (loose; the BFF is the source of truth) ----
+export type SocialOverview = {
+  available: boolean;
+  coverage: {
+    social_enabled?: boolean;
+    platforms_enabled?: string[];
+    total_identities?: number;
+    total_mentions?: number;
+    unresolved_mentions?: number;
+    by_platform?: Record<string, Record<string, unknown>>;
+    note?: string;
+  } | null;
+  watchlist: { active_identities?: number; eligible_now?: number; platforms_enabled?: string[] } | null;
+};
 
 // ---- demand intelligence types (loose; the BFF is the source of truth) ----
 export type ProviderMode = { mode: "REAL" | "MOCK" | "UNKNOWN"; source: string; available: boolean };

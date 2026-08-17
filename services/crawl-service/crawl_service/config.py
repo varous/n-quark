@@ -132,6 +132,18 @@ class Settings(BaseSettings):
     pilot_max_conflict_rate: float = 0.2
     pilot_min_parser_success: float = 0.7
 
+    # --- Phase 5C.1: social evidence foundation (all OFF by default) ---
+    social_enabled: bool = False
+    social_platforms: str = "instagram,facebook"   # watchlist-driven; reddit stays access-pending
+    social_collection_interval_seconds: int = 43200   # 12h between collections per identity
+    social_max_identities_per_run: int = 25           # bounded, canonical/watchlist driven
+    social_backoff_seconds: int = 3600                # per-identity backoff after a transient failure
+    social_access_pending_retry_seconds: int = 86400  # honest deferral when access is unavailable
+
+    @property
+    def social_platform_set(self) -> frozenset[str]:
+        return frozenset(p.strip().upper() for p in self.social_platforms.split(",") if p.strip())
+
     # --- cadence bands (hours); overridable but sensible India-first defaults ---
     cadence_far_future_hours: int = 24     # not on sale / >30 days away
     cadence_mid_hours: int = 12            # 15-30 days away

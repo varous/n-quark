@@ -1160,3 +1160,35 @@ candidate → canonical reconciliation → Shadow Ledger → derived features �
 raw-post warehouse). A later derived-intelligence phase adds knowledge embeddings + the n-dimensional
 market space once enough longitudinal data exists. Design smell test for every new source: *if it
 disappeared tomorrow, would n-quark retain useful independent intelligence?* — the answer must be yes.
+
+## Phase 5C.1 — Social Evidence Foundation (2026-08-17)
+
+The governed spine for social signal intelligence, built to the data doctrine (source content ephemeral;
+claims + provenance persisted; no raw-post warehouse; no post embeddings). Full detail:
+[docs/social-signal.md](docs/social-signal.md). All OFF by default; no live Meta/Reddit collection.
+
+Canonical entities can now carry governed **social identities** (`social_identity`, crawl migration
+`008`): a public account associated with an existing `canonical_entity_id` (ARTIST/VENUE/ORGANIZER),
+with evidence role, verification state (ASSERTED → VERIFIED only on real provider confirmation),
+active flag and watchlist scheduling state; multiple accounts per canonical/platform; auditable.
+Canonical ownership stays with the registry — a social account is external evidence, not a competing
+identity system.
+
+**`SocialMention`** is durable, provenance-bearing evidence (claims + content-hash + provenance, **no
+raw caption/media column**), idempotent on `(platform, platform_post_id)`, with a changed hash appending
+a revision. A mention is evidence and **never** auto-creates a canonical Event; `processing_status` +
+`claim_type` are the clean 5C.2 seam.
+
+External social HTTP lives in **signal-service** (`adapters/social.py`, `/v1/signals/social/*`) with
+governed source descriptors (Instagram/Facebook = OFFICIAL_ACCOUNT_EVIDENCE via official Meta Graph;
+Reddit = COMMUNITY_EVIDENCE, access-pending) and an honest per-platform access state. **crawl-service**
+runs the bounded, watchlist-driven scheduler (`SocialAcquisitionService.run_once`) that calls
+signal-service, ingests mentions idempotently, and represents absent authorized access honestly
+(`ACCESS_PENDING`/`DEFERRED`, backed off) — never a fabricated failure and never a scrape fallback. The
+**gateway** exposes read-only `/admin/v1/social/*` coverage + a compact admin "Social" view (no raw
+export). A deterministic mock makes the spine demonstrable without credentials.
+
+Validation is fixture/mock only (no Meta credentials): signal 118, crawl 260, gateway 147, frontend
+build/lint green; migration `008` upgrade/downgrade/upgrade verified. **Meta/Facebook/Reddit acquisition
+is not operational** — it is the governed seam awaiting authorized access. Next: Phase 5C.2 (deterministic
+social-evidence classification → Event candidate via existing reconciliation; no auto-created Events).

@@ -105,6 +105,19 @@ class Settings(BaseSettings):
     # state to graph-service's internal Shadow Ledger (best-effort; never blocks ingest).
     shadow_ledger_enabled: bool = False
     shadow_ledger_sources: str = "boshow,mock,district,skillbox,townscript,allevents,luma,meetup,knowafest"
+    # Social signal acquisition (Phase 5C.1) — OFF by default. External social HTTP lives here; there is
+    # no scraping fallback. Instagram/Facebook use official Meta Graph access (App creds + a Page/IG
+    # access token). Absent credentials → an honest ACCESS_PENDING/CREDENTIAL_UNAVAILABLE state, never a
+    # scrape substitute and never a fabricated failure. Reddit stays access/commercial-review pending.
+    social_enabled: bool = False
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    meta_access_token: str = ""          # long-lived Page/IG token; presence = authorized access
+    meta_graph_base: str = "https://graph.facebook.com/v20.0"
+    meta_mock_mode: bool = False         # force the deterministic offline fixture even with creds
+    instagram_enabled: bool = False
+    facebook_enabled: bool = False
+    reddit_enabled: bool = False         # no approved access path yet → represented as ACCESS_PENDING
     postgres_url: str = Field(default_factory=default_postgres_url)
     redis_url: str = "redis://redis:6379/0"
     neo4j_url: str = "bolt://neo4j:7687"
@@ -126,6 +139,14 @@ class Settings(BaseSettings):
         if self.youtube_mock_mode:
             return True
         return not self.youtube_api_key
+
+    @property
+    def use_meta_mock(self) -> bool:
+        # Deterministic offline fixture when explicitly requested, or whenever no authorized Meta token
+        # is present. We never fall back to scraping — mock is the only non-authorized behaviour.
+        if self.meta_mock_mode:
+            return True
+        return not self.meta_access_token
 
     @property
     def use_musicbrainz_mock(self) -> bool:
