@@ -81,7 +81,7 @@ def correct(payload: dict = Body(...),
         return svc.apply_correction(
             action=str(payload.get("action", "")), actor=str(payload.get("actor", "")),
             reason=payload.get("reason"), canonical_entity_id=payload.get("canonical_entity_id"),
-            candidate_id=payload.get("candidate_id"))
+            candidate_id=payload.get("candidate_id"), corrected_type=payload.get("corrected_type"))
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 

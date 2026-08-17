@@ -37,3 +37,16 @@ The deployed diagnostic reported 468 canonical events (170 UPCOMING, 0 ONGOING, 
 all 468 with provider lifecycle UNKNOWN in the migrated historical cohort, no current disagreement,
 288 recently-past rows awaiting bounded final capture, and 10 legacy old-past schedules still awaiting
 cadence recalculation. The diagnostic is observational and does not fabricate or rewrite source claims.
+
+## Cadence convergence + lifecycle preservation (5B.3.3, 2026-08-17)
+
+The remaining legacy old-past normal-poll schedules converged to **zero** through the normal capture
+path (`capture-now` → cadence recalculation), with no event-date edits and no job deletion. The
+converged rows were District listings carrying a placeholder start (today's date); recalculation moved
+them to bounded post-event follow-ups (offsets 1/3/7 → terminal), which stay idempotent on re-capture.
+
+Provider lifecycle remains UNKNOWN for all 468 canonical events. Fresh District captures proved the
+extract → observe → enrich → persist plumbing runs end-to-end (city/venue/start flow through), but the
+District/Boshow payloads carry no `eventStatus`, so no value is available to preserve. UNKNOWN is a valid
+state; provider lifecycle is never inferred from age, and no historical backfill is justified because the
+immutable raw evidence contains no lifecycle status.

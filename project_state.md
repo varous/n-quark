@@ -1065,3 +1065,81 @@ Artist/Organizer; no canonical was retyped or deleted. District preserves struct
 no trustworthy organizer evidence, so its organizer state remains not observed. District/Boshow had
 414/54 canonical events and zero canonical event overlap in the current tracked cohort. AllEvents remains
 SUPPLEMENTARY / ACCESS_PENDING; no adapter or probe was created.
+
+## Phase 5B.3 Increment 3 — supply integrity closure (2026-08-17)
+
+Final cleanup/calibration before Phase 5C (social). Dry-run first throughout; no bulk retype, no
+date edits, no threshold changes, no new source. Baseline had drifted through natural operation:
+historical wrong-type suspects 49→19, quality-audit cross-type conflicts=10 (5 name pairs), old-past
+normal-poll schedules 10→4, District organizers 217→212.
+
+**Historical entity-type repair.** A new governed action `MARK_WRONG_TYPE` quarantines a deterministic
+wrong-typed canonical while the corroborating correct-typed canonical stands; it *requires* an
+established correct-typed identity for the same slug (`_has_corroborating_cross_type`), so vocabulary or
+a bare source role can never drive a retype. Evidence + history are preserved (`WRONG_TYPE_QUARANTINE`),
+nothing deleted. The only deterministic repair was `artist:skinny-mos` — a Boshow `name_of_artist`
+misfire against the operator-confirmed `venue:skinny-mos--kolkata` (location/Place). After repair the
+artist is QUARANTINED and gone from product; the venue stays. `quality_audit` now excludes
+fully-quarantined canonicals from its active cross-type index, so repairing one side clears the conflict
+off the correct sibling. Open issues 10→8, repaired 1→2, wrong-type suspects 19→12.
+
+The remaining cross-type pairs were classified and **preserved, not retyped**: DORANGOS and Sona Pottery
+are legitimate multi-role (structured venue *and* structured organizer — the smart classifier rates each
+side CLEAR); Abijit Ganguly is a real comedian who self-produces (Artist + Organizer); The Social House
+is genuine ambiguity (structured venue, unstructured organizer) left in review. **India Business Helpline**
+needs no mutation — it has no canonical (REVIEW_REQUIRED, gate-caught), so it is already not a product
+Artist and was not promoted to Organizer. Data Quality routes cross-type collisions to per-mention review
+(the safe path) rather than a blunt one-click retype.
+
+**Organizer quality.** A production sample of District's 212 canonical organizers found genuine
+orgs/promoters/individuals (LLPs, Pvt Ltds, named promoters); zero artists/venues/ticketing-junk
+misfiled. Classifier agrees (district 831 CLEAR / 3 role-conflict / 1 ambiguous). No systemic defect,
+no classifier change. Boshow organizer remains NOT_OBSERVED.
+
+**Cadence + lifecycle.** `old_past_still_normally_polled` converged **4→0** via the normal `capture-now`
+path — the four were District events carrying a placeholder `starts_at` (today), recomputed to
+`post_event_followup` (T+1); no date/job edits. Final captures stay bounded (offsets 1/3/7 → terminal)
+and idempotent. `provider_lifecycle` is UNKNOWN for all 468: fresh captures proved the extract→observe→
+enrich→persist plumbing runs, but District/Boshow payloads carry no `eventStatus`, so UNKNOWN is valid
+and no historical backfill is possible or justified. Lifecycle is never inferred from age.
+
+**Reconciliation calibration — VERIFIED_DISJOINT_SAMPLE.** `EventMatchCandidate` was empty (reconciliation
+had never run despite the flag). A read-only dry-run over graph-backed views (54 boshow × 414 district)
+blocked only 9 pairs (18,946 date-outside-tolerance, 3,314 city-mismatch, 87 insufficient-signal); the
+matcher returned 0 auto / 0 possible / 0 conflict / 9 not-matched, and manual inspection confirmed all 9
+are genuinely different events (city-name-in-title or coincidental venue tokens). No blocker false
+negative, no matcher false negative → the inventories are genuinely disjoint in the current corpus. No
+threshold weakened, nothing persisted. Documented risk: District has performer edges on only 3/414 events
+(the known sparse-artist shape), which would hurt recall *if* real overlap ever emerges — a data shape,
+not a defect.
+
+Post-repair coverage: District ART 3 / VEN 269 / ORG 212 canonical; Boshow ART 61 / VEN 38 / ORG 0.
+District/Boshow canonical event overlap remains 0 (now proven disjoint, not merely unexamined).
+
+## Roadmap after 5B.3.3 (sequencing for future runs)
+
+Close supply integrity first (this increment), then:
+
+- **Phase 5C — Social Signal Intelligence (immediate next).** 5C.1 attach public social identities to
+  canonical Artists/Venues/Organizers and build watchlist-driven acquisition (Instagram, Facebook via
+  official Meta access; Reddit behind commercial-access review). External HTTP stays in signal-service;
+  no social microservice unless scale demands. Introduce a `SocialMention` evidence model (platform,
+  post id/url, account + role, published/observed_at, raw text/hashtags/mentions/links, extracted claims,
+  confidence, provenance). No social post auto-becomes an Event. 5C.2 classify social evidence
+  (ANNOUNCEMENT/TICKETING/LINEUP_CHANGE/VENUE_CHANGE/RESCHEDULE/CANCELLATION/SELL_OUT/…) → Event candidate
+  → existing reconciliation → canonical only when governance/confidence permit. 5C.3 poster/media
+  multimodal extraction (evidence, never silent canonical truth). 5C.4 repeated social observations into
+  the Shadow Ledger.
+- **Phase 5D — Ticketing corroboration & source expansion.** BookMyShow as a *facts-only corroborative
+  ticketing* source that may never originate the Event universe (independent discovery first), subject to
+  legal/data-rights review; no circumvention, no customer data. AllEvents stays ACCESS_PENDING until an
+  authorized API/trial exists (no scraping substitute).
+- **Phase 5E — Market Movement Engine.** Deterministic movement from accumulated Shadow Ledger
+  (announcements, price/availability/sell-out/schedule/venue/lineup changes, cancellations,
+  organizer/venue/artist activity, source disagreements). No opaque universal score.
+- **Phase 5F — Demand × Supply Intelligence.** Join artist demand observations with live supply; no single
+  popularity/market-value/booking-potential score without explicit product direction.
+- **Phase 6 — First-party network / confirmation flywheel.** Organizer/Venue/Artist claim-profile, submit,
+  confirm identity/relationships, first-party evidence — raising confidence while preserving observations.
+- **Phase 7 — Intelligence productization.** Search/monitoring/alerts/comparison/reports/APIs on the
+  longitudinal multi-source asset (not a copied listing database).

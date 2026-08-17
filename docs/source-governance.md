@@ -41,3 +41,21 @@ District's deployed ranked discovery selected 100 current/future slugs spanning 
 2026-08-20 in 0.63 seconds. The tracked baseline is 434 District listings (414 canonical events, 95
 cities) and 66 Boshow listings (54 canonical events, 6 cities), with no canonical event overlap. This is
 observed contribution, not total-market coverage or a universal source score.
+
+## Reconciliation calibration + social readiness (5B.3.3, 2026-08-17)
+
+The District/Boshow zero canonical-event overlap was calibrated, not assumed. A read-only matcher dry-run
+(54 boshow × 414 district) blocked 9 candidate pairs; the matcher accepted none and all 9 were manually
+confirmed to be different events (city-name-in-title or coincidental venue tokens). No blocker or matcher
+false negative was found and no threshold was weakened, so the inventories are genuinely disjoint in the
+current tracked corpus (**VERIFIED_DISJOINT_SAMPLE**). District exposes performer edges on only 3/414
+events (the known sparse-artist shape); this would reduce recall if real overlap ever appears and is a
+data-shape risk, not a reconciliation defect.
+
+Social-signal readiness (Phase 5C, not implemented here): canonical Artist/Venue/Organizer records can
+carry additional external identities/aliases without changing canonical ownership; a future
+`SocialMention` can reference a source account, an optional resolved canonical, an Event candidate, and
+raw provenance without itself becoming canonical truth; the existing Event candidate/reconciliation
+machinery can accept a social-origin Event representation; and source descriptors can represent
+`SOCIAL_DISCOVERY`, `OFFICIAL_ACCOUNT_EVIDENCE`, and `COMMUNITY_EVIDENCE` roles. These are documented
+seams — no speculative social code was added.

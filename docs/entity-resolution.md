@@ -142,3 +142,22 @@ Skinny Mos's existing Artist/Venue collision and India Business Helpline's organ
 are governed repair candidates: preserve evidence, quarantine/re-resolve, repair projection, retain the
 audit trail. No bulk type mutation was performed. District structured `organizer` is now preserved;
 Boshow organizer remains not observed where the contract supplies none.
+
+## Governed wrong-type repair (5B.3 Increment 3)
+
+Historical wrong-type canonicals (created before the interpretation gate existed) are repaired only
+through governance, never bulk SQL retyping. The `MARK_WRONG_TYPE` correction quarantines the
+wrong-typed canonical while the corroborating correct-typed canonical stands. It is guarded: an
+established (RESOLVED) canonical of the corrected type must already exist for the same identity slug, so
+vocabulary or a lone source role can never drive a retype. The wrong canonical's candidates become
+`QUARANTINED` (suppressed from product, kept for provenance), each with a preserved `corrections` entry
+and a `WRONG_TYPE_QUARANTINE` history row; nothing is deleted. `quality_audit` excludes fully-quarantined
+canonicals from its active cross-type index, so repairing one side of a name collision clears the
+conflict off the correct-typed sibling instead of flagging it forever.
+
+The production application repaired exactly one deterministic case — `artist:skinny-mos`, a Boshow
+`name_of_artist` misfire against the operator-confirmed `venue:skinny-mos--kolkata`. Genuine multi-role
+identities (structured venue *and* organizer, e.g. DORANGOS, Sona Pottery; a self-producing comedian,
+Abijit Ganguly) are preserved, not retyped. India Business Helpline has no canonical at all — it is
+gate-caught REVIEW_REQUIRED, already not a product Artist, and was not promoted to Organizer. Ambiguous
+cross-type collisions are routed to per-mention review, not a one-click retype.

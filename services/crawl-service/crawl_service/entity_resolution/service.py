@@ -680,9 +680,15 @@ class EntityResolutionService:
                                      "sources": set(), "statuses": set()})
             a["sources"].add(c.source)
             a["statuses"].add(c.resolution_status)
-        # cross-type index: slug -> set of canonical types it exists as
+        # cross-type index: slug -> set of ACTIVE canonical types it exists as. A fully-quarantined
+        # canonical (a governed-repaired wrong type) no longer contributes its type, so repairing the
+        # wrong side of a cross-type collision clears the conflict off the correct-typed sibling too
+        # (5B.3.3) instead of leaving it flagged forever.
         cross: dict[str, set[str]] = {}
         for a in agg.values():
+            statuses = a.get("statuses") or set()
+            if statuses and statuses <= R.NON_PRODUCT_STATES:
+                continue
             cross.setdefault(_N.slug(a["name"]), set()).add(a["type"])
         known_artists = frozenset(_N.normalize_artist(a["name"]).normalized
                                   for a in agg.values() if a["type"] == "ARTIST")
@@ -886,10 +892,17 @@ class EntityResolutionService:
                 "note": "read-only classifier audit; suspects require governed review; no type mutation."}
 
     def quarantine_canonical(self, canonical_entity_id: str, *, reason: str, actor: str,
-                             now: datetime | None = None) -> dict[str, Any]:
-        """Governed suppression of a bad canonical (placeholder/junk). Sets its candidates to QUARANTINED,
-        records evidence.quarantine + a history row per candidate. NEVER deletes a row or observation."""
+                             now: datetime | None = None, correction_action: str = "MARK_PLACEHOLDER",
+                             corrected_type: str | None = None) -> dict[str, Any]:
+        """Governed suppression of a bad canonical. Sets its candidates to QUARANTINED, records
+        evidence.quarantine + a history row per candidate. NEVER deletes a row or observation.
+
+        ``correction_action`` labels the governed intent truthfully in the audit trail —
+        ``MARK_PLACEHOLDER`` for junk/placeholder canonicals, ``MARK_WRONG_TYPE`` (5B.3.3) when a
+        deterministic wrong-type interpretation is suppressed because the correct-typed canonical
+        already exists (``corrected_type`` names that established type). Evidence is always preserved."""
         now = now or datetime.now(UTC)
+        history_reason = "WRONG_TYPE_QUARANTINE" if correction_action == "MARK_WRONG_TYPE" else "QUARANTINE"
         examined = quarantined = 0
         with self._sf() as s, s.begin():
             cands = s.execute(select(EntityResolutionCandidate).where(
@@ -899,22 +912,44 @@ class EntityResolutionService:
                 prev = c.resolution_status
                 ev = dict(c.evidence or {})
                 ev["quarantine"] = {"reason": reason, "actor": actor, "at": now.isoformat(),
-                                    "previous_status": prev}
-                ev.setdefault("corrections", []).append({"action": "MARK_PLACEHOLDER", "actor": actor,
+                                    "previous_status": prev, "action": correction_action,
+                                    "corrected_type": corrected_type}
+                ev.setdefault("corrections", []).append({"action": correction_action, "actor": actor,
                                                           "reason": reason, "at": now.isoformat(),
-                                                          "previous_status": prev})
+                                                          "previous_status": prev,
+                                                          "corrected_type": corrected_type})
                 c.evidence = ev
                 c.resolution_status = R.QUARANTINED
                 c.updated_at = now
                 s.add(EntityResolutionHistory(
                     id=_uuid(), candidate_id=c.id, previous_status=prev, new_status=R.QUARANTINED,
                     previous_canonical_entity_id=c.candidate_canonical_entity_id,
-                    new_canonical_entity_id=c.candidate_canonical_entity_id, reason_code="QUARANTINE",
+                    new_canonical_entity_id=c.candidate_canonical_entity_id, reason_code=history_reason,
                     resolver_version=R.RESOLVER_VERSION, created_at=now))
                 quarantined += 1
         return {"canonical_entity_id": canonical_entity_id, "candidates_examined": examined,
                 "candidates_quarantined": quarantined, "actor": actor, "reason": reason,
+                "correction_action": correction_action, "corrected_type": corrected_type,
                 "evidence_preserved": True, "rows_deleted": 0}
+
+    def _has_corroborating_cross_type(self, wrong_canonical_id: str, corrected_type: str) -> bool:
+        """True iff an established (RESOLVED, non-quarantined) canonical of ``corrected_type`` exists for
+        the same identity slug as the wrong canonical — the corroboration a wrong-type repair requires."""
+        with self._sf() as s:
+            row = s.execute(
+                select(EntityResolutionCandidate.raw_name).where(
+                    EntityResolutionCandidate.candidate_canonical_entity_id == wrong_canonical_id).limit(1)
+            ).first()
+            if not row:
+                return False
+            target_slug = _N.slug(row[0])
+            rows = s.execute(
+                select(EntityResolutionCandidate.raw_name).where(
+                    EntityResolutionCandidate.entity_type == corrected_type,
+                    EntityResolutionCandidate.resolution_status == R.RESOLVED,
+                    EntityResolutionCandidate.candidate_canonical_entity_id.is_not(None))
+            ).all()
+        return any(_N.slug(r[0]) == target_slug for r in rows)
 
     @staticmethod
     def _is_known_canonical(session, canonical_entity_id: str, entity_type: str) -> bool:
@@ -928,6 +963,7 @@ class EntityResolutionService:
 
     def apply_correction(self, *, action: str, actor: str, reason: str | None = None,
                          canonical_entity_id: str | None = None, candidate_id: str | None = None,
+                         corrected_type: str | None = None,
                          now: datetime | None = None) -> dict[str, Any]:
         """Narrowly-scoped governed correction (no arbitrary CRUD). Records actor/time/prev/new in
         evidence.corrections + a history row."""
@@ -938,6 +974,23 @@ class EntityResolutionService:
                 raise ValueError("canonical_entity_id required for MARK_PLACEHOLDER")
             return self.quarantine_canonical(canonical_entity_id,
                                              reason=reason or "operator marked placeholder", actor=actor, now=now)
+        if action == "MARK_WRONG_TYPE":
+            # 5B.3.3 — deterministic wrong-type repair: quarantine the wrong-typed canonical while the
+            # correct-typed canonical (corrected_type) stands. Corroboration is REQUIRED — an established
+            # canonical of corrected_type must already exist for the same identity, so vocabulary or a
+            # bare source role can never drive a retype on its own. Raw evidence + history are preserved.
+            if not canonical_entity_id:
+                raise ValueError("canonical_entity_id required for MARK_WRONG_TYPE")
+            if not corrected_type:
+                raise ValueError("corrected_type required for MARK_WRONG_TYPE")
+            corrected_type = corrected_type.upper()
+            if not self._has_corroborating_cross_type(canonical_entity_id, corrected_type):
+                raise ValueError(
+                    f"no corroborating {corrected_type} canonical for {canonical_entity_id}; a wrong-type "
+                    "repair requires an established correct-typed identity (not vocabulary/role alone)")
+            return self.quarantine_canonical(
+                canonical_entity_id, reason=reason or "operator marked wrong type", actor=actor, now=now,
+                correction_action="MARK_WRONG_TYPE", corrected_type=corrected_type)
         if not candidate_id:
             raise ValueError("candidate_id required")
         with self._sf() as s, s.begin():
