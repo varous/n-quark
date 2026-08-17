@@ -1143,3 +1143,20 @@ Close supply integrity first (this increment), then:
   confirm identity/relationships, first-party evidence — raising confidence while preserving observations.
 - **Phase 7 — Intelligence productization.** Search/monitoring/alerts/comparison/reports/APIs on the
   longitudinal multi-source asset (not a copied listing database).
+
+## Data & knowledge-space doctrine (2026-08-17)
+
+New architectural direction recorded in `docs/data-doctrine.md`, governing all future acquisition
+(District, Boshow, BMS, social, future public-web sources). Core: **source data ≠ n-quark product** —
+raw fetched content is ephemeral (parse facts + provenance, then purge expressive content); the permanent
+layers are structured source observations, the canonical registry, the temporal Shadow Ledger, derived
+features, and canonical-basis embeddings. The vector DB is an analytical projection, never the system of
+record; provenance survives raw-content purge; derived inference stays distinguishable from observed
+facts; no bulk raw-source exports are exposed commercially. Acquisition legality (Axis A) stays
+independent from transformation/commercialization posture (Axis B). This guides **new** work first — no
+storage rewrite of existing District/Boshow retention until audited — and **Phase 5C is to be built to
+this doctrine from the start** (ephemeral social acquisition → claims → `SocialMention` evidence → Event
+candidate → canonical reconciliation → Shadow Ledger → derived features → canonical embeddings, never a
+raw-post warehouse). A later derived-intelligence phase adds knowledge embeddings + the n-dimensional
+market space once enough longitudinal data exists. Design smell test for every new source: *if it
+disappeared tomorrow, would n-quark retain useful independent intelligence?* — the answer must be yes.

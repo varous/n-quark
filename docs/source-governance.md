@@ -59,3 +59,15 @@ raw provenance without itself becoming canonical truth; the existing Event candi
 machinery can accept a social-origin Event representation; and source descriptors can represent
 `SOCIAL_DISCOVERY`, `OFFICIAL_ACCOUNT_EVIDENCE`, and `COMMUNITY_EVIDENCE` roles. These are documented
 seams — no speculative social code was added.
+
+## Two governance axes + transformation doctrine (2026-08-17)
+
+Source governance is now split into two independent axes (see `docs/data-doctrine.md`). **Axis A —
+acquisition posture** (public/private, auth, robots/terms, commercial-access, circumvention, permission,
+rate limits, legal-review status) governs whether/how a source may be collected. **Axis B —
+transformation/commercialization posture** (raw-content retention, fact extraction, source redistribution,
+reconciliation, derived analytics, commercial export, embedding basis, output boundary) governs what
+n-quark keeps and sells. The two are never conflated: transforming source evidence into derived
+intelligence does not cure a prohibited acquisition. Descriptor extensions (`raw_content_retention`,
+`derived_embedding_basis`, `commercial_raw_export`, `provenance_retention`, …) are future guidance — add
+them only where the existing descriptor cannot already express the concept.
