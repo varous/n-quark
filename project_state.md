@@ -1239,4 +1239,12 @@ build/lint green; ruff clean on changed files (E4/E7/E9/F). Migration `009` upgr
 verified on SQLite and the partial-unique invariant functionally enforced (a second current row →
 IntegrityError; multiple non-current versions allowed). **Out of scope, untouched:** 5C.2 classification,
 Event candidate / canonical Event creation, Shadow-Ledger transitions from social, OCR, embeddings,
-Qdrant, Meta creds, Reddit, broad crawling. Next: Phase 5C.2 — needs go-ahead.
+Qdrant, Meta creds, Reddit, broad crawling.
+
+**Live proof (separate from local):** crawl-service deployed (machine v15, healthy) — startup log shows
+`Running upgrade 008 -> 009, immutable social evidence versions (Phase 5C.1.1)` then Uvicorn on
+`0.0.0.0:8001`, health passing; on-machine `/v1/internal/social/coverage` 200 `social_enabled:false` and
+the **new** `/v1/internal/social/mentions/history` 200 (`versions:0`, correct shape — collection still
+OFF). admin-console redeployed (`nquark-admin`, both machines healthy): SPA 200, `/admin/v1/social/overview`
+and the new `/admin/v1/social/mentions/history` both **401** (gated + registered, not 404). Committed
+`e76b1f1`; pushed, `main == origin/main` (0/0). Next: Phase 5C.2 — needs go-ahead.
