@@ -87,6 +87,23 @@ def test_social_identities_and_mentions(local):
     assert rm.status_code == 200 and rm.json()["items"][0]["processing_status"] == "UNPROCESSED"
 
 
+HISTORY = {"platform": "INSTAGRAM", "platform_post_id": "P1", "versions": 2, "revised": True,
+           "content_hashes": ["h1", "h2"],
+           "items": [{"version": 1, "is_current": False, "extracted_claims": {"venue": "A"}},
+                     {"version": 2, "is_current": True, "extracted_claims": {"venue": "B"}}]}
+
+
+def test_social_mention_history_exposes_versions(local):
+    app.dependency_overrides[get_social_service] = lambda: _social({
+        "crawl:/v1/internal/social/mentions/history": HISTORY})
+    r = local.get("/admin/v1/social/mentions/history",
+                  params={"platform": "INSTAGRAM", "platform_post_id": "P1"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["versions"] == 2 and body["revised"] is True
+    assert [i["extracted_claims"]["venue"] for i in body["items"]] == ["A", "B"]
+
+
 def test_social_reads_require_auth(monkeypatch):
     # admin API disabled → not reachable (mirrors the rest of the read-only BFF surface)
     monkeypatch.setattr(settings, "admin_api_enabled", False)

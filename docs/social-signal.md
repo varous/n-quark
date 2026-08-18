@@ -34,23 +34,64 @@ canonical entity (registry-owned)
   state (`collection_state`, `next_eligible_at`, `last_collected_at`, `last_access_state`,
   `consecutive_failures`). Multiple accounts per canonical and per platform are supported; associations
   are auditable (`provenance.history`). Canonical ownership is unchanged — this only associates.
-- **`social_mention`** (migration `008`): durable, provenance-bearing evidence — `platform`,
-  `source_account`, `platform_post_id`, `post_url`, `published_at`/`observed_at`, resolved
+- **`social_mention`** (migration `008`, versioned in `009`): durable, provenance-bearing evidence —
+  `platform`, `source_account`, `platform_post_id`, `post_url`, `published_at`/`observed_at`, resolved
   `canonical_entity_id`, `linked_canonical_entity_ids`, `extracted_claims`, `evidence_role`,
-  `confidence`, `parser_version`, `content_hash`, `provenance`. Idempotent on `(platform,
-  platform_post_id)`; a changed `content_hash` refreshes claims and appends a revision (append-only).
-  `processing_status`/`claim_type` are the **5C.2 seam** (see below). **There is deliberately no raw
-  caption/media column.**
+  `confidence`, `parser_version`, `content_hash`, `provenance`. **Append-only and versioned** — see the
+  immutability section below. `processing_status`/`claim_type` are the **5C.2 seam** (see below).
+  **There is deliberately no raw caption/media column.**
 - **`SocialAcquisitionService`** (crawl): `link_identity`/`set_active` (governed), `watchlist`
-  (eligibility), `run_once` (bounded pass: eligible identities → signal `/social/collect` → idempotent
-  mention ingest → identity scheduling update), plus `coverage`/`identities`/`mentions` reads. A run
-  never touches `TrackedEvent` or canonical events.
+  (eligibility), `run_once` (bounded pass: eligible identities → signal `/social/collect` → append-only
+  versioned mention ingest → identity scheduling update), plus `coverage`/`identities`/`mentions` reads
+  and `mention_history` (the full immutable version lineage of one logical post). A run never touches
+  `TrackedEvent` or canonical events.
 - **signal-service `adapters/social.py` + `/v1/signals/social/*`**: governed source descriptors
   (instagram/facebook/reddit), honest per-platform `access_state`, and `collect()` returning claims +
   provenance (raw caption consumed transiently, never returned). Includes a bounded official
   `_MetaGraphClient` seam for the PRODUCTION path.
 - **gateway** `/admin/v1/social/{overview,identities,mentions}` (read-only) + a compact admin **Social**
   coverage view. No raw-source bulk export endpoint.
+
+## Immutable evidence versions — a changed post never erases the earlier state (5C.1.1)
+
+A **logical social post** is `(platform, platform_post_id)`; each materially different *observed content
+state* is a distinct, **immutable** version of `social_mention`. This mirrors the repo's existing
+temporal pattern (`event_field_resolution`: `version` + `is_current`, prior rows preserved, never
+overwritten) and the Shadow-Ledger principle that an observed source state is never overwritten by a
+later one.
+
+```
+logical source post  ≠  one mutable evidence row
+
+each materially changed observed source state
+   → a new immutable evidence version
+```
+
+- **First observation** → version 1, `is_current = true`, `previous_mention_id = null`.
+- **Recapture, same content hash** → idempotent, no new row (no mutation). When the provider omits a
+  hash, idempotency falls back to a deterministic comparison of the extracted claims, so correctness
+  does not assume a hash is present.
+- **Recapture, changed content hash** → **INSERT** a new version (`version = prev + 1`,
+  `previous_mention_id` links to the prior row); the prior row's evidence fields are **never rewritten**
+  — only its `is_current` pointer flips to false and `superseded_at` is stamped.
+
+So a *Venue A* observed on the 10th survives a *Venue B* edit on the 12th and remains independently
+queryable as version 1. Schema (additive migration `009`): the old unique index on
+`(platform, platform_post_id)` is replaced by a **partial** unique index on that tuple `WHERE is_current`
+(exactly one current version per logical post — the integrity invariant and the idempotent upsert
+target) plus a `(platform, platform_post_id, version)` lineage index.
+
+### Evidence vs derived interpretation — the boundary
+
+| | fields | mutability |
+|---|---|---|
+| **Immutable observed evidence** | platform, post id, source account, published/observed_at, canonical association *at observation time*, extracted claims, content hash, parser version, confidence, provenance, version | never rewritten |
+| **Mutable workflow / pointer metadata** | `is_current`, `superseded_at` (version pointer); `processing_status`, `claim_type` (the **5C.2 derived-interpretation seam**, unset here) | may change without altering what was observed |
+
+5C.2 classification is *derived interpretation of* evidence — it must never overwrite the observed
+source state. `claim_type` on the mention is workflow metadata only; the preferred 5C.2 design carries
+the classifier verdict in a separate, independently versionable interpretation layer keyed to the
+specific evidence version it interpreted, so re-classification never mutates evidence.
 
 ## Acquisition behaviour by platform
 
@@ -77,21 +118,30 @@ individual-user PII are collected; no login-wall/CAPTCHA circumvention.
 
 ## The 5C.2 seam (not implemented here)
 
-`SocialMention.processing_status` defaults to `UNPROCESSED` and `claim_type` is unset. 5C.2 will add the
-deterministic classifier that reads unprocessed mentions and assigns a `claim_type`
+`SocialMention.processing_status` defaults to `UNPROCESSED` and `claim_type` is unset — both are mutable
+**workflow** metadata, not observed evidence (see the boundary table above). 5C.2 will add the
+deterministic classifier that reads unprocessed evidence versions and derives a claim type
 (ANNOUNCEMENT / TICKETING / LINEUP_CHANGE / VENUE_CHANGE / RESCHEDULE / CANCELLATION / SELL_OUT /
 ADDITIONAL_SHOW / PROMOTION), then promotes strong evidence to an Event candidate through the **existing**
-reconciliation machinery — governed, never auto-creating canonical Events. In 5C.1 a SocialMention stays
-evidence.
+reconciliation machinery — governed, never auto-creating canonical Events. Because a changed post now
+produces a new immutable version, 5C.2 can classify per version and can *later distinguish* `new post` /
+`same post unchanged` / `same post edited` / `post observed again` from the version lineage without any
+of that inference happening here. The preferred 5C.2 design keeps the classifier verdict in a separate,
+independently versionable interpretation record keyed to the evidence version it interpreted, rather
+than treating `claim_type` as source truth. In 5C.1/5C.1.1 a SocialMention stays evidence.
 
 ## Validation
 
 Fixture/mock-validated (no Meta credentials in this environment): signal adapter access-state + mock
 extraction + ephemeral-retention tests; crawl identity association / multi-account / idempotent ingest /
 provenance / no-expressive-content / no-Event-creation / watchlist scheduling / access-pending /
-transient-failure tests; gateway read-model tests. Migration `008` upgrade/downgrade/upgrade verified.
-**Meta/Facebook/Reddit acquisition is NOT operational** — it is the governed seam awaiting authorized
-access.
+transient-failure tests; **immutable-versioning tests** (first version; same-hash idempotency;
+changed-hash → second immutable version with the first unchanged; hash-absent claims fallback; lineage
+recoverable; multiple successive edits preserve all versions with exactly one current; no raw content on
+any version; history read); gateway read-model + history tests. Migrations `008` **and `009`**
+upgrade/downgrade/upgrade verified, and the `009` partial-unique invariant functionally enforced (one
+current version per post). **Meta/Facebook/Reddit acquisition is NOT operational** — it is the governed
+seam awaiting authorized access.
 
 ## Configuration (all OFF by default)
 

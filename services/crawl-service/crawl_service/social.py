@@ -12,6 +12,7 @@ ownership stays with the registry/resolution layer; this module only associates 
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -191,53 +192,70 @@ class SocialAcquisitionService:
             resp.raise_for_status()
             return resp.json()
 
-    # ---- persistence -----------------------------------------------------------------------------
+    # ---- persistence (append-only, immutable versions) -------------------------------------------
     def _ingest_mentions(self, identity_id: str, mentions: list[dict], now: datetime) -> dict[str, int]:
-        new = updated = unchanged = 0
+        """Persist collected mentions as IMMUTABLE evidence versions.
+
+        A logical post is ``(platform, platform_post_id)``. First observation → version 1. A later
+        observation with a **changed** ``content_hash`` INSERTS a new version and flips the prior
+        version's ``is_current`` pointer (its evidence fields are never rewritten). A recapture with the
+        same hash is idempotent. So an earlier observed state is never erased by a later one.
+
+        Returns counters (keys kept stable for the run summary): ``new`` = new logical posts (version 1),
+        ``updated`` = new immutable versions appended for changed posts, ``unchanged`` = idempotent
+        recaptures.
+        """
+        new = versioned = unchanged = 0
         with self._sf() as s, s.begin():
             for m in mentions:
                 platform = str(m.get("platform", "")).upper()
                 post_id = str(m.get("platform_post_id", ""))
                 if not platform or not post_id:
                     continue
-                # NEVER persist raw expressive content: we take only the extracted claims, hash and
-                # provenance the adapter returns. A caption/media field is not read here even if present.
-                claims = m.get("extracted_claims") or {}
                 content_hash = m.get("content_hash")
-                existing = s.execute(select(SocialMention).where(
+                current = s.execute(select(SocialMention).where(
                     SocialMention.platform == platform,
-                    SocialMention.platform_post_id == post_id)).scalar_one_or_none()
-                if existing is None:
-                    ident = s.get(SocialIdentity, identity_id)
-                    s.add(SocialMention(
-                        id=_uuid(), platform=platform, source_account=str(m.get("source_account", "")),
-                        social_identity_id=identity_id, platform_post_id=post_id,
-                        post_url=m.get("post_url"), published_at=_parse_dt(m.get("published_at")),
-                        observed_at=_parse_dt(m.get("observed_at")) or now,
-                        canonical_entity_id=ident.canonical_entity_id if ident else None,
-                        canonical_entity_type=ident.canonical_entity_type if ident else None,
-                        linked_canonical_entity_ids=list(m.get("linked_handles") or []),
-                        extracted_claims=claims,
-                        evidence_role=str(m.get("evidence_role") or "SOCIAL_DISCOVERY"),
-                        confidence=float(m.get("confidence") or 0.5),
-                        parser_version=str(m.get("parser_version") or "social-1"),
-                        content_hash=content_hash, provenance=m.get("provenance") or {},
-                        processing_status="UNPROCESSED", created_at=now, updated_at=now))
-                    new += 1
-                elif content_hash and existing.content_hash != content_hash:
-                    # change detected via hash — refresh claims + provenance, keep append-only history
-                    prov = dict(existing.provenance or {})
-                    prov.setdefault("revisions", []).append(
-                        {"prev_hash": existing.content_hash, "at": now.isoformat()})
-                    existing.extracted_claims = claims
-                    existing.content_hash = content_hash
-                    existing.confidence = float(m.get("confidence") or existing.confidence)
-                    existing.provenance = {**(m.get("provenance") or {}), **prov}
-                    existing.updated_at = now
-                    updated += 1
-                else:
+                    SocialMention.platform_post_id == post_id,
+                    SocialMention.is_current.is_(True))).scalar_one_or_none()
+                # Idempotent: an unchanged recapture of the current version is a no-op (no mutation).
+                if current is not None and _same_state(current, content_hash, m.get("extracted_claims")):
                     unchanged += 1
-        return {"new": new, "updated": updated, "unchanged": unchanged}
+                    continue
+                # New logical post, or a materially changed one → append a new immutable version.
+                prior_id = current.id if current is not None else None
+                next_version = (current.version + 1) if current is not None else 1
+                self._append_version(s, identity_id, m, platform, post_id, content_hash,
+                                     version=next_version, previous_id=prior_id, now=now)
+                if current is not None:
+                    # only the pointer/bookkeeping change on the prior row — evidence stays immutable.
+                    current.is_current = False
+                    current.superseded_at = now
+                    current.updated_at = now
+                    versioned += 1
+                else:
+                    new += 1
+        return {"new": new, "updated": versioned, "unchanged": unchanged}
+
+    def _append_version(self, s, identity_id: str, m: dict, platform: str, post_id: str,
+                        content_hash, *, version: int, previous_id: str | None, now: datetime) -> None:
+        # NEVER persist raw expressive content: only the extracted claims, hash and provenance the
+        # adapter returns. A caption/media field is not read here even if present.
+        ident = s.get(SocialIdentity, identity_id)
+        s.add(SocialMention(
+            id=_uuid(), platform=platform, source_account=str(m.get("source_account", "")),
+            social_identity_id=identity_id, platform_post_id=post_id,
+            post_url=m.get("post_url"), published_at=_parse_dt(m.get("published_at")),
+            observed_at=_parse_dt(m.get("observed_at")) or now,
+            canonical_entity_id=ident.canonical_entity_id if ident else None,
+            canonical_entity_type=ident.canonical_entity_type if ident else None,
+            linked_canonical_entity_ids=list(m.get("linked_handles") or []),
+            extracted_claims=m.get("extracted_claims") or {},
+            evidence_role=str(m.get("evidence_role") or "SOCIAL_DISCOVERY"),
+            confidence=float(m.get("confidence") or 0.5),
+            parser_version=str(m.get("parser_version") or "social-1"),
+            content_hash=content_hash, provenance=m.get("provenance") or {},
+            version=version, is_current=True, previous_mention_id=previous_id,
+            processing_status="UNPROCESSED", created_at=now, updated_at=now))
 
     def _record_success(self, identity_id: str, access_state: str, observed: bool, now: datetime) -> None:
         with self._sf() as s, s.begin():
@@ -292,9 +310,14 @@ class SocialAcquisitionService:
         return {"count": len(rows), "items": [self._identity_summary(r) for r in rows]}
 
     def mentions(self, *, canonical_entity_id: str | None = None, platform: str | None = None,
-                 processing_status: str | None = None, limit: int = 100) -> dict[str, Any]:
+                 processing_status: str | None = None, current_only: bool = True,
+                 limit: int = 100) -> dict[str, Any]:
+        """List social evidence. By default only the CURRENT version of each logical post (compact);
+        ``current_only=False`` returns every immutable version. Claims + provenance only — no raw content."""
         with self._sf() as s:
             stmt = select(SocialMention)
+            if current_only:
+                stmt = stmt.where(SocialMention.is_current.is_(True))
             if canonical_entity_id:
                 stmt = stmt.where(SocialMention.canonical_entity_id == canonical_entity_id)
             if platform:
@@ -302,18 +325,56 @@ class SocialAcquisitionService:
             if processing_status:
                 stmt = stmt.where(SocialMention.processing_status == processing_status)
             rows = s.execute(stmt.order_by(SocialMention.observed_at.desc()).limit(limit)).scalars().all()
-        return {"count": len(rows), "items": [self._mention_summary(r) for r in rows]}
+        return {"count": len(rows), "current_only": current_only,
+                "items": [self._mention_summary(r) for r in rows]}
+
+    def mention_history(self, *, platform: str, platform_post_id: str) -> dict[str, Any]:
+        """Full immutable version lineage of one logical post — for operator inspection of source change.
+
+        Exposes, per version: version number, observed time, content hash, extracted claims, confidence,
+        previous-version lineage and current-flag. No raw expressive source content is exposed."""
+        plat = (platform or "").upper()
+        with self._sf() as s:
+            rows = s.execute(select(SocialMention).where(
+                SocialMention.platform == plat,
+                SocialMention.platform_post_id == platform_post_id)
+                .order_by(SocialMention.version.asc())).scalars().all()
+        if not rows:
+            return {"platform": plat, "platform_post_id": platform_post_id, "versions": 0, "items": []}
+        observed = [_iso(_aware(r.observed_at)) for r in rows]
+        current = next((r for r in rows if r.is_current), rows[-1])
+        return {
+            "platform": plat, "platform_post_id": platform_post_id,
+            "post_url": current.post_url, "source_account": current.source_account,
+            "canonical_entity_id": current.canonical_entity_id,
+            "canonical_entity_type": current.canonical_entity_type,
+            "versions": len(rows), "revised": len(rows) > 1,
+            "first_observed_at": observed[0], "latest_observed_at": _iso(_aware(current.observed_at)),
+            "content_hashes": [r.content_hash for r in rows],
+            "items": [{
+                "id": r.id, "version": r.version, "is_current": r.is_current,
+                "observed_at": _iso(_aware(r.observed_at)),
+                "superseded_at": _iso(_aware(r.superseded_at)),
+                "content_hash": r.content_hash, "extracted_claims": r.extracted_claims,
+                "confidence": r.confidence, "parser_version": r.parser_version,
+                "previous_mention_id": r.previous_mention_id,
+                "processing_status": r.processing_status, "claim_type": r.claim_type,
+            } for r in rows],
+            "note": "Immutable observed versions of one social post — each materially changed source "
+                    "state is preserved; earlier observations are never erased. No raw content.",
+        }
 
     def coverage(self) -> dict[str, Any]:
         with self._sf() as s:
             ids = s.execute(select(SocialIdentity)).scalars().all()
             mentions = s.execute(select(SocialMention)).scalars().all()
+        def _mp() -> dict[str, Any]:
+            return {"identities": 0, "active": 0, "eligible": 0, "access_pending": 0, "deferred": 0,
+                    "canonical_entities": set(), "last_access_state": None, "last_collected_at": None,
+                    "mentions": 0, "versions": 0, "revised": 0, "unprocessed_mentions": 0}
         by_platform: dict[str, dict[str, Any]] = {}
         for r in ids:
-            p = by_platform.setdefault(r.platform, {
-                "identities": 0, "active": 0, "eligible": 0, "access_pending": 0, "deferred": 0,
-                "canonical_entities": set(), "last_access_state": None, "last_collected_at": None,
-                "mentions": 0, "unprocessed_mentions": 0})
+            p = by_platform.setdefault(r.platform, _mp())
             p["identities"] += 1
             p["active"] += int(r.active)
             if r.active and r.collection_state == "ELIGIBLE":
@@ -329,23 +390,30 @@ class SocialAcquisitionService:
             if lc and (p["last_collected_at"] is None or lc > p["last_collected_at"]):
                 p["last_collected_at"] = lc
         for m in mentions:
-            p = by_platform.setdefault(m.platform, {
-                "identities": 0, "active": 0, "eligible": 0, "access_pending": 0, "deferred": 0,
-                "canonical_entities": set(), "last_access_state": None, "last_collected_at": None,
-                "mentions": 0, "unprocessed_mentions": 0})
-            p["mentions"] += 1
-            p["unprocessed_mentions"] += int(m.processing_status == "UNPROCESSED")
+            p = by_platform.setdefault(m.platform, _mp())
+            p["versions"] += 1                                    # every immutable evidence version
+            if m.is_current:
+                p["mentions"] += 1                                # logical posts = current versions
+                if m.version > 1:
+                    p["revised"] += 1                             # post changed since first observed
+                p["unprocessed_mentions"] += int(m.processing_status == "UNPROCESSED")
         for p in by_platform.values():
             p["canonical_entities"] = len(p["canonical_entities"])
+        current = [m for m in mentions if m.is_current]
         return {
             "social_enabled": self._cfg.social_enabled,
             "platforms_enabled": sorted(self._cfg.social_platform_set),
-            "total_identities": len(ids), "total_mentions": len(mentions),
-            "unresolved_mentions": sum(1 for m in mentions if not m.canonical_entity_id),
+            "total_identities": len(ids),
+            "total_mentions": len(current),                       # logical posts (current versions)
+            "total_mention_versions": len(mentions),              # all immutable evidence versions
+            "revised_posts": sum(1 for m in current if m.version > 1),
+            "unresolved_mentions": sum(1 for m in current if not m.canonical_entity_id),
             "by_platform": by_platform,
-            "note": "Social evidence coverage. Mentions are evidence only — no SocialMention creates a "
-                    "canonical Event. Access state is the honest acquisition posture; raw post content is "
-                    "not retained (claims + provenance only).",
+            "note": "Social evidence coverage. A logical post is versioned append-only: each changed "
+                    "source state is a new immutable version, and 'total_mentions' counts current "
+                    "versions. Mentions are evidence only — no SocialMention creates a canonical Event. "
+                    "Access state is the honest acquisition posture; raw post content is not retained "
+                    "(claims + provenance only).",
         }
 
     @staticmethod
@@ -371,7 +439,23 @@ class SocialAcquisitionService:
                 "extracted_claims": r.extracted_claims, "evidence_role": r.evidence_role,
                 "confidence": r.confidence, "parser_version": r.parser_version,
                 "content_hash": r.content_hash, "processing_status": r.processing_status,
-                "claim_type": r.claim_type, "provenance": r.provenance}
+                "claim_type": r.claim_type, "provenance": r.provenance,
+                "version": r.version, "is_current": r.is_current,
+                "previous_mention_id": r.previous_mention_id,
+                "superseded_at": _iso(_aware(r.superseded_at))}
+
+
+def _same_state(current: SocialMention, incoming_hash, incoming_claims) -> bool:
+    """Is an incoming capture the SAME observed state as the current version (→ idempotent no-op)?
+
+    Prefer the provider content hash. When a hash is absent on either side (robustness — we never assume
+    it is present), fall back to a deterministic comparison of the extracted claims so a genuine change
+    still produces a new immutable version and an identical recapture stays idempotent.
+    """
+    if current.content_hash and incoming_hash:
+        return current.content_hash == incoming_hash
+    return json.dumps(current.extracted_claims or {}, sort_keys=True, default=str) == \
+        json.dumps(incoming_claims or {}, sort_keys=True, default=str)
 
 
 def _parse_dt(value) -> datetime | None:

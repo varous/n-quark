@@ -301,7 +301,7 @@ export function Social() {
     <Section title="Social evidence" subtitle="Watchlist-driven social signal collection. Mentions are evidence only — no social post becomes a canonical Event, and raw post content is never retained (claims + provenance only).">
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card><div className="text-2xl font-semibold text-slate-100">{String(cov.total_identities ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Social identities</div></Card>
-        <Card><div className="text-2xl font-semibold text-slate-100">{String(cov.total_mentions ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Mentions (evidence)</div></Card>
+        <Card><div className="text-2xl font-semibold text-slate-100">{String(cov.total_mentions ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Posts (current evidence)</div>{Number(cov.total_mention_versions ?? 0) > Number(cov.total_mentions ?? 0) && <div className="mt-0.5 text-[11px] text-slate-600">{String(cov.total_mention_versions)} immutable versions · {String(cov.revised_posts ?? 0)} revised</div>}</Card>
         <Card><div className="text-2xl font-semibold text-amber-300">{String(cov.unresolved_mentions ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Unresolved evidence</div></Card>
         <Card><div className="text-2xl font-semibold text-slate-100">{String(wl.eligible_now ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Eligible now</div></Card>
       </div>
@@ -320,7 +320,8 @@ export function Social() {
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
                     <span className="font-medium text-slate-100">{plat}</span>
                     <span className="text-xs text-slate-500">identities {String(row.identities ?? 0)}</span>
-                    <span className="text-xs text-slate-500">mentions {String(row.mentions ?? 0)}</span>
+                    <span className="text-xs text-slate-500">posts {String(row.mentions ?? 0)}</span>
+                    {Number(row.revised ?? 0) > 0 && <span className="text-xs text-slate-500">revised {String(row.revised)}</span>}
                     <span className="text-xs text-slate-500">entities {String(row.canonical_entities ?? 0)}</span>
                     {Number(row.access_pending ?? 0) > 0 && <Badge label={`access-pending ${String(row.access_pending)}`} />}
                     {row.last_access_state ? <span className="text-xs text-slate-400">access: {String(row.last_access_state)}</span> : null}

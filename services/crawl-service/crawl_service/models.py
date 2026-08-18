@@ -13,7 +13,7 @@ Shadow Ledger remains the authority for commercial-state history.
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -374,17 +374,34 @@ class SocialIdentity(Base):
 
 
 class SocialMention(Base):
-    """Durable, provenance-bearing social evidence (Phase 5C.1).
+    """One immutable observed version of a social post — provenance-bearing evidence (Phase 5C.1 / 5C.1.1).
 
     A social post/mention is EVIDENCE, never canonical truth, and never auto-creates a canonical Event.
     Per docs/data-doctrine.md the raw caption/media is ephemeral — this row stores only the extracted
-    factual *claims*, a content hash for change detection, and provenance. There is deliberately NO raw
-    caption/media column. Idempotent on ``(platform, platform_post_id)``. ``processing_status`` +
-    ``claim_type`` are the clean seam for the 5C.2 deterministic classifier (unset here)."""
+    factual *claims*, a content hash, and provenance. There is deliberately NO raw caption/media column.
+
+    **Immutability (5C.1.1):** a *logical* social post is ``(platform, platform_post_id)``; each materially
+    different observed content state is a distinct, immutable version of this table — mirroring
+    ``EventFieldResolution`` (``version`` + ``is_current``, prior rows preserved, never overwritten).
+    A later observation of the SAME post with a changed ``content_hash`` INSERTS a new version
+    (``previous_mention_id`` links back); the prior version's evidence fields are never rewritten — only
+    its ``is_current`` pointer flips and ``superseded_at`` is stamped. A recapture with the same hash is
+    idempotent (no new row). So a Venue A observation on the 10th survives a Venue B edit on the 12th and
+    stays independently queryable.
+
+    **Evidence vs interpretation boundary:** everything except the pointer/workflow columns is IMMUTABLE
+    observed evidence. Mutable, non-evidence workflow metadata = ``is_current``/``superseded_at``
+    (version pointer) and ``processing_status``/``claim_type`` (the 5C.2 derived-interpretation seam,
+    unset here). Changing workflow metadata never alters what was observed."""
 
     __tablename__ = "social_mention"
     __table_args__ = (
-        Index("uq_social_mention", "platform", "platform_post_id", unique=True),
+        # Exactly one CURRENT version per logical post; prior versions stay as immutable rows
+        # (is_current=False). Partial-unique = idempotent upsert target + the integrity invariant.
+        Index("uq_social_mention_current", "platform", "platform_post_id", unique=True,
+              sqlite_where=text("is_current"), postgresql_where=text("is_current")),
+        # Full version lineage / history reads for one logical post.
+        Index("ix_social_mention_post", "platform", "platform_post_id", "version"),
         Index("ix_social_mention_canonical", "canonical_entity_id"),
         Index("ix_social_mention_processing", "processing_status"),
     )
@@ -406,7 +423,12 @@ class SocialMention(Base):
     parser_version: Mapped[str] = mapped_column(String(48), nullable=False)
     content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
     provenance: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)
-    processing_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNPROCESSED")  # 5C.2 seam
+    # --- version lineage (immutable evidence versioning; see class docstring) ---
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)      # mutable pointer
+    previous_mention_id: Mapped[str | None] = mapped_column(String(64), nullable=True)   # lineage → prior version
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # when it stopped being current
+    processing_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNPROCESSED")  # 5C.2 workflow seam
     claim_type: Mapped[str | None] = mapped_column(String(32), nullable=True)                          # 5C.2 seam (unset in 5C.1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

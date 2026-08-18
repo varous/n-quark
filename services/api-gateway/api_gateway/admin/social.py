@@ -39,11 +39,17 @@ class SocialAdminService:
         return r.data if r.ok else {"available": False, "count": 0, "items": []}
 
     async def mentions(self, *, canonical_entity_id: str | None = None, platform: str | None = None,
-                       limit: int = 100) -> dict[str, Any]:
-        params: dict[str, Any] = {"limit": limit}
+                       current_only: bool = True, limit: int = 100) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit, "current_only": current_only}
         if canonical_entity_id:
             params["canonical_entity_id"] = canonical_entity_id
         if platform:
             params["platform"] = platform
         r = await self.gw.get(CRAWL, "/v1/internal/social/mentions", params=params)
         return r.data if r.ok else {"available": False, "count": 0, "items": []}
+
+    async def mention_history(self, *, platform: str, platform_post_id: str) -> dict[str, Any]:
+        """Immutable version lineage of one logical social post (claims + provenance; no raw content)."""
+        params = {"platform": platform, "platform_post_id": platform_post_id}
+        r = await self.gw.get(CRAWL, "/v1/internal/social/mentions/history", params=params)
+        return r.data if r.ok else {"available": False, "versions": 0, "items": []}

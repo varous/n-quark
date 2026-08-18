@@ -111,9 +111,42 @@ async def test_collect_persists_evidence_idempotently(session_factory):
     assert m.extracted_claims.get("event_name") == "Arijit Singh Live"
 
 
+# 3 + 4 — a changed source post creates a SECOND immutable version; the first is never overwritten
 @pytest.mark.asyncio
-async def test_mention_change_detected_by_hash(session_factory):
-    state = {"hash": "hash-1", "claims": {"event_name": "Arijit Singh Live"}}
+async def test_changed_post_creates_immutable_second_version(session_factory):
+    state = {"hash": "hash-1", "claims": {"event_name": "Arijit Singh Live", "venue": "Venue A"}}
+    async def factory(*, platform, account, evidence_role):
+        return _collect_result(platform, account,
+                               mentions=[_mention(chash=state["hash"], claims=state["claims"])])
+    svc = _svc(session_factory, factory=factory)
+    svc.link_identity(canonical_entity_id="artist:a", canonical_entity_type="ARTIST",
+                      platform="instagram", handle="arijitsingh", now=NOW)
+    r1 = await svc.run_once(now=NOW)
+    assert r1["mentions_new"] == 1
+    # the same post is later edited: Venue A → Venue B
+    state["hash"] = "hash-2"
+    state["claims"] = {"event_name": "Arijit Singh Live", "venue": "Venue B"}
+    r2 = await svc.run_once(now=LATER)
+    assert r2["mentions_updated"] == 1 and r2["mentions_new"] == 0
+    with session_factory() as s:
+        rows = s.execute(select(SocialMention).order_by(SocialMention.version)).scalars().all()
+    # two immutable versions of ONE logical post
+    assert len(rows) == 2
+    v1, v2 = rows
+    # first version's observed state is UNCHANGED — Venue A still independently queryable
+    assert v1.version == 1 and v1.extracted_claims.get("venue") == "Venue A"
+    assert v1.content_hash == "hash-1" and v1.is_current is False and v1.superseded_at is not None
+    # second version is the current one with the new state
+    assert v2.version == 2 and v2.extracted_claims.get("venue") == "Venue B"
+    assert v2.content_hash == "hash-2" and v2.is_current is True and v2.superseded_at is None
+    # lineage links v2 → v1
+    assert v2.previous_mention_id == v1.id and v1.previous_mention_id is None
+
+
+# 5 — lineage / order between versions is recoverable via the history read
+@pytest.mark.asyncio
+async def test_version_lineage_is_recoverable(session_factory):
+    state = {"hash": "hash-1", "claims": {"venue": "Venue A"}}
     async def factory(*, platform, account, evidence_role):
         return _collect_result(platform, account,
                                mentions=[_mention(chash=state["hash"], claims=state["claims"])])
@@ -121,14 +154,78 @@ async def test_mention_change_detected_by_hash(session_factory):
     svc.link_identity(canonical_entity_id="artist:a", canonical_entity_type="ARTIST",
                       platform="instagram", handle="arijitsingh", now=NOW)
     await svc.run_once(now=NOW)
-    state["hash"] = "hash-2"
-    state["claims"] = {"event_name": "Arijit Singh Live", "sold_out": True}
-    r = await svc.run_once(now=LATER)
-    assert r["mentions_updated"] == 1
+    state["hash"], state["claims"] = "hash-2", {"venue": "Venue B"}
+    await svc.run_once(now=LATER)
+    hist = svc.mention_history(platform="INSTAGRAM", platform_post_id="IG_1")
+    assert hist["versions"] == 2 and hist["revised"] is True
+    assert [i["version"] for i in hist["items"]] == [1, 2]
+    assert hist["content_hashes"] == ["hash-1", "hash-2"]
+    assert [i["extracted_claims"]["venue"] for i in hist["items"]] == ["Venue A", "Venue B"]
+    assert hist["items"][1]["previous_mention_id"] == hist["items"][0]["id"]
+    assert hist["items"][0]["is_current"] is False and hist["items"][1]["is_current"] is True
+
+
+# 6 — multiple successive edits preserve every version
+@pytest.mark.asyncio
+async def test_multiple_edits_preserve_all_versions(session_factory):
+    state = {"hash": "h1", "claims": {"venue": "A"}}
+    async def factory(*, platform, account, evidence_role):
+        return _collect_result(platform, account,
+                               mentions=[_mention(chash=state["hash"], claims=state["claims"])])
+    svc = _svc(session_factory, factory=factory)
+    svc.link_identity(canonical_entity_id="artist:a", canonical_entity_type="ARTIST",
+                      platform="instagram", handle="arijitsingh", now=NOW)
+    venues = ["A", "B", "C", "D"]
+    for i, v in enumerate(venues):
+        state["hash"], state["claims"] = f"h{i+1}", {"venue": v}
+        await svc.run_once(now=NOW + timedelta(hours=13 * (i + 1)))
     with session_factory() as s:
-        m = s.execute(select(SocialMention)).scalar_one()
-    assert m.extracted_claims.get("sold_out") is True
-    assert any("prev_hash" in rev for rev in m.provenance.get("revisions", []))
+        rows = s.execute(select(SocialMention).order_by(SocialMention.version)).scalars().all()
+    assert [r.extracted_claims["venue"] for r in rows] == venues           # all four preserved in order
+    assert [r.is_current for r in rows] == [False, False, False, True]     # only the last is current
+    assert sum(r.is_current for r in rows) == 1                            # exactly one current version
+
+
+# 7 (versions) — raw expressive content is never persisted on ANY version
+@pytest.mark.asyncio
+async def test_no_raw_content_on_any_version(session_factory):
+    state = {"hash": "h1", "claims": {"venue": "A"}}
+    async def factory(*, platform, account, evidence_role):
+        return _collect_result(platform, account,
+                               mentions=[_mention(chash=state["hash"], claims=state["claims"])])
+    svc = _svc(session_factory, factory=factory)
+    svc.link_identity(canonical_entity_id="artist:a", canonical_entity_type="ARTIST",
+                      platform="instagram", handle="arijitsingh", now=NOW)
+    await svc.run_once(now=NOW)
+    state["hash"], state["claims"] = "h2", {"venue": "B"}
+    await svc.run_once(now=LATER)
+    with session_factory() as s:
+        rows = s.execute(select(SocialMention)).scalars().all()
+    for m in rows:
+        blob = str(m.extracted_claims) + str(m.provenance) + str(m.__dict__)
+        assert CAPTION not in blob
+        assert not hasattr(m, "caption") and not hasattr(m, "raw_text")
+
+
+# robustness — with NO provider content hash, idempotency falls back to the claims themselves
+@pytest.mark.asyncio
+async def test_versioning_without_content_hash_uses_claims(session_factory):
+    state = {"claims": {"venue": "A"}}
+    async def factory(*, platform, account, evidence_role):
+        return _collect_result(platform, account,
+                               mentions=[_mention(chash=None, claims=state["claims"])])
+    svc = _svc(session_factory, factory=factory)
+    svc.link_identity(canonical_entity_id="artist:a", canonical_entity_type="ARTIST",
+                      platform="instagram", handle="arijitsingh", now=NOW)
+    await svc.run_once(now=NOW)
+    r_same = await svc.run_once(now=LATER)                       # identical claims, no hash → idempotent
+    assert r_same["mentions_unchanged"] == 1 and r_same["mentions_new"] == 0
+    state["claims"] = {"venue": "B"}                             # changed claims, no hash → new version
+    r_changed = await svc.run_once(now=NOW + timedelta(hours=26))
+    assert r_changed["mentions_updated"] == 1
+    with session_factory() as s:
+        rows = s.execute(select(SocialMention).order_by(SocialMention.version)).scalars().all()
+    assert [r.extracted_claims["venue"] for r in rows] == ["A", "B"]
 
 
 # 6 — a mention never becomes a canonical Event

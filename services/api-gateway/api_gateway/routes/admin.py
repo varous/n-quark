@@ -438,10 +438,19 @@ async def social_identities(canonical_entity_id: str | None = Query(default=None
 @router.get("/social/mentions")
 async def social_mentions(canonical_entity_id: str | None = Query(default=None),
                           platform: str | None = Query(default=None),
+                          current_only: bool = Query(default=True),
                           limit: int = Query(default=100, ge=1, le=500),
                           _: auth.Principal = Depends(auth.require_viewer),
                           svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
-    return await svc.mentions(canonical_entity_id=canonical_entity_id, platform=platform, limit=limit)
+    return await svc.mentions(canonical_entity_id=canonical_entity_id, platform=platform,
+                              current_only=current_only, limit=limit)
+
+
+@router.get("/social/mentions/history")
+async def social_mention_history(platform: str = Query(...), platform_post_id: str = Query(...),
+                                 _: auth.Principal = Depends(auth.require_viewer),
+                                 svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
+    return await svc.mention_history(platform=platform, platform_post_id=platform_post_id)
 
 
 @router.get("/demand/artists/{artist_id:path}/movement")

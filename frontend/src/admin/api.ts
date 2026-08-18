@@ -241,6 +241,8 @@ export type SocialOverview = {
     platforms_enabled?: string[];
     total_identities?: number;
     total_mentions?: number;
+    total_mention_versions?: number;
+    revised_posts?: number;
     unresolved_mentions?: number;
     by_platform?: Record<string, Record<string, unknown>>;
     note?: string;

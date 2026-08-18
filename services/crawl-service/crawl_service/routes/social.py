@@ -53,10 +53,17 @@ def identities(canonical_entity_id: str | None = Query(default=None),
 def mentions(canonical_entity_id: str | None = Query(default=None),
              platform: str | None = Query(default=None),
              processing_status: str | None = Query(default=None),
+             current_only: bool = Query(default=True, description="current version per post only"),
              limit: int = Query(default=100, ge=1, le=500),
              svc: SocialAcquisitionService = Depends(get_social_service)) -> dict[str, Any]:
     return svc.mentions(canonical_entity_id=canonical_entity_id, platform=platform,
-                        processing_status=processing_status, limit=limit)
+                        processing_status=processing_status, current_only=current_only, limit=limit)
+
+
+@router.get("/mentions/history", summary="Immutable version lineage of one logical social post")
+def mention_history(platform: str = Query(...), platform_post_id: str = Query(...),
+                    svc: SocialAcquisitionService = Depends(get_social_service)) -> dict[str, Any]:
+    return svc.mention_history(platform=platform, platform_post_id=platform_post_id)
 
 
 @router.get("/coverage", summary="Social acquisition coverage + diagnostics")

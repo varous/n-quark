@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-14 (Phase 5B.3 increment 1 — Event lifecycle foundation). Branch `main`. Repo: github.com/varous/n-quark._
+_Last updated: 2026-08-18 (Phase 5C.1.1 — social evidence immutability/versioning fix, appended below §Phase 5C.1). Branch `main`. Repo: github.com/varous/n-quark. Newest state is appended at the BOTTOM of this file (§Phase 5C.1.1); the sections below are historical, most-recent-first only within the pre-5B.3 backlog._
 
 ## Phase 5B.3 increment 1 — Event lifecycle foundation (2026-08-14, LOCAL / NOT DEPLOYED)
 
@@ -1189,6 +1189,54 @@ signal-service, ingests mentions idempotently, and represents absent authorized 
 export). A deterministic mock makes the spine demonstrable without credentials.
 
 Validation is fixture/mock only (no Meta credentials): signal 118, crawl 260, gateway 147, frontend
-build/lint green; migration `008` upgrade/downgrade/upgrade verified. **Meta/Facebook/Reddit acquisition
-is not operational** — it is the governed seam awaiting authorized access. Next: Phase 5C.2 (deterministic
-social-evidence classification → Event candidate via existing reconciliation; no auto-created Events).
+build/lint green; migration `008` upgrade/downgrade/upgrade verified. **Live proof (separate from local):**
+crawl deployed with migration `008` applied (`social_identity`, `social_mention` present),
+`/social/coverage` 200 `social_enabled:false`; signal `/social/descriptors` live all DISABLED; admin SPA
+200, `/admin/v1/social/overview` gated 401. **Meta/Facebook/Reddit acquisition is not operational** — it
+is the governed seam awaiting authorized access. Committed `554f840` (crawl + signal + admin deployed;
+pushed, `main == origin/main`, divergence 0/0). Next: Phase 5C.2 (deterministic social-evidence
+classification → Event candidate via existing reconciliation; no auto-created Events) — needs go-ahead.
+
+## Phase 5C.1.1 — social evidence immutability / versioning fix (2026-08-18)
+
+Closed one integrity flaw in the 5C.1 foundation **before** starting 5C.2: a changed source post must
+never overwrite the earlier observed state. Previously `_ingest_mentions` **mutated** the existing
+`SocialMention` when the same `(platform, platform_post_id)` returned a different `content_hash`
+(overwriting `extracted_claims`/`content_hash`/`confidence`/`provenance`, keeping only the old hash in a
+revisions array), and migration `008` made `(platform, platform_post_id)` unique — so a *Venue A* → edit
+→ *Venue B* lost the Venue A observation. This violated the Shadow-Ledger invariant that an observed
+source state is never overwritten by a later one.
+
+**Fix (smallest architecture consistent with the repo's temporal convention — mirrors
+`EventFieldResolution`'s `version` + `is_current`):** a logical post is `(platform, platform_post_id)`;
+each materially different observed content state is a distinct **immutable** `social_mention` row. New
+columns `version` / `is_current` / `previous_mention_id` / `superseded_at`. Ingest now finds the CURRENT
+version; **same content hash → idempotent no-op** (hash-absent falls back to a deterministic
+`json.dumps(sort_keys=True)` comparison of the extracted claims, so correctness doesn't assume a hash);
+**changed → INSERT** a new version (`version+1`, `previous_mention_id` → prior row) and flip only the
+prior row's `is_current`/`superseded_at` pointer — its evidence fields are never rewritten. All evidence
+fields plus the canonical association *at observation time* are captured per version. Still **no raw
+caption/media** persisted.
+
+**Additive migration `009`** (after `008`, `008` not rewritten): adds the 4 columns; replaces the
+`(platform, platform_post_id)` unique index with a **partial** unique index `WHERE is_current`
+(cross-dialect via `sqlite_where`/`postgresql_where`) so one post has many immutable versions but a
+duplicate capture stays idempotent and exactly one current version is enforced; plus a
+`(platform, platform_post_id, version)` lineage index. Existing rows remain valid (default `version=1`,
+`is_current=true`); correctness does not assume the table is empty.
+
+**Evidence vs derived interpretation** kept clean: immutable evidence = claims/hash/provenance/
+association/version; mutable workflow metadata = `is_current`/`superseded_at` (pointer) and
+`processing_status`/`claim_type` (the 5C.2 seam, still unset). Source-change semantics (new / unchanged /
+edited / observed-again) are recoverable from the version lineage **without** any venue/lineup/
+cancellation inference here. Reads: `mention_history` (version count, first/latest observed, content
+hashes, claims per version, lineage — **no raw content**), `mentions?current_only=`, and coverage now
+reports `total_mention_versions` / `revised_posts`; compact admin card shows "Posts (current evidence)"
+with an immutable-versions / revised sub-line. No bulk export added.
+
+Validation (fixture/mock; no Meta creds): crawl **264**, gateway **148**, signal **118**, frontend
+build/lint green; ruff clean on changed files (E4/E7/E9/F). Migration `009` upgrade/downgrade/upgrade
+verified on SQLite and the partial-unique invariant functionally enforced (a second current row →
+IntegrityError; multiple non-current versions allowed). **Out of scope, untouched:** 5C.2 classification,
+Event candidate / canonical Event creation, Shadow-Ledger transitions from social, OCR, embeddings,
+Qdrant, Meta creds, Reddit, broad crawling. Next: Phase 5C.2 — needs go-ahead.
