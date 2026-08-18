@@ -84,3 +84,14 @@ honest `access_state` (DISABLED / CREDENTIAL_UNAVAILABLE / ACCESS_PENDING / MOCK
 `provenance_retention=REQUIRED`) — Axis B. There is no scraping fallback: absent authorized access is
 reported, never worked around, and no login-wall/CAPTCHA circumvention or individual-user (follower/
 commenter) collection is performed.
+
+### Interpretation layer (5C.2, 2026-08-18)
+
+5C.2 adds **no new source, acquisition path, or external call** — Axis A is unchanged. It adds only a
+**derived** interpretation layer (`SocialInterpretation`) computed deterministically from the
+already-governed, already-bounded `SocialMention` evidence: no raw caption/media is read or persisted at
+this layer, interpretations carry only bounded factual/semantic fields plus reason codes, and a
+classifier verdict **never** creates or mutates a canonical Event (event-bearing evidence enters only the
+existing governed reconciliation candidate surface). Axis B posture is therefore preserved end-to-end:
+`raw_content_retention=EPHEMERAL`, `expressive_content_retention=false`, `derived_embedding_basis=CANONICAL`,
+`provenance_retention=REQUIRED` all continue to hold for the interpretation layer.

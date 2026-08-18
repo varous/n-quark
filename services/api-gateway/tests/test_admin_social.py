@@ -56,15 +56,42 @@ MENTIONS = {"count": 1, "items": [{"id": "m1", "platform": "INSTAGRAM", "platfor
                                    "extracted_claims": {"event_name": "X"}, "processing_status": "UNPROCESSED"}]}
 
 
+INTERP_COV = {"total_interpretation_versions": 3, "current_interpretations": 2, "event_bearing": 1,
+              "unprocessed_evidence": 0, "by_candidate_status": {"MATCHED_EXISTING": 1, "NONE": 1},
+              "classifier_version": "social-classifier-1"}
+INTERPRETATIONS = {"count": 1, "interpretations": [
+    {"id": "si1", "social_mention_id": "m1", "evidence_version": 1,
+     "claim_types": ["ANNOUNCEMENT", "TICKETING"], "primary_claim_type": "TICKETING",
+     "event_bearing": True, "event_candidate_status": "MATCHED_EXISTING",
+     "matched_canonical_event_id": "event:x", "confidence": 0.9,
+     "reason_codes": ["MULTI_LABEL", "EVENT_IDENTITY_RESOLVED"]}]}
+
+
 def test_social_overview_healthy(local):
     app.dependency_overrides[get_social_service] = lambda: _social({
         "crawl:/v1/internal/social/coverage": COVERAGE,
-        "crawl:/v1/internal/social/watchlist": WATCHLIST})
+        "crawl:/v1/internal/social/watchlist": WATCHLIST,
+        "crawl:/v1/internal/social/interpretations/coverage": INTERP_COV})
     r = local.get("/admin/v1/social/overview")
     assert r.status_code == 200
     body = r.json()
     assert body["available"] and body["coverage"]["total_identities"] == 2
     assert body["watchlist"]["eligible_now"] == 1
+    assert body["interpretation"]["event_bearing"] == 1
+    assert body["interpretation"]["classifier_version"] == "social-classifier-1"
+
+
+def test_social_interpretations_read(local):
+    app.dependency_overrides[get_social_service] = lambda: _social({
+        "crawl:/v1/internal/social/interpretations": INTERPRETATIONS})
+    r = local.get("/admin/v1/social/interpretations", params={"event_bearing": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    it = body["interpretations"][0]
+    assert it["primary_claim_type"] == "TICKETING" and it["event_candidate_status"] == "MATCHED_EXISTING"
+    # diagnostic surface only — no raw content anywhere
+    assert "caption" not in str(body)
 
 
 def test_social_overview_degrades_when_crawl_down(local):

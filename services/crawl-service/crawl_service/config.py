@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     social_max_identities_per_run: int = 25           # bounded, canonical/watchlist driven
     social_backoff_seconds: int = 3600                # per-identity backoff after a transient failure
     social_access_pending_retry_seconds: int = 86400  # honest deferral when access is unavailable
+    # 5C.2 — derived interpretation of social evidence (deterministic; never mutates evidence)
+    social_interpretation_enabled: bool = False       # gate the interpretation processing run
+    social_interpretation_max_per_run: int = 50       # bounded deterministic loop over unprocessed evidence
+    social_interpretation_project_candidates: bool = True  # project event-bearing evidence into reconciliation
 
     @property
     def social_platform_set(self) -> frozenset[str]:

@@ -429,6 +429,72 @@ class SocialMention(Base):
     previous_mention_id: Mapped[str | None] = mapped_column(String(64), nullable=True)   # lineage → prior version
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # when it stopped being current
     processing_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNPROCESSED")  # 5C.2 workflow seam
-    claim_type: Mapped[str | None] = mapped_column(String(32), nullable=True)                          # 5C.2 seam (unset in 5C.1)
+    claim_type: Mapped[str | None] = mapped_column(String(32), nullable=True)                          # deprecated 5C.2 seam (superseded by SocialInterpretation)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SocialInterpretation(Base):
+    """A DERIVED, versioned deterministic interpretation of ONE specific ``SocialMention`` version (5C.2).
+
+    This is the layer that turns immutable observed evidence into a multi-label classification and an
+    event-bearing decision — WITHOUT ever mutating the evidence. It is deliberately a separate model, not
+    a column on ``SocialMention``: the classifier verdict is *interpretation of* evidence, never source
+    truth. It mirrors the repo's temporal convention (``version`` + ``is_current``, prior rows preserved,
+    never overwritten — cf. ``EventFieldResolution`` / ``SocialMention``).
+
+    Idempotency / versioning: an interpretation is keyed to a specific evidence version
+    (``social_mention_id`` = the exact immutable row) and a ``classifier_version``. Re-running the SAME
+    classifier version over the SAME evidence is a no-op (same derived result). A changed classifier
+    version (or changed deterministic logic) INSERTS a new interpretation version
+    (``previous_interpretation_id`` links back); the prior interpretation is never rewritten — only its
+    ``is_current`` pointer flips. The interpreted evidence row stays immutable throughout.
+
+    Epistemic boundary: an interpretation is a hypothesis about what the post *says*. It NEVER creates or
+    mutates a canonical Event. If event-bearing, it may be projected into the EXISTING reconciliation
+    machinery as an ``event_match_candidate`` (governed, reviewable) — recorded here via
+    ``event_candidate_status`` / ``matched_canonical_event_id`` / ``event_match_candidate_id`` — but the
+    canonical registry is never touched by this path."""
+
+    __tablename__ = "social_interpretation"
+    __table_args__ = (
+        # Exactly one CURRENT interpretation per interpreted evidence version; prior versions stay as
+        # immutable rows (is_current=False). Partial-unique = idempotent target + integrity invariant.
+        Index("uq_social_interpretation_current", "social_mention_id", unique=True,
+              sqlite_where=text("is_current"), postgresql_where=text("is_current")),
+        Index("ix_social_interpretation_lineage", "social_mention_id", "version"),
+        Index("ix_social_interpretation_event_bearing", "event_bearing"),
+        Index("ix_social_interpretation_candidate_status", "event_candidate_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # --- what evidence this interprets (the EXACT immutable SocialMention version) ---
+    social_mention_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    platform: Mapped[str] = mapped_column(String(24), nullable=False)
+    platform_post_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)   # evidence hash interpreted
+    canonical_entity_id: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    # --- the derived interpretation ---
+    classifier_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    claim_types: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)   # multi-label
+    primary_claim_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    interpreted_fields: Mapped[dict] = mapped_column(_json_type(), nullable=False, default=dict)  # normalized claims
+    supporting_evidence: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    contradicting_evidence: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reason_codes: Mapped[list] = mapped_column(_json_type(), nullable=False, default=list)
+    # --- event-bearing decision + projection outcome ---
+    event_bearing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    event_candidate_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NONE")
+    matched_canonical_event_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    event_match_candidate_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    interpretation_status: Mapped[str] = mapped_column(String(24), nullable=False, default="INTERPRETED")
+    # --- version lineage (mirrors SocialMention) ---
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)          # mutable pointer
+    previous_interpretation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # lineage → prior version
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

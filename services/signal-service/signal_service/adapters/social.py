@@ -19,13 +19,14 @@ is demonstrable without credentials; mock mentions are clearly marked ``mock: tr
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from signal_service.config import settings
 
-PARSER_VERSION = "social-claim-extractor-1"
+PARSER_VERSION = "social-claim-extractor-2"
 
 # Governed evidence roles (kept aligned with source-governance).
 SOCIAL_DISCOVERY = "SOCIAL_DISCOVERY"
@@ -145,27 +146,95 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# Deterministic multi-signal keyword taxonomy (5C.2 enriched extraction). Bounded, no-AI. Each key maps
+# a *surface signal* to the lowercase substrings that fire it. These are cues over the transient caption
+# only — they seed the authoritative multi-label classification that happens downstream in crawl-service.
+# We persist bounded factual/semantic features here (before the caption is dropped); never the caption.
+_SIGNAL_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "announcement": ("announce", "announced", "announcing", "presenting", "live in concert",
+                     "in concert", "coming to", "get ready", "introducing", "world tour"),
+    "ticketing": ("tickets", "ticket", "on sale", "on-sale", "book now", "booking", "buy now",
+                  "grab your", "tickets live", "link in bio", "register now"),
+    "sold_out": ("sold out", "sold-out", "houseful", "house full", "no tickets left"),
+    "cancellation": ("cancelled", "canceled", "call off", "called off", "will not take place",
+                     "we regret to cancel"),
+    "postponement": ("postponed", "postpone", "postponement"),
+    "reschedule": ("rescheduled", "reschedule", "new date", "moved to", "now on", "new day"),
+    "venue_change": ("venue change", "venue changed", "new venue", "now at", "moved venue",
+                     "relocated", "shifted to", "change of venue"),
+    "lineup_change": ("lineup", "line-up", "line up", "joins the", "added to the lineup",
+                      "will not perform", "replaces", "dropped out", "joining the bill"),
+    "additional_show": ("second show", "additional show", "extra show", "new show added",
+                        "another show", "show added", "adding a show", "by popular demand"),
+    "promotion": ("discount", "promo", "% off", "percent off", "early bird", "use code", "coupon",
+                  "offer", "flat "),
+}
+_NEGATION_TOKENS = ("not ", "no longer", "will not", "won't", "cannot", "can't", "isn't", "won ' t")
+_UNCERTAINTY_TOKENS = ("maybe", "might", "rumou", "possibly", "tbc", "tba", "coming soon",
+                       "stay tuned", "to be announced", "to be confirmed")
+
+
+def _clip(value: str, limit: int = 80) -> str:
+    """Bound and tidy an extracted factual span — never a place to smuggle the whole caption in."""
+    return " ".join(str(value).split()).strip(" .,:;—-")[:limit]
+
+
+def _detect_from_to(caption: str) -> dict[str, str] | None:
+    """Bounded old→new extraction: a single '... from X to Y ...' span, each side clipped. Returns
+    clipped factual values only, never the whole caption."""
+    m = re.search(r"\bfrom\s+(.+?)\s+to\s+(.+?)(?:[.!\n]|$)", caption, flags=re.IGNORECASE)
+    if not m:
+        return None
+    frm, to = _clip(m.group(1)), _clip(m.group(2))
+    return {"from": frm, "to": to} if frm and to else None
+
+
 def _extract_claims(raw_caption: str, *, hints: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic (no-AI) claim extraction from transient caption text. Returns a bounded factual
-    dict — never the caption itself. 5C.1 keeps this intentionally minimal; 5C.2 will add the full
-    deterministic classifier. The raw caption is consumed here and never returned/persisted."""
+    """Deterministic (no-AI) enriched claim extraction from transient caption text (5C.2).
+
+    Returns a bounded factual/semantic dict — event identity fields, a ``signals`` map of fired surface
+    cues, bounded ``changes`` (old/new venue/date), and ``negation``/``uncertainty`` flags — computed
+    *before* the caption is dropped. It never returns the caption, arbitrary excerpts, or media; every
+    free-text span it keeps is clipped. Structured hints (from the authorized provider payload) take
+    precedence over caption cues for identity fields; caption cues seed the downstream classifier."""
     lowered = raw_caption.lower()
     claims: dict[str, Any] = {}
-    if hints.get("event_name"):
-        claims["event_name"] = hints["event_name"]
-    if hints.get("event_date"):
-        claims["event_date"] = hints["event_date"]
-    if hints.get("city"):
-        claims["city"] = hints["city"]
-    if hints.get("venue_name"):
-        claims["venue_name"] = hints["venue_name"]
-    if hints.get("ticket_url"):
-        claims["ticket_url"] = hints["ticket_url"]
-    # a couple of deterministic surface signals (5C.2 will replace with the real classifier)
-    signals = [w for w in ("tickets", "live", "tour", "sold out", "cancelled", "postponed", "lineup")
-               if w in lowered]
+
+    # --- event identity fields (structured, from the provider hints) ---
+    for key in ("event_name", "event_date", "event_time", "city", "venue_name", "ticket_url",
+                "organizer"):
+        if hints.get(key):
+            claims[key] = hints[key]
+    if hints.get("artists"):
+        claims["artists"] = [str(a) for a in hints["artists"]]
+
+    # --- bounded surface signals (multi-label seeds; the classifier decides authoritatively) ---
+    signals = {name: True for name, kws in _SIGNAL_KEYWORDS.items()
+               if any(kw in lowered for kw in kws)}
     if signals:
-        claims["surface_signals"] = signals
+        claims["signals"] = signals
+        # legacy flat list kept for backward compatibility with any 5C.1 reader
+        claims["surface_signals"] = sorted(signals.keys())
+
+    # --- bounded old→new changes (venue / date); hints win, caption is the fallback ---
+    changes: dict[str, Any] = {}
+    if hints.get("venue_from") and hints.get("venue_to"):
+        changes["venue"] = {"from": _clip(hints["venue_from"]), "to": _clip(hints["venue_to"])}
+    elif signals.get("venue_change"):
+        vc = _detect_from_to(raw_caption)
+        if vc:
+            changes["venue"] = vc
+    if hints.get("date_from") and hints.get("date_to"):
+        changes["date"] = {"from": _clip(hints["date_from"]), "to": _clip(hints["date_to"])}
+    if changes:
+        claims["changes"] = changes
+
+    # --- negation / uncertainty flags (help the classifier prefer UNKNOWN over a forced label) ---
+    if any(t in lowered for t in _NEGATION_TOKENS):
+        claims["negation"] = True
+    if any(t in lowered for t in _UNCERTAINTY_TOKENS) or "?" in raw_caption:
+        claims["uncertainty"] = True
+
     return claims
 
 
@@ -173,16 +242,60 @@ def _extract_claims(raw_caption: str, *, hints: dict[str, Any]) -> dict[str, Any
 # Real, well-known public entities so the spine is demonstrable; captions here are TRANSIENT inputs to
 # extraction and are never persisted (only the derived claims + hash survive).
 _MOCK_POSTS: dict[str, list[dict[str, Any]]] = {
+    # (1) announcement + (2) ticket-on-sale in one post → multi-class
     "arijitsingh": [
         {"post_id": "IG_ARIJIT_1", "published_at": "2026-09-01T10:00:00+00:00",
          "caption": "Kolkata! Live in concert 20 Sep 2026 at Aquatica. Tickets live now.",
          "hints": {"event_name": "Arijit Singh Live", "event_date": "2026-09-20", "city": "Kolkata",
-                   "venue_name": "Aquatica", "ticket_url": "https://example.org/t/arijit"}},
+                   "venue_name": "Aquatica", "ticket_url": "https://example.org/t/arijit",
+                   "artists": ["Arijit Singh"]}},
     ],
     "bacardinh7": [
         {"post_id": "IG_VENUE_1", "published_at": "2026-08-20T09:00:00+00:00",
          "caption": "This weekend at our rooftop — indie night lineup announced.",
          "hints": {"event_name": "Indie Night", "city": "Mumbai"}},
+    ],
+    # A demonstrative venue account carrying the remaining §11 scenarios. Captions are TRANSIENT inputs
+    # (never persisted); only the derived bounded claims + hash survive.
+    "nquark_demo_venue": [
+        # (3) sold-out (stays a source claim, never verified sell-through)
+        {"post_id": "IG_DEMO_SOLDOUT", "published_at": "2026-09-05T08:00:00+00:00",
+         "caption": "SOLD OUT! Divine Live at MMRDA Grounds, 12 Oct 2026 — thank you Mumbai!",
+         "hints": {"event_name": "Divine Live", "event_date": "2026-10-12", "city": "Mumbai",
+                   "venue_name": "MMRDA Grounds", "artists": ["Divine"]}},
+        # (4) cancellation
+        {"post_id": "IG_DEMO_CANCEL", "published_at": "2026-09-06T08:00:00+00:00",
+         "caption": "The 18 Oct 2026 show at Phoenix Marketcity has been cancelled. Refunds issued.",
+         "hints": {"event_name": "Autumn Sessions", "event_date": "2026-10-18", "city": "Bengaluru",
+                   "venue_name": "Phoenix Marketcity"}},
+        # (5) reschedule (new date)
+        {"post_id": "IG_DEMO_RESCHED", "published_at": "2026-09-07T08:00:00+00:00",
+         "caption": "Rescheduled: new date 25 Nov 2026. Existing tickets remain valid.",
+         "hints": {"event_name": "Winter Live", "event_date": "2026-11-25", "city": "Delhi",
+                   "venue_name": "JLN Stadium", "date_from": "2026-11-10", "date_to": "2026-11-25"}},
+        # (6) venue change (old→new)
+        {"post_id": "IG_DEMO_VENUE", "published_at": "2026-09-08T08:00:00+00:00",
+         "caption": "Change of venue: moved from Gymkhana Grounds to NSCI Dome. Same date, same time.",
+         "hints": {"event_name": "City Beats", "event_date": "2026-10-30", "city": "Mumbai",
+                   "venue_name": "NSCI Dome", "venue_from": "Gymkhana Grounds", "venue_to": "NSCI Dome"}},
+        # (7) lineup change / addition
+        {"post_id": "IG_DEMO_LINEUP", "published_at": "2026-09-09T08:00:00+00:00",
+         "caption": "Lineup update: Prateek Kuhad joins the bill for our 5 Dec 2026 festival.",
+         "hints": {"event_name": "December Fest", "event_date": "2026-12-05", "city": "Pune",
+                   "venue_name": "Amphitheatre", "artists": ["Prateek Kuhad"]}},
+        # (8) additional show
+        {"post_id": "IG_DEMO_ADDSHOW", "published_at": "2026-09-10T08:00:00+00:00",
+         "caption": "By popular demand — second show added on 21 Dec 2026. Tickets on sale now.",
+         "hints": {"event_name": "Year End Live", "event_date": "2026-12-21", "city": "Hyderabad",
+                   "venue_name": "GMR Arena", "ticket_url": "https://example.org/t/yearend"}},
+        # (9) promotion / discount
+        {"post_id": "IG_DEMO_PROMO", "published_at": "2026-09-11T08:00:00+00:00",
+         "caption": "Early bird offer! Use code EARLY20 for 20% off all passes this week.",
+         "hints": {}},
+        # (10) ambiguous / non-event (generic teaser, no resolvable event identity)
+        {"post_id": "IG_DEMO_AMBIG", "published_at": "2026-09-12T08:00:00+00:00",
+         "caption": "Something big is coming soon... stay tuned. #comingsoon",
+         "hints": {}},
     ],
 }
 

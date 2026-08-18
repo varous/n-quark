@@ -50,6 +50,19 @@ class ReconciliationService:
         return EventView.from_graph(source=te.source, source_record_id=te.source_record_id,
                                     node=node, neighbors=neighbors)
 
+    async def source_event_views(self, sources: list[str]) -> list[EventView]:
+        """Public: normalized EventViews for all tracked events across the given reconciliation sources.
+        Reused by 5C.2 social projection so social evidence is matched against the SAME event views the
+        reconciler uses — never a parallel source of truth. Graph failures degrade to a partial set."""
+        views: list[EventView] = []
+        for src in sources:
+            for te in self._tracked(src):
+                try:
+                    views.append(await self._view(te))
+                except Exception:  # noqa: BLE001 — one bad node must not break projection
+                    continue
+        return views
+
     def _tracked(self, source: str) -> list[TrackedEvent]:
         with self._sf() as s:
             return s.execute(

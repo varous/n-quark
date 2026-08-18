@@ -22,11 +22,35 @@ class SocialAdminService:
     async def overview(self) -> dict[str, Any]:
         cov = await self.gw.get(CRAWL, "/v1/internal/social/coverage")
         watch = await self.gw.get(CRAWL, "/v1/internal/social/watchlist", params={"limit": 50})
+        interp = await self.gw.get(CRAWL, "/v1/internal/social/interpretations/coverage")
         return {
             "available": cov.available,
             "coverage": cov.data if cov.ok else None,
             "watchlist": watch.data if watch.ok else None,
+            "interpretation": interp.data if interp.ok else None,  # 5C.2 derived-interpretation coverage
         }
+
+    async def interpretations(self, *, event_bearing: bool | None = None,
+                              event_candidate_status: str | None = None,
+                              canonical_entity_id: str | None = None, current_only: bool = True,
+                              limit: int = 100) -> dict[str, Any]:
+        """Derived interpretations — claim types, event-bearing, candidate/reconciliation outcome,
+        reason codes. Diagnostic surface (no raw captions), not a moderation CMS."""
+        params: dict[str, Any] = {"limit": limit, "current_only": current_only}
+        if event_bearing is not None:
+            params["event_bearing"] = event_bearing
+        if event_candidate_status:
+            params["event_candidate_status"] = event_candidate_status
+        if canonical_entity_id:
+            params["canonical_entity_id"] = canonical_entity_id
+        r = await self.gw.get(CRAWL, "/v1/internal/social/interpretations", params=params)
+        return r.data if r.ok else {"available": False, "count": 0, "interpretations": []}
+
+    async def interpretation_history(self, *, social_mention_id: str) -> dict[str, Any]:
+        """Interpretation version lineage for one evidence version (immutable, oldest→newest)."""
+        r = await self.gw.get(CRAWL, "/v1/internal/social/interpretations/history",
+                              params={"social_mention_id": social_mention_id})
+        return r.data if r.ok else {"available": False, "count": 0, "versions": []}
 
     async def identities(self, *, canonical_entity_id: str | None = None,
                          platform: str | None = None, limit: int = 200) -> dict[str, Any]:

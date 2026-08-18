@@ -10,8 +10,9 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from crawl_service.config import settings
-from crawl_service.deps import get_social_service
+from crawl_service.deps import get_social_interpretation_service, get_social_service
 from crawl_service.social import SocialAcquisitionService
+from crawl_service.social_interpretation.service import SocialInterpretationService
 
 router = APIRouter(prefix="/v1/internal/social", tags=["social (internal)"])
 
@@ -83,3 +84,42 @@ async def run(trace: bool = Query(default=False), limit: int | None = Query(defa
     if not settings.social_enabled:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="social acquisition disabled")
     return await svc.run_once(worker_id="api", limit=limit, trace=trace)
+
+
+# --- 5C.2 derived interpretation (never mutates evidence, never creates a canonical Event) ---
+
+@router.get("/interpretations", summary="Derived social interpretations (claims + event-bearing outcome)")
+def interpretations(event_bearing: bool | None = Query(default=None),
+                    event_candidate_status: str | None = Query(default=None),
+                    canonical_entity_id: str | None = Query(default=None),
+                    current_only: bool = Query(default=True),
+                    limit: int = Query(default=100, ge=1, le=500),
+                    svc: SocialInterpretationService = Depends(get_social_interpretation_service),
+                    ) -> dict[str, Any]:
+    return svc.interpretations(event_bearing=event_bearing,
+                               event_candidate_status=event_candidate_status,
+                               canonical_entity_id=canonical_entity_id,
+                               current_only=current_only, limit=limit)
+
+
+@router.get("/interpretations/history", summary="Interpretation version lineage for one evidence version")
+def interpretation_history(social_mention_id: str = Query(...),
+                           svc: SocialInterpretationService = Depends(
+                               get_social_interpretation_service)) -> dict[str, Any]:
+    return svc.interpretation_history(social_mention_id)
+
+
+@router.get("/interpretations/coverage", summary="Interpretation coverage + candidate-status diagnostics")
+def interpretation_coverage(svc: SocialInterpretationService = Depends(
+        get_social_interpretation_service)) -> dict[str, Any]:
+    return svc.coverage()
+
+
+@router.post("/interpretations/run", summary="Run one bounded deterministic interpretation pass")
+async def interpretation_run(trace: bool = Query(default=False), limit: int | None = Query(default=None),
+                             svc: SocialInterpretationService = Depends(
+                                 get_social_interpretation_service)) -> dict[str, Any]:
+    if not settings.social_interpretation_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="social interpretation disabled")
+    return await svc.run_once(limit=limit, trace=trace)

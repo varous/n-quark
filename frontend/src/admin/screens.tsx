@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
+import type { SocialOverview } from "./api";
 import { Badge, Card, Empty, ErrorBox, ExportButtons, Link, Loading, Section, Stat, Table, Unavailable, useAsync, useHashQuery, fmt } from "./ui";
 
 export function Sources() {
@@ -287,6 +288,61 @@ export function Health() {
   );
 }
 
+// Derived social interpretation (Phase 5C.2) — read-only diagnostic surface. Interpretation is derived
+// from immutable evidence and never mutates it; event-bearing evidence flows into the EXISTING
+// reconciliation surface and never directly creates a canonical Event. No raw captions here.
+function SocialInterpretationPanel({ interp }: { interp?: SocialOverview["interpretation"] }) {
+  const { data } = useAsync(() => api.socialInterpretations({ current_only: true, limit: 25 }), []);
+  const rows = data?.interpretations ?? [];
+  const byStatus = interp?.by_candidate_status ?? {};
+  const claimTone: Record<string, string> = {
+    CANCELLATION: "text-rose-300", RESCHEDULE: "text-amber-300", VENUE_CHANGE: "text-amber-300",
+    LINEUP_CHANGE: "text-sky-300", ADDITIONAL_SHOW: "text-emerald-300", SELL_OUT_CLAIM: "text-fuchsia-300",
+    TICKETING: "text-emerald-300", ANNOUNCEMENT: "text-slate-200", PROMOTION: "text-slate-400",
+  };
+  return (
+    <div className="mt-6 border-t border-slate-800 pt-5">
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-slate-200">Derived interpretation</h3>
+        <span className="text-xs text-slate-500">
+          classifier {interp?.classifier_version ?? "—"} · deterministic, evidence never mutated
+        </span>
+      </div>
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Card><div className="text-2xl font-semibold text-slate-100">{String(interp?.current_interpretations ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Interpretations</div>{Number(interp?.total_interpretation_versions ?? 0) > Number(interp?.current_interpretations ?? 0) && <div className="mt-0.5 text-[11px] text-slate-600">{String(interp?.total_interpretation_versions)} versions</div>}</Card>
+        <Card><div className="text-2xl font-semibold text-emerald-300">{String(interp?.event_bearing ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Event-bearing</div></Card>
+        <Card><div className="text-2xl font-semibold text-amber-300">{String(interp?.unprocessed_evidence ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Unprocessed evidence</div></Card>
+        <Card><div className="text-2xl font-semibold text-sky-300">{String(byStatus.MATCHED_EXISTING ?? 0)}</div><div className="mt-1 text-xs text-slate-500">Matched existing event</div></Card>
+      </div>
+      {rows.length === 0
+        ? <Empty message="No interpretations yet. Run the interpretation pass over unprocessed social evidence." />
+        : (
+          <div className="space-y-2">
+            {rows.map((r) => (
+              <Card key={r.id}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+                  {(r.claim_types.length ? r.claim_types : ["UNKNOWN"]).map((c) => (
+                    <span key={c} className={`text-xs font-medium ${claimTone[c] ?? "text-slate-300"}`}>{c}</span>
+                  ))}
+                  {r.event_bearing
+                    ? <Badge label="event-bearing" />
+                    : <span className="text-xs text-slate-500">evidence only</span>}
+                  <span className="text-xs text-slate-500">{r.event_candidate_status}</span>
+                  {r.matched_canonical_event_id && <span className="text-xs text-sky-300">→ {r.matched_canonical_event_id}</span>}
+                  <span className="text-xs text-slate-600">conf {r.confidence.toFixed(2)}</span>
+                  <span className="ml-auto text-[11px] text-slate-600">evidence v{r.evidence_version}</span>
+                </div>
+                {r.reason_codes.length > 0 && (
+                  <div className="mt-1 text-[11px] text-slate-600">{r.reason_codes.join(" · ")}</div>
+                )}
+              </Card>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
 // Social evidence coverage/diagnostics (Phase 5C.1) — read-only. Social mentions are evidence, never
 // canonical truth; access state is honest; no raw post content is shown or exported.
 export function Social() {
@@ -332,6 +388,7 @@ export function Social() {
           </div>
         )}
       <p className="mt-3 text-xs text-slate-600">{cov.note}</p>
+      <SocialInterpretationPanel interp={data.interpretation} />
     </Section>
   );
 }

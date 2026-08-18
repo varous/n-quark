@@ -453,6 +453,28 @@ async def social_mention_history(platform: str = Query(...), platform_post_id: s
     return await svc.mention_history(platform=platform, platform_post_id=platform_post_id)
 
 
+@router.get("/social/interpretations")
+async def social_interpretations(event_bearing: bool | None = Query(default=None),
+                                 event_candidate_status: str | None = Query(default=None),
+                                 canonical_entity_id: str | None = Query(default=None),
+                                 current_only: bool = Query(default=True),
+                                 limit: int = Query(default=100, ge=1, le=500),
+                                 _: auth.Principal = Depends(auth.require_viewer),
+                                 svc: SocialAdminService = Depends(get_social_service)) -> dict[str, Any]:
+    return await svc.interpretations(event_bearing=event_bearing,
+                                     event_candidate_status=event_candidate_status,
+                                     canonical_entity_id=canonical_entity_id,
+                                     current_only=current_only, limit=limit)
+
+
+@router.get("/social/interpretations/history")
+async def social_interpretation_history(social_mention_id: str = Query(...),
+                                        _: auth.Principal = Depends(auth.require_viewer),
+                                        svc: SocialAdminService = Depends(
+                                            get_social_service)) -> dict[str, Any]:
+    return await svc.interpretation_history(social_mention_id=social_mention_id)
+
+
 @router.get("/demand/artists/{artist_id:path}/movement")
 async def demand_artist_movement(artist_id: str, relationship: str | None = Query(default=None),
                                  _: auth.Principal = Depends(auth.require_viewer),

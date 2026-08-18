@@ -119,6 +119,9 @@ export const api = {
     `${API_BASE}/export/${table}${qs({ ...f, format })}`,
   // ---- social evidence (Phase 5C.1; read-only coverage/diagnostics) ----
   socialOverview: () => req<SocialOverview>("/social/overview"),
+  // ---- social interpretation (Phase 5C.2; derived, read-only) ----
+  socialInterpretations: (f: Record<string, unknown>) =>
+    req<SocialInterpretations>(`/social/interpretations${qs(f)}`),
   // ---- demand intelligence (Phase 5A.2; read-only) ----
   demandOverview: () => req<DemandOverview>("/demand/overview"),
   demandSummary: () => req<DemandSummary>("/demand/summary"),
@@ -248,6 +251,39 @@ export type SocialOverview = {
     note?: string;
   } | null;
   watchlist: { active_identities?: number; eligible_now?: number; platforms_enabled?: string[] } | null;
+  interpretation?: {
+    total_interpretation_versions?: number;
+    current_interpretations?: number;
+    event_bearing?: number;
+    unprocessed_evidence?: number;
+    by_candidate_status?: Record<string, number>;
+    classifier_version?: string;
+  } | null;
+};
+
+// ---- social interpretation types (Phase 5C.2; derived, read-only) ----
+export type SocialInterpretation = {
+  id: string;
+  social_mention_id: string;
+  evidence_version: number;
+  platform?: string;
+  canonical_entity_id?: string | null;
+  classifier_version: string;
+  claim_types: string[];
+  primary_claim_type: string | null;
+  event_bearing: boolean;
+  event_candidate_status: string;
+  matched_canonical_event_id: string | null;
+  match_score?: number | null;
+  confidence: number;
+  reason_codes: string[];
+  version: number;
+  is_current: boolean;
+};
+export type SocialInterpretations = {
+  available?: boolean;
+  count?: number;
+  interpretations?: SocialInterpretation[];
 };
 
 // ---- demand intelligence types (loose; the BFF is the source of truth) ----

@@ -1,6 +1,6 @@
 # n-quark — Project State
 
-_Last updated: 2026-08-18 (Phase 5C.1.1 — social evidence immutability/versioning fix, appended below §Phase 5C.1). Branch `main`. Repo: github.com/varous/n-quark. Newest state is appended at the BOTTOM of this file (§Phase 5C.1.1); the sections below are historical, most-recent-first only within the pre-5B.3 backlog._
+_Last updated: 2026-08-18 (Phase 5C.2 — social interpretation & event-candidate integration, appended below §Phase 5C.1.1). Branch `main`. Repo: github.com/varous/n-quark. Newest state is appended at the BOTTOM of this file (§Phase 5C.2); the sections below are historical, most-recent-first only within the pre-5B.3 backlog._
 
 ## Phase 5B.3 increment 1 — Event lifecycle foundation (2026-08-14, LOCAL / NOT DEPLOYED)
 
@@ -1248,3 +1248,85 @@ the **new** `/v1/internal/social/mentions/history` 200 (`versions:0`, correct sh
 OFF). admin-console redeployed (`nquark-admin`, both machines healthy): SPA 200, `/admin/v1/social/overview`
 and the new `/admin/v1/social/mentions/history` both **401** (gated + registered, not 404). Committed
 `e76b1f1`; pushed, `main == origin/main` (0/0). Next: Phase 5C.2 — needs go-ahead.
+
+## Phase 5C.2 — social interpretation & event-candidate integration (2026-08-18, LOCAL)
+
+Turned the immutable `SocialMention` evidence from 5C.1/5C.1.1 into **deterministic, versioned social
+interpretations**, and let event-bearing social evidence enter the **existing** Event candidate /
+reconciliation system — **without** a social post or classifier verdict ever directly creating or mutating
+a canonical Event. Four epistemic layers are kept strictly distinct: observed **SocialMention** (immutable
+evidence) → derived **SocialInterpretation** (versioned, this phase) → **EventMatchCandidate** (existing
+reconciliation surface, now reachable from a `social` source) → **canonical Event** (unchanged; only the
+reconciler/Shadow-Ledger may touch it). No LLM anywhere in the truth path.
+
+**Richer ephemeral extraction, BEFORE the caption is dropped (signal-service, §2).**
+`adapters/social.py` bumped to `PARSER_VERSION="social-claim-extractor-2"`. `_extract_claims` now emits a
+bounded `signals` map (announcement / ticketing / sold_out / cancellation / postponement / reschedule /
+venue_change / lineup_change / additional_show / promotion) from lowercase keyword membership, plus a
+legacy flat `surface_signals` list for back-compat, plus `changes` (venue/date from→to, hints win, caption
+fallback via a bounded `\bfrom … to …` regex, each side `_clip`-ped to 80 chars), plus `negation` /
+`uncertainty` flags (uncertainty also fires on `?`). It still copies only identity fields and **never**
+returns the caption or any free-text excerpt. Mock corpus expanded with 8 lifecycle demo posts
+(sold-out / cancel / reschedule / venue-change / lineup / add-show / promo / ambiguous-teaser) carrying
+`venue_from`/`venue_to`/`date_from`/`date_to` hints so classification is exercisable end-to-end offline.
+
+**Deterministic multi-label classifier (crawl, §4).**
+`social_interpretation/classifier.py`, `CLASSIFIER_VERSION="social-classifier-1"`, pure/no-I/O. Every fired
+signal maps to a claim type (ANNOUNCEMENT, TICKETING, LINEUP_CHANGE, VENUE_CHANGE, RESCHEDULE, CANCELLATION,
+SELL_OUT_CLAIM, ADDITIONAL_SHOW, PROMOTION); postponement folds into RESCHEDULE. Multi-label; a
+lifecycle-priority ordering picks the primary (CANCELLATION first). Reason codes expose **why** each label
+fired (MULTI_LABEL, SELL_OUT_SOURCE_CLAIM_ONLY, NO_SIGNAL_MATCHED, EVENT_IDENTITY_RESOLVED,
+NO_RESOLVABLE_EVENT_IDENTITY, AMBIGUOUS_TEASER, GENERIC_PROMOTION, NON_EVENT_REFERRING). **SELL_OUT_CLAIM
+stays a source claim, never verified sell-through.** No signal → UNKNOWN (prefer UNKNOWN over a forced
+label). Confidence is a bounded deterministic diagnostic (0.6·identity-coverage + 0.4·signal-presence,
+×0.5 uncertainty, ×0.8 negation), **not** a probability of truth.
+
+**Event-bearing decision + projection into the existing reconciler (§5–§7).**
+`social_interpretation/projection.py` builds the **smallest** social `EventView` (source `"social"`,
+`source_record_id` = the exact `SocialMention.id`, `canonical_event_id=None`) and runs it through the
+**existing** `matcher.in_block` / `matcher.score_match` against the **same** tracked-event views the
+reconciler uses (new public `ReconciliationService.source_event_views(sources)` — no parallel registry,
+matcher, or table; District/Boshow thresholds untouched). Event-bearing requires resolvable identity AND an
+event-referring class (PROMOTION excluded). Outcomes map to MATCHED_EXISTING / POSSIBLE_MATCH / NEEDS_REVIEW
+/ NEW_EVENT_HYPOTHESIS / INSUFFICIENT_SIGNAL; a matched/possible pair persists an `EventMatchCandidate` with
+`left_source="social"`, `review_status` AUTO or NEEDS_REVIEW — which **never** creates or collapses a
+canonical Event. Sparse evidence yields INSUFFICIENT_SIGNAL, never a silently-manufactured event.
+
+**Versioned interpretation storage + bounded idempotent loop (§3, §8, §9).**
+New `SocialInterpretation` model + additive **migration `010`** (`009`→`010`): id, `social_mention_id`,
+`evidence_version`, denormalized platform/post/content_hash/canonical association, `classifier_version`,
+`claim_types[]`, `primary_claim_type`, `interpreted_fields`, supporting/contradicting evidence, confidence,
+`reason_codes[]`, `event_bearing`, `event_candidate_status`, `matched_canonical_event_id`, `match_score`,
+`event_match_candidate_id`, `interpretation_status`, and the same temporal convention as
+`SocialMention`/`EventFieldResolution` (`version` / `is_current` / `previous_interpretation_id` /
+`superseded_at`), with a **partial** unique index `WHERE is_current`. `SocialInterpretationService.run_once`
+selects current + unprocessed mentions, is retry-safe/idempotent: **same** `classifier_version` on unchanged
+evidence → no new row (only flip the workflow status); **changed** `classifier_version` → a new version with
+`previous_interpretation_id` set and the prior row's `is_current` cleared — prior interpretations are
+preserved, never overwritten. A changed source post (5C.1.1 lineage) is interpreted per evidence version
+independently; **no** Shadow-Ledger VENUE_CHANGE transition is written from social yet (deferred, §8).
+
+**Reads + admin surface (§10).** New crawl routes `GET /v1/internal/social/interpretations`,
+`…/interpretations/history` (per `social_mention_id`), `…/interpretations/coverage`, and gated
+`POST …/interpretations/run` (503 when `social_interpretation_enabled=false`, default OFF). Gateway BFF adds
+read-only `GET /admin/v1/social/interpretations[/history]` and folds interpretation coverage into the social
+overview. Admin frontend gains a diagnostic `SocialInterpretationPanel` (summary cards + interpretation list
+with claim-type tones and reason codes) — **no raw captions, no moderation CMS.**
+
+**Config (all default-safe):** `social_interpretation_enabled=false`,
+`social_interpretation_max_per_run=50`, `social_interpretation_project_candidates=true`.
+
+**Validation (fixture/mock only — NO authorized Meta credentials, so live social acquisition is NOT
+claimed validated):** crawl **281**, signal **122**, gateway **149**, frontend build green (367.66 kB).
+Migration `010` upgrade path exercised on the local dev Postgres (`009 -> 010`) and up/down/up-clean on
+SQLite from the prior session. Route registration confirmed via `TestClient` against the live crawl app —
+`interpretations/coverage` 200, `interpretations` 200, `interpretations/history` 422 (correctly requires
+`social_mention_id`), `interpretations/run` 503 (correctly gated OFF). (The flat `app.routes` listing shows
+`_IncludedRouter` wrappers because this FastAPI version includes routers lazily — an introspection artifact,
+not a routing bug; the endpoints resolve and execute.)
+
+**Out of scope, untouched:** any canonical-Event creation/mutation from social; Shadow-Ledger transitions
+from social; OCR / image understanding; embeddings / Qdrant; commenter/follower datasets; raw caption or
+media persistence; Meta credentials / authorized provider data; Reddit; broad crawling; LLM in the truth
+path. **Production deploy of 5C.2 pending explicit user approval** — this section records the LOCAL proof
+only.

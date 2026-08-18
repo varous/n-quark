@@ -18,6 +18,7 @@ _pilot: PilotService | None = None
 _reconciler: ReconciliationService | None = None
 _probe: ProbeService | None = None
 _social = None
+_social_interpreter = None
 _entity_resolver: EntityResolutionService | None = None
 _governance: GovernanceService | None = None
 
@@ -93,3 +94,24 @@ def get_social_service() -> "SocialAcquisitionService":  # noqa: F821
         from crawl_service.social import SocialAcquisitionService
         _social = SocialAcquisitionService(SessionLocal, settings)
     return _social
+
+
+async def _existing_event_views():
+    """Existing tracked-event EventViews (both reconciliation sources) that social evidence is matched
+    against. Built from the SAME graph views the reconciliation service uses — no parallel source of
+    truth. Failures degrade to a partial/empty set (social evidence then stands as a NEW hypothesis)."""
+    recon = get_reconciliation_service()
+    sources = ["boshow"] + ([settings.second_source_name] if settings.second_source_name else [])
+    try:
+        return await recon.source_event_views(sources)
+    except Exception:  # noqa: BLE001 — never let projection break interpretation
+        return []
+
+
+def get_social_interpretation_service() -> "SocialInterpretationService":  # noqa: F821
+    global _social_interpreter
+    if _social_interpreter is None:
+        from crawl_service.social_interpretation.service import SocialInterpretationService
+        _social_interpreter = SocialInterpretationService(
+            SessionLocal, settings, existing_views_provider=_existing_event_views)
+    return _social_interpreter

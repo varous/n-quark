@@ -92,3 +92,36 @@ def test_collect_unknown_account_returns_no_mentions():
     _enable_mock()
     res = asyncio.run(S.collect("instagram", account="nobody-unknown"))
     assert res.collectible and res.mentions == []             # no fixture → honestly empty
+
+
+# ---- 5C.2 enriched, bounded, deterministic extraction --------------------------------------------
+
+def test_extract_signals_multi_label_and_negation():
+    claims = S._extract_claims(
+        "Live in concert! Tickets on sale now. Note: 12 Oct show will not take place.",
+        hints={"event_name": "X", "event_date": "2026-10-12"})
+    assert claims["signals"].get("announcement") and claims["signals"].get("ticketing")
+    assert claims["signals"].get("cancellation") and claims.get("negation") is True
+    # legacy flat list retained for backward compatibility
+    assert set(claims["surface_signals"]) >= {"announcement", "ticketing", "cancellation"}
+
+
+def test_extract_venue_change_old_new_is_bounded():
+    claims = S._extract_claims(
+        "Change of venue: moved from Gymkhana Grounds to NSCI Dome. See you there!",
+        hints={"venue_name": "NSCI Dome"})
+    assert claims["signals"].get("venue_change")
+    assert claims["changes"]["venue"]["from"] and claims["changes"]["venue"]["to"]
+    # every kept span is clipped — never the whole caption
+    assert all(len(v) <= 80 for v in claims["changes"]["venue"].values())
+
+
+def test_extract_uncertainty_teaser():
+    claims = S._extract_claims("Something big is coming soon... stay tuned?", hints={})
+    assert claims.get("uncertainty") is True and "signals" not in claims  # no event signal fired
+
+
+def test_extract_never_returns_caption():
+    caption = "Kolkata! Live in concert 20 Sep 2026 at Aquatica. Tickets live now."
+    claims = S._extract_claims(caption, hints={"event_name": "Arijit Singh Live"})
+    assert caption not in str(claims) and "coming soon" not in str(claims)
